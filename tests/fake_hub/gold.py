@@ -87,7 +87,7 @@ def _card(uid: str) -> dict:
 
 
 # T1
-def resolve(text: str, kinds: list[str] | None = None, limit_per_span: int = 20) -> dict:
+def resolve(text: str, kinds: list[str] | None = None, limit_per_span: int = 20, sections: list[str] | None = None) -> dict:
     if not 1 <= len(text) <= 200:
         raise GoldError("text 는 1~200자")
     if limit_per_span > 50:
@@ -171,7 +171,7 @@ def procedure_card(id: str, product: str | None = None, sections: list[str] | No
 
 # T4
 def pair_check(procedures: list[str], prior: dict | None = None, sub_condition: dict | None = None,
-               include_conditional: bool = False) -> dict:
+               include_conditional: bool = False, sections: list[str] | None = None) -> dict:
     if not 2 <= len(procedures) <= 6:
         raise GoldError("procedures 는 2~6개")
     for p in procedures:
@@ -196,7 +196,7 @@ def pair_check(procedures: list[str], prior: dict | None = None, sub_condition: 
 
 
 # T5
-def check_conditions(id: str, conditions: list[str] | None = None) -> dict:
+def check_conditions(id: str, conditions: list[str] | None = None, sections: list[str] | None = None) -> dict:
     _need(id, "unit_procedure", "product", "package")
     conds = conditions or ["check_condition:C-PREG", "check_condition:C-PRIOR"]
     for c in conds:
@@ -221,7 +221,8 @@ def compare(procedures: list[str], sections: list[str] | None = None) -> dict:
 
 # T7
 def combos(concern: str | None = None, purpose: str | None = None, procedure: str | None = None,
-           menu: str | None = None, include_sales_copy: bool = False, include_not_recommended: bool = False) -> dict:
+           menu: str | None = None, include_sales_copy: bool = False, include_not_recommended: bool = False,
+           sections: list[str] | None = None) -> dict:
     if not (concern or purpose or procedure or menu):
         raise GoldError("concern · purpose · procedure · menu 중 하나 이상")
     if menu and menu not in MENUS:
@@ -237,7 +238,8 @@ def combos(concern: str | None = None, purpose: str | None = None, procedure: st
 
 # T8
 def neighbors(id: str, edge_kinds: list[str] | None = None, direction: str = "both", depth: int = 1,
-              limit: int = 50, include_conditional: bool = False, include_derived: bool = True) -> dict:
+              limit: int = 50, include_conditional: bool = False, include_derived: bool = True,
+              sections: list[str] | None = None) -> dict:
     _need(id)
     if depth > 2 or limit > 50:
         raise GoldError("depth ≤ 2 · limit ≤ 50")
@@ -251,7 +253,7 @@ def neighbors(id: str, edge_kinds: list[str] | None = None, direction: str = "bo
 
 
 # T9
-def vocab(kinds: list[str] | None = None) -> dict:
+def vocab(kinds: list[str] | None = None, sections: list[str] | None = None) -> dict:
     all_kinds = ["concern", "site", "purpose", "check_condition", "technique", "family", "intent", "menu"]
     ks = kinds or all_kinds
     out: dict[str, Any] = {}
@@ -269,6 +271,19 @@ def vocab(kinds: list[str] | None = None) -> dict:
             "enums": {"sections": SECTIONS, "sub_condition": ["세션"]}}
 
 
+def _with_sections_check(fn):
+    def wrapped(*a, **kw):
+        _check_sections(kw.get("sections"))
+        return fn(*a, **kw)
+
+    wrapped.__name__ = fn.__name__
+    wrapped.__signature__ = __import__("inspect").signature(fn)
+    wrapped.__annotations__ = fn.__annotations__
+    return wrapped
+
+
+# 허브 짧은 카드 판(10-30 · 4faa88b): 도구 9 모두 sections 입력 — 모르는 이름은 4xx
 TOOLS = {"resolve": resolve, "recommend": recommend, "procedure_card": procedure_card, "pair_check": pair_check,
          "check_conditions": check_conditions, "compare": compare, "combos": combos, "neighbors": neighbors,
          "vocab": vocab}
+TOOLS = {k: _with_sections_check(v) for k, v in TOOLS.items()}

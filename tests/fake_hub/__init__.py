@@ -112,12 +112,12 @@ class FakeHub:
             return {"build": gold.BUILD, "raw": {"files": 21}}
 
         @app.get(g + "/vocab")
-        def vocab(kinds: str | None = None):
-            return run("vocab", kinds=_csv(kinds))
+        def vocab(kinds: str | None = None, sections: str | None = None):
+            return run("vocab", kinds=_csv(kinds), sections=_csv(sections))
 
         @app.get(g + "/resolve")
-        def resolve(text: str, kinds: str | None = None, limit_per_span: int = 20):
-            return run("resolve", text=text, kinds=_csv(kinds), limit_per_span=limit_per_span)
+        def resolve(text: str, kinds: str | None = None, limit_per_span: int = 20, sections: str | None = None):
+            return run("resolve", text=text, kinds=_csv(kinds), limit_per_span=limit_per_span, sections=_csv(sections))
 
         @app.post(g + "/recommend")
         async def recommend(req: Request):
@@ -128,8 +128,8 @@ class FakeHub:
             return run("procedure_card", id=pid, product=product, sections=_csv(sections), full=full)
 
         @app.get(g + "/procedures/{pid}/checks")
-        def checks(pid: str, conditions: str | None = None):
-            return run("check_conditions", id=pid, conditions=_csv(conditions))
+        def checks(pid: str, conditions: str | None = None, sections: str | None = None):
+            return run("check_conditions", id=pid, conditions=_csv(conditions), sections=_csv(sections))
 
         @app.post(g + "/pairs")
         async def pairs(req: Request):
@@ -141,12 +141,13 @@ class FakeHub:
 
         @app.get(g + "/combos")
         def combos(concern: str | None = None, purpose: str | None = None, procedure: str | None = None,
-                   menu: str | None = None):
-            return run("combos", concern=concern, purpose=purpose, procedure=procedure, menu=menu)
+                   menu: str | None = None, sections: str | None = None):
+            return run("combos", concern=concern, purpose=purpose, procedure=procedure, menu=menu,
+                       sections=_csv(sections))
 
         @app.get(g + "/nodes/{nid}/neighbors")
-        def nb(nid: str, depth: int = 1, limit: int = 50):
-            return run("neighbors", id=nid, depth=depth, limit=limit)
+        def nb(nid: str, depth: int = 1, limit: int = 50, sections: str | None = None):
+            return run("neighbors", id=nid, depth=depth, limit=limit, sections=_csv(sections))
 
         app.mount(PREFIX + "/gold-mcp", self.gold_mcp.streamable_http_app(
             streamable_http_path="/mcp", json_response=True, stateless_http=True, transport_security=_SEC))
