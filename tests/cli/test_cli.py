@@ -62,16 +62,21 @@ CLAUDE_TOOLS = j(init("hub"), *turn(["찾아볼게요. "], stop="tool_use"),
                  {"type": "user", "message": {"content": [
                      {"type": "tool_result", "tool_use_id": "tu1", "content": [{"type": "text", "text": TOOL_RESULT}]}]}},
                  *turn(["울쎄라를 ", "권합니다."]), {**RESULT, "num_turns": 2})
-CODEX = j({"type": "thread.started", "thread_id": "th1"}, {"type": "turn.started"},
+CODEX = j({"type": "thread.started", "thread_id": "th1"},
+          {"type": "item.completed", "item": {"id": "item_0", "type": "error",
+                                              "message": "Codex is ignoring 1 unrecognized configuration setting."}},
+          {"type": "turn.started"},
           {"type": "item.started", "item": {"id": "i1", "type": "mcp_tool_call", "server": "hub", "tool": "recommend",
                                             "arguments": {"concerns": ["concern:P2"]}, "status": "in_progress"}},
           {"type": "item.completed", "item": {"id": "i1", "type": "mcp_tool_call", "server": "hub", "tool": "recommend",
                                               "arguments": {"concerns": ["concern:P2"]}, "status": "completed",
-                                              "result": json.loads(TOOL_RESULT)}},
+                                              "error": None,
+                                              "result": {"content": [{"type": "text", "text": TOOL_RESULT}],
+                                                         "structured_content": json.loads(TOOL_RESULT)}}},
           {"type": "item.completed", "item": {"id": "i2", "type": "reasoning", "text": ""}},
           {"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "울쎄라를 권합니다."}},
-          {"type": "turn.completed", "usage": {"input_tokens": 900, "cached_input_tokens": 100, "output_tokens": 40,
-                                               "reasoning_output_tokens": 12}})
+          {"type": "turn.completed", "usage": {"input_tokens": 900, "cached_input_tokens": 100, "cache_write_input_tokens": 0,
+                                               "output_tokens": 40, "reasoning_output_tokens": 12}})
 
 
 @pytest.fixture
@@ -147,10 +152,13 @@ async def test_claude_answer_isolated_and_measured(fake, monkeypatch):
                  "--no-session-persistence", "--include-partial-messages", "--max-budget-usd"):
         assert flag in a
     assert a[a.index("--system-prompt") + 1] == "시스템 프롬프트" and a[a.index("--model") + 1] == "claude-sonnet-5-5"
-    assert a[a.index("--effort") + 1] == "medium" and a[a.index("--tools") + 1] == "" and a[-1] == "질문"
+    assert a[a.index("--effort") + 1] == "medium" and a[a.index("--tools") + 1] == ""
+    assert run_call["stdin"] == "질문" and "질문" not in a  # 프롬프트는 stdin(가변 인자 플래그가 삼키지 않게)
     assert "--fallback-model" not in a and "--mcp-config" not in a
     assert "ANTHROPIC_API_KEY" not in run_call["env_keys"] and "OPENAI_API_KEY" not in run_call["env_keys"]
-    assert ".cache" in run_call["cwd"] or "cache" in run_call["cwd"]  # 임시 cwd
+    from clinic_chat.config import ROOT
+
+    assert "clinic-chat-cli-" in run_call["cwd"] and str(ROOT) not in run_call["cwd"]  # 임시 cwd · 레포 밖
 
 
 async def test_claude_tool_loop_via_mcp(fake):
@@ -221,14 +229,17 @@ async def test_codex_isolated_message_ttft_and_tools(fake, tmp_path):
     assert [s["name"] for s in t["stages"]] == ["cli_boot", "codex#1", "tool:recommend#1"]
     assert r["trace"]["tool_calls"][0]["node_ids"] == ["unit_procedure:U5-102", "family:M9"]
     assert r["tokens"]["total"]["reasoning_output_tokens"] == 12 and r["trace"]["cli"]["thinking_seen"] is True
-    assert r["trace"]["cli"]["item_types"] == ["mcp_tool_call", "reasoning", "agent_message"]
+    assert r["trace"]["cli"]["item_types"] == ["error", "mcp_tool_call", "reasoning", "agent_message"]
+    assert r["trace"]["cli"]["warnings"] and r["error"] is None  # 경고 item 은 실패 아님
+    assert r["trace"]["tool_calls"][0]["output_bytes"] == len(TOOL_RESULT.encode())
     c = next(x for x in calls() if "exec" in x["argv"])
     a = c["argv"]
     for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--json"):
         assert flag in a
     joined = " ".join(a)
+    assert "tools.view_image=false" not in joined  # 0.166 에서 알 수 없는 설정(실물)
     for kv in ("features.shell_tool=false", "features.unified_exec=false", 'web_search="disabled"',
-               "tools.view_image=false", "features.plugins=false", 'shell_environment_policy.inherit="none"',
+               "suppress_unstable_features_warning=true", "features.plugins=false", 'shell_environment_policy.inherit="none"',
                'model_reasoning_effort="medium"', 'mcp_servers.hub.url="http://hub.test/gold"',
                "mcp_servers.hub.required=true", "project_doc_max_bytes=0", "model_instructions_file="):
         assert kv in joined
@@ -285,3 +296,29 @@ async def test_raw_mcp_stdio_same_as_local(raw_dir):
         bad = await s.call_tool("raw_get", {"path": "nope.x"})
     assert data == RawStore(raw_dir).raw_get("taxonomy.problem[3]")
     assert bad.is_error
+
+
+async def test_codex_warning_without_turn_end_is_error(fake):
+    lines, _ = fake
+    lines(j({"type": "thread.started"}, {"type": "error", "message": "stream disconnected"}))
+    r = await cli.run(spec("codex"), system="s", prompt="q", timer=timer(), on_text=lambda t: None)
+    assert "stream disconnected" in r["error"]
+
+
+async def test_claude_real_shapes_model_usage_and_windows(fake):
+    """10-30 실물 꼴 — modelUsage 는 camelCase · rate_limit_info.unifiedWindows."""
+    lines, _ = fake
+    rl = {"type": "rate_limit_event", "rate_limit_info": {
+        "status": "allowed", "resetsAt": 1793352600, "rateLimitType": "five_hour",
+        "unifiedWindows": {"five_hour": {"utilization": 0.16, "resetsAt": 1793352600},
+                           "seven_day": {"utilization": 0.61, "resetsAt": 1793667600}}}}
+    res = {**RESULT, "ttft_ms": 1234, "modelUsage": {"claude-sonnet-5-5": {
+        "inputTokens": 6, "outputTokens": 1095, "cacheReadInputTokens": 16241, "cacheCreationInputTokens": 14122,
+        "thinkingTokens": 130, "costUSD": 0.0707}}}
+    lines(j(init(), *turn(["답"]), rl, res))
+    r = await cli.run(spec("claude"), system="s", prompt="q", timer=timer(), on_text=lambda t: None)
+    bm = r["tokens"]["by_model"]["claude-sonnet-5-5"]
+    assert bm["input_tokens"] == 6 and bm["cache_read_input_tokens"] == 16241 and bm["thinking_tokens"] == 130
+    w = r["trace"]["cli"]["rate_limits"][0]
+    assert w["utilization"] == 0.16 and w["windows"]["seven_day"]["utilization"] == 0.61
+    assert r["trace"]["cli"]["cli_ttft_ms"] == 1234

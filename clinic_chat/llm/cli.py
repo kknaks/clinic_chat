@@ -65,7 +65,8 @@ def new_result(spec: CliSpec) -> dict:
 
 # ───────────── Claude ─────────────
 
-def claude_args(spec: CliSpec, system: str, prompt: str, mcp: McpAttach | None, schema: dict | None) -> list[str]:
+def claude_args(spec: CliSpec, system: str, mcp: McpAttach | None, schema: dict | None) -> list[str]:
+    """프롬프트는 stdin 으로(`--allowedTools` · `--tools` 가 가변 인자라 뒤 위치 인자를 삼킴 — 10-30 실물 확인)."""
     a = [spec.bin, "-p", "--model", spec.model, "--effort", spec.effort, "--system-prompt", system,
          "--setting-sources", "", "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
          "--no-session-persistence", "--permission-mode", "bypassPermissions",
@@ -78,7 +79,7 @@ def claude_args(spec: CliSpec, system: str, prompt: str, mcp: McpAttach | None, 
         a += ["--mcp-config", json.dumps({"mcpServers": {mcp.name: server}}), "--allowedTools", f"{MCP_PREFIX}{mcp.name}"]
     if schema:
         a += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
-    return [*a, prompt]
+    return a
 
 
 class ClaudeIngest:
@@ -117,8 +118,12 @@ class ClaudeIngest:
             self._user(ev)
         elif t == "rate_limit_event":
             info = ev.get("rate_limit_info") or ev
-            self.cli["rate_limits"].append({k: info.get(k) for k in
-                                            ("status", "rateLimitType", "utilization", "resetsAt") if k in info})
+            row = {k: info.get(k) for k in ("status", "rateLimitType", "utilization", "resetsAt") if k in info}
+            win = (info.get("unifiedWindows") or {})  # 10-30 실물: 창마다 utilization · resetsAt
+            if win:
+                row["windows"] = {k: {x: v.get(x) for x in ("utilization", "resetsAt")} for k, v in win.items()}
+                row.setdefault("utilization", (win.get(info.get("rateLimitType")) or {}).get("utilization"))
+            self.cli["rate_limits"].append(row)
             if str(info.get("status", "")).lower() in ("rejected", "blocked"):
                 self.res["error"] = f"한도: {info.get('rateLimitType')} · 다시 열림 {info.get('resetsAt')}"
                 self.cli["rate_limited"] = True
@@ -128,6 +133,9 @@ class ClaudeIngest:
     def _init(self, ev: dict) -> None:
         self.timer.close_stage(self.boot)
         self.cli.update({"session_tools": ev.get("tools"), "mcp_servers": ev.get("mcp_servers"),
+                         "skills": ev.get("skills"), "slash_commands": ev.get("slash_commands"),
+                         "plugins": [p.get("name") for p in ev.get("plugins") or []],
+                         "memory_paths": bool(ev.get("memory_paths")),
                          "observed_model": ev.get("model"), "api_key_source": ev.get("apiKeySource"),
                          "cli_version": ev.get("claude_code_version"), "permission_mode": ev.get("permissionMode")})
         src = ev.get("apiKeySource")
@@ -217,6 +225,7 @@ class ClaudeIngest:
         self.res["tokens"] = {"total": u, "by_model": {m: _claude_usage(v) for m, v in (ev.get("modelUsage") or {}).items()}}
         self.cli.update({"num_turns": ev.get("num_turns"), "duration_ms": ev.get("duration_ms"),
                          "duration_api_ms": ev.get("duration_api_ms"), "subtype": ev.get("subtype"),
+                         "cli_ttft_ms": ev.get("ttft_ms"), "cli_time_to_request_ms": ev.get("time_to_request_ms"),
                          "observed_models": list((ev.get("modelUsage") or {}).keys()) or None})
         est = ev.get("total_cost_usd")
         if isinstance(est, (int, float)):
@@ -233,9 +242,16 @@ class ClaudeIngest:
             self.res["refusal"] = True
 
 
+_CAMEL = {"inputTokens": "input_tokens", "outputTokens": "output_tokens",
+          "cacheCreationInputTokens": "cache_creation_input_tokens", "cacheReadInputTokens": "cache_read_input_tokens",
+          "thinkingTokens": "thinking_tokens", "costUSD": "cost_usd"}
+
+
 def _claude_usage(u: dict) -> dict:
+    """usage(snake) · modelUsage(camel — 10-30 실물: inputTokens · costUSD · thinkingTokens) 둘 다."""
+    u = {_CAMEL.get(k, k): v for k, v in (u or {}).items()}
     return {k: u.get(k) or 0 for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens",
-                                       "cache_read_input_tokens") if k in u}
+                                       "cache_read_input_tokens", "thinking_tokens", "cost_usd") if k in u}
 
 
 def _result_text(content: Any) -> str | None:
@@ -278,8 +294,10 @@ def codex_args(spec: CliSpec, instructions_file: Path, cwd: str, prompt: str, mc
          "-c", f'model_reasoning_effort="{spec.effort}"',
          "-c", f"model_instructions_file={json.dumps(str(instructions_file))}", "-c", "project_doc_max_bytes=0",
          "-c", "features.shell_tool=false", "-c", "features.unified_exec=false", "-c", 'web_search="disabled"',
-         "-c", "tools.view_image=false", "-c", "features.plugins=false", "-c", "features.skill_search=false",
-         "-c", "features.skip_host_skill_discovery=true", "-c", 'shell_environment_policy.inherit="none"']
+         "-c", "features.plugins=false", "-c", "features.skill_search=false",
+         "-c", "features.skip_host_skill_discovery=true", "-c", "suppress_unstable_features_warning=true",
+         "-c", 'shell_environment_policy.inherit="none"']
+    # tools.view_image 는 0.166 에서 「알 수 없는 설정」 경고(10-30 실물) — 빼고 실물 JSONL 의 item 종류로 확인
     if spec.service_tier:
         a += ["-c", f'service_tier="{spec.service_tier}"']
     if mcp and mcp.url:
@@ -301,7 +319,8 @@ class CodexIngest:
         self.turn: dict | None = None
         self.n_tool = 0
         self.tools: dict[str, tuple[dict, dict]] = {}
-        self.cli.update({"thinking_seen": False, "item_types": [], "events": 0, "messages": 0})
+        self.cli.update({"thinking_seen": False, "item_types": [], "events": 0, "messages": 0, "warnings": []})
+        self.completed = False
 
     def line(self, raw: str) -> None:
         try:
@@ -332,11 +351,23 @@ class CodexIngest:
             if t == "turn.failed":
                 self._fail(ev.get("error") or ev)
             else:
+                self.completed = True
                 self.res["stop_reason"] = "end_turn"
-        elif t == "error":
-            self._fail(ev.get("message") or ev.get("error") or ev)
+        elif t == "error":  # 최상위 error — 턴이 끝나지 않으면 finish() 가 오류로 올림
+            self._warn(ev.get("message") or ev.get("error") or ev)
         elif t.startswith("item."):
             self._item(t.split(".", 1)[1], ev.get("item") or {})
+
+    def _warn(self, err: Any) -> None:
+        msg = str(err.get("message") if isinstance(err, dict) else err)[:300]
+        self.cli["warnings"].append(msg)
+        if RATE_LIMIT_TEXT.search(msg):
+            self.cli["rate_limited"] = True
+
+    def finish(self) -> None:
+        """턴이 끝나지 않았으면 마지막 경고를 오류로(경고 item 은 실행을 멈추지 않음 — 10-30 실물)."""
+        if not self.completed and not self.res["error"] and self.cli["warnings"]:
+            self.res["error"] = f"Codex CLI: {self.cli['warnings'][-1]}"
 
     def _fail(self, err: Any) -> None:
         msg = err.get("message") if isinstance(err, dict) else str(err)
@@ -359,8 +390,9 @@ class CodexIngest:
             self.res["answer"] += text
             self.cli["messages"] += 1
             self.on_text(text)
-        elif it == "error":
-            self._fail(item.get("message"))
+        elif it == "error":  # 설정 경고 등 — 턴은 계속(10-30 실물: 「unrecognized configuration」 · 「Under-development」)
+            if phase == "completed":
+                self._warn(item.get("message"))
         elif it == "mcp_tool_call" or "tool" in it or it in ("command_execution", "web_search", "file_change"):
             if iid not in self.tools:
                 self.n_tool += 1
@@ -374,13 +406,24 @@ class CodexIngest:
             if phase == "completed":
                 self.timer.close_stage(st)
                 result = item.get("result")
-                text = json.dumps(result, ensure_ascii=False) if result is not None else None
+                # 10-30 실물 꼴: result = {content: [{type: text, text}], structured_content} — 모델이 받은 글 = content
+                if isinstance(result, dict) and isinstance(result.get("content"), list):
+                    text = _result_text(result["content"])
+                    data = result.get("structured_content")
+                    if data is None and text:
+                        try:
+                            data = json.loads(text)
+                        except ValueError:
+                            data = None
+                else:
+                    text = json.dumps(result, ensure_ascii=False) if result is not None else None
+                    data = result
                 status = str(item.get("status", ""))
                 call.update({"output_bytes": len(text.encode("utf-8")) if text else None,
                              "ms": round(st["end_ms"] - st["start_ms"], 1),
                              "is_error": status in ("failed", "error", "declined") or bool(item.get("error"))})
-                if self.collect and result is not None:
-                    call["node_ids"] = node_ids(result)
+                if self.collect and data is not None:
+                    call["node_ids"] = node_ids(data)
 
 
 # ───────────── 실행 ─────────────
@@ -401,14 +444,16 @@ async def run(spec: CliSpec, *, system: str, prompt: str, timer: CaseTimer, on_t
         res["timing"] = _timing(timer, spec)
         return res
     CACHE_DIR.mkdir(exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="cli-", dir=CACHE_DIR))
+    # 임시 cwd 는 레포 밖(시스템 임시 폴더) — git 상태 · 프로젝트 자동 메모리 경로가 레포에 묶이지 않게(10-30 실물 init.memory_paths)
+    work = Path(tempfile.mkdtemp(prefix="clinic-chat-cli-"))
     boot = timer.open_stage("cli_boot")
     t_spawn = time.perf_counter()
     try:
         env = child_env()
         if spec.provider == "claude-cli":
             ing: Any = ClaudeIngest(res, timer, on_text, boot, collect_node_ids, mcp)
-            cmd = claude_args(spec, system, prompt, mcp, schema)
+            cmd = claude_args(spec, system, mcp, schema)
+            stdin_text = prompt
         else:
             home = prepare_codex_home(CACHE_DIR / "codex-home", CODEX_AUTH)
             env["CODEX_HOME"] = str(home)
@@ -420,7 +465,11 @@ async def run(spec: CliSpec, *, system: str, prompt: str, timer: CaseTimer, on_t
                 sf.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
             ing = CodexIngest(res, timer, on_text, boot, collect_node_ids)
             cmd = codex_args(spec, instr, str(work), prompt, mcp, sf, of)
-        proc = await run_cli(cmd, cwd=str(work), env=env, timeout_s=spec.timeout_s, on_line=ing.line)
+            stdin_text = None
+        proc = await run_cli(cmd, cwd=str(work), env=env, timeout_s=spec.timeout_s, on_line=ing.line,
+                             stdin_text=stdin_text)
+        if hasattr(ing, "finish"):
+            ing.finish()
         cli.update({"returncode": proc.returncode, "spawn_to_exit_ms": round((time.perf_counter() - t_spawn) * 1000, 1)})
         if proc.timed_out:
             res["error"] = res["error"] or f"시간 초과({spec.timeout_s:g}초)"

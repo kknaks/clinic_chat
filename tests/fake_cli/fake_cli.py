@@ -13,9 +13,10 @@ from pathlib import Path
 
 kind, argv = sys.argv[1], sys.argv[2:]  # 래퍼가 claude · codex 를 첫 인자로
 log = os.environ.get("FAKE_CLI_LOG")
+stdin = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
 if log:
     with open(log, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"kind": kind, "argv": argv, "env_keys": sorted(os.environ), "cwd": os.getcwd(),
+        f.write(json.dumps({"kind": kind, "argv": argv, "stdin": stdin, "env_keys": sorted(os.environ), "cwd": os.getcwd(),
                             "codex_home": os.environ.get("CODEX_HOME")}, ensure_ascii=False) + "\n")
 auth = os.environ.get("FAKE_CLI_AUTH", "")
 if argv[:1] == ["--version"]:

@@ -46,10 +46,16 @@ class StopRun(Exception):
 
 
 async def run_cli(cmd: list[str], *, cwd: str, env: dict[str, str], timeout_s: float,
-                  on_line: Callable[[str], None]) -> ProcResult:
+                  on_line: Callable[[str], None], stdin_text: str | None = None) -> ProcResult:
+    """stdin_text 를 주면 표준 입력으로 넣고 닫음(Claude 프롬프트 — 가변 인자 플래그가 위치 인자를 삼키지 않게)."""
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=16 * 1024 * 1024)
+        *cmd, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=16 * 1024 * 1024)
+    if stdin_text is not None:
+        assert proc.stdin is not None
+        proc.stdin.write(stdin_text.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
     res = ProcResult(returncode=None, stderr="")
     err_chunks: list[str] = []
 
