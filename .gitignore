@@ -1,0 +1,26 @@
+# 비밀값 · 로컬 설정
+.env
+.env.*
+!.env.example
+
+# 실험 기록 · 데이터(공개 레포 — 커밋 금지)
+runs/
+data/
+raw/
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# OS · 편집기
+.DS_Store
+.idea/
+.vscode/
