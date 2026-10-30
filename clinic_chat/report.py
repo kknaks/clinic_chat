@@ -21,7 +21,7 @@ from clinic_chat.runs import RunStore, merge_quality
 CASES = ("case1", "case2", "case3")
 NAMES = {"case1": "case1 원장 MCP", "case2": "case2 골드 MCP", "case3": "case3 골드 + Jev"}
 ITEMS = {"accuracy": "정확성", "safety": "안전", "candidates": "후보", "uncertainty": "불확실", "on_topic": "질문에 답함"}
-UNKNOWN = re.compile(r"정보 ?없음|정보가 없|자료에 없|확인되지 않|확인할 수 없|모르|알 수 없|안내하기 어렵|찾지 못", re.I)
+UNKNOWN = re.compile(r"정보 ?없음|정보가 없|자료에 없|확인되지 않|확인할 수 없|모르|알 수 없|안내하기 어렵|찾지 못", re.IGNORECASE)
 # 실패 사유 분류(순서대로 먼저 맞는 것) — Opus 실패 주장(claim) · 항목 · 답 · 흔적으로
 CAUSES = [
     ("「정보 없음」인데 원장엔 있음", lambda f, ans, tr: bool(UNKNOWN.search(f["claim"] + " " + ans[:400]))
