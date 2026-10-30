@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,3 +27,5 @@ class Deps:
     semantic: Any = None  # SEMANTIC_JSON dictionary(expressions)
     vocab: dict | None = None  # T9 캐시(시작 때 1회)
     startup: dict = field(default_factory=dict)
+    now: Callable[[], float] = time.perf_counter  # 시험은 가짜 시계
+    app_commit: str | None = None

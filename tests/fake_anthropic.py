@@ -104,3 +104,37 @@ class FakeAnthropic:
         if self.clock:
             self.clock.advance(t.first_ms)
         return t.message(params["model"])
+
+
+def _has_tool_result(params: dict) -> bool:
+    for m in params.get("messages", []):
+        if m["role"] == "user" and isinstance(m["content"], list):
+            if any(b.get("type") == "tool_result" for b in m["content"]):
+                return True
+    return False
+
+
+ANSWERS = {
+    "case1": ["fixture 원장 답: ", "소프웨이브는 ", "초음파 리프팅입니다. ", "임신 중에는 금기입니다."],
+    "case2": ["fixture 골드 답: ", "소프웨이브(", "HIFU 리프팅)는 ", "부작용 정보는 「정보 없음」입니다."],
+    "case3": ["fixture 경로 답: ", "소프웨이브와 ", "울트라포커스 X ", "를 권합니다."],
+}
+
+
+def case_of(params: dict) -> str:
+    names = {t["name"] for t in params.get("tools", [])}
+    if "raw_search" in names:
+        return "case1"
+    if "resolve" in names:
+        return "case2"
+    return "case3"
+
+
+def answer_policy(params: dict, n: int) -> Turn:
+    """세 케이스 답(모의 판 · 시험) — 도구가 있으면 한 번 부르고 답한다."""
+    c = case_of(params)
+    if c != "case3" and not _has_tool_result(params):
+        q = params["messages"][0]["content"]
+        call = ("raw_search", {"query": "소프웨이브"}) if c == "case1" else ("resolve", {"text": q[:200]})
+        return Turn(tools=[call], first_ms=5)
+    return Turn(text=ANSWERS[c], first_ms=5, chunk_ms=5)
