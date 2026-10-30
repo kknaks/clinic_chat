@@ -161,3 +161,23 @@ async def test_no_key(deps_factory):
     deps.jev = None
     r = await case3.run(deps, "q", timer(), lambda t: None)
     assert r["error"] == "키 없음"
+
+
+async def test_jev_slot_used_when_resolve_misses(deps_factory, hub):
+    """run 926bc4477b02 꼴 — resolve 가 「주름이」(조사)를 못 찾아 T1 고민 후보 없음 + Jev concern 0.97 → recommend 호출."""
+    jev = FakeJev(intent="I-01", choices={"slot:concern": "concern:P2"})
+    r, fa, _ = await run(deps_factory, "이마 주름이 신경 쓰이는데 어떤 시술이 좋아요?", jev)
+    assert "concern:P2" not in r["trace"]["hub"]["resolve"]["candidates"]  # T1 에 고민 후보 없음
+    assert r["trace"]["jev"]["slots"]["concern"]["confidence"] >= 0.3
+    assert r["trace"]["hub"]["tool"] == "recommend"
+    assert r["trace"]["hub"]["input"] == {"concerns": ["concern:P2"], "site": "site:이마"}
+    assert [t for t, _ in gold_calls(hub)] == ["resolve", "recommend"]
+    assert "needs_clarification" not in fa.calls[0]["messages"][0]["content"]
+
+
+async def test_low_confidence_slot_asks_back(deps_factory, hub):
+    jev = FakeJev(intent="I-01", choices={"slot:concern": "concern:P2"}, flat={"slot:concern"})
+    r, _fa, _ = await run(deps_factory, "이마 주름이 신경 쓰이는데 어떤 시술이 좋아요?", jev)
+    assert r["trace"]["jev"]["slots"]["concern"]["low_confidence"] is True
+    assert r["trace"]["hub"]["tool"] is None and r["trace"]["hub"]["missing"] == ["concern"]
+    assert [t for t, _ in gold_calls(hub)] == ["resolve"]

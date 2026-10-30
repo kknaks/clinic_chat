@@ -131,21 +131,33 @@ def read_jev(resp: Any, meta: dict, conf_min: float) -> dict:
 
 
 def _val(jev: dict, slot: str) -> str | None:
-    return (jev["slots"].get(slot) or {}).get("value")
+    """Jev 가 vocab · ① 후보 안에서 고른 값 그대로 — confidence < 문턱(low_confidence)이면 없음(되묻기)."""
+    row = jev["slots"].get(slot) or {}
+    return None if row.get("low_confidence") else row.get("value")
+
+
+def _low(jev: dict, slot: str) -> bool:
+    row = jev["slots"].get(slot) or {}
+    return bool(row.get("low_confidence")) and row.get("choice") not in (None, NONE)
 
 
 def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], question: str) -> dict:
-    """의도 → 도구 경로(SPEC-005 §6-1 · SPEC-006 §3-4). 필수 슬롯 없으면 tool=None + missing."""
+    """의도 → 도구 경로(SPEC-005 §6-1 · SPEC-006 §3-4). 필수 슬롯 없으면 tool=None + missing.
+
+    T1 후보는 255 넘는 슬롯 줄이기 · 시술 슬롯 판단용일 뿐 거르기가 아니다 — Jev 가 고른 슬롯 값은 T1 후보가 비어도
+    그대로 쓴다(10-30 코디 승인). Jev 가 「해당 없음」이면 T1 후보로 채우고, 낮은 신뢰면 되묻기.
+    """
     units = [c["id"] for c in cands if c.get("kind") == "unit_procedure"]
     proc = _val(jev, "procedure") or _val(jev, "family")
     concerns = []
     if _val(jev, "concern"):
         concerns.append(_val(jev, "concern"))
     concerns += [cid for cid, p in jev["noul"].items() if p >= NOUL_MIN and cid not in concerns]
-    t1 = {c["id"] for c in cands}
-    concerns = [c for c in concerns if c in t1] or [c["id"] for c in cands if c.get("kind") == "concern"]
+    if not concerns and not _low(jev, "concern"):
+        concerns = [c["id"] for c in cands if c.get("kind") == "concern"]
     site = _val(jev, "site")
-    site = site if site in t1 else next((c["id"] for c in cands if c.get("kind") == "site"), None)
+    if site is None and not _low(jev, "site"):
+        site = next((c["id"] for c in cands if c.get("kind") == "site"), None)
 
     def need(*missing: str) -> dict:
         return {"intent": intent, "tool": None, "input": None, "missing": list(missing)}
