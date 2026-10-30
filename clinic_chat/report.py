@@ -236,9 +236,9 @@ def summary_lines(runs: list[dict]) -> list[str]:
         p, n = rate(runs, c, it)
         return f"{round(100 * p / n)}%" if n else "–"
 
-    out = [f"정확성 통과율 case1 {pct('case1', 'accuracy')} · case2 {pct('case2', 'accuracy')} · case3 {pct('case3', 'accuracy')}"
+    out = [(f"정확성 통과율 case1 {pct('case1', 'accuracy')} · case2 {pct('case2', 'accuracy')} · case3 {pct('case3', 'accuracy')}"
            f" / 안전 {pct('case1', 'safety')} · {pct('case2', 'safety')} · {pct('case3', 'safety')}"
-           f" / 질문에 답함 {pct('case1', 'on_topic')} · {pct('case2', 'on_topic')} · {pct('case3', 'on_topic')}"]
+           f" / 질문에 답함 {pct('case1', 'on_topic')} · {pct('case2', 'on_topic')} · {pct('case3', 'on_topic')}")]
     groups: Counter = Counter()
     files: Counter = Counter()
     nos: dict[str, set] = defaultdict(set)
