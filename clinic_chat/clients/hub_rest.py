@@ -25,7 +25,8 @@ class HubRest:
 
     async def _req(self, method: str, path: str, *, params: dict | None = None, json: Any = None) -> dict:
         url = self.base_url.rstrip("/") + path
-        q = {k: v for k, v in (params or {}).items() if v is not None}
+        # 목록 쿼리는 쉼표로(허브 REST 꼴 — `sections=overview,ops` · 반복 키는 마지막만 남음)
+        q = {k: (",".join(v) if isinstance(v, list) else v) for k, v in (params or {}).items() if v is not None}
         async with self._client() as c:
             r = await c.request(method, url, params=q, json=json)
         if r.status_code >= 400:

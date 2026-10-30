@@ -32,6 +32,15 @@ SLOT_LABEL = {"concern": "고민", "site": "부위", "purpose": "목적", "check
               "family": "시술 계열", "menu": "메뉴(추천 패키지 라벨)", "procedure": "시술 · 제품"}
 CARD_SECTIONS = {"I-02": ["overview", "method", "ops"], "I-03": ["aftercare", "timeline", "emergency"],
                  "I-04": ["safety"], "I-05": ["recovery"], "I-10": ["dose", "products"]}
+# 의도 Choice 설명의 예시 질문 — 허브 vocab 의도에 예시가 없을 때(gold-research §3 표의 예시 발화)
+INTENT_EXAMPLES = {
+    "I-01": ["이마 주름이 신경 쓰여요", "턱선이 처졌어요"], "I-02": ["소프웨이브는 어떻게 하는 거예요?"],
+    "I-03": ["끝나고 사우나 가도 돼요?"], "I-04": ["멍 들어요?", "부작용 있어요?"],
+    "I-05": ["바로 출근해도 돼요?", "얼마나 가요?"], "I-06": ["울쎄라랑 소프웨이브 뭐가 달라요?"],
+    "I-07": ["오늘 셋 다 같이 해도 돼요?", "뭐부터 해요?"], "I-08": ["6주 전에 보톡스 맞았는데 괜찮아요?"],
+    "I-09": ["임신 준비 중인데요", "켈로이드 체질이에요"], "I-10": ["필러 몇 cc 맞아요?", "볼루마로 해 주세요"],
+    "I-11": ["같이 하면 좋은 거 있어요?"], "I-12": ["얼마예요?"],
+}
 _HANGUL = re.compile(r"[가-힣]")
 _DAYS = re.compile(r"(\d+)\s*(일|주|개월|달)")
 
@@ -69,7 +78,8 @@ def build_jev_questions(vocab: dict, cands: list[dict], seed: int) -> tuple[dict
     qs: dict[str, Any] = {}
     meta: dict[str, dict] = {}
 
-    intents = {i["id"]: f"{i['name']} · 예: {' / '.join(i.get('examples', []))}" for i in v.get("intent", [])}
+    intents = {i["id"]: f"{i['name']} · 예: {' / '.join(i.get('examples') or INTENT_EXAMPLES.get(i['id'], []))}"
+               for i in v.get("intent", [])}
     qs["intent"] = Choice(instructions="이 상담 질문의 의도는 무엇인가?", criteria=_shuffled(rng, intents))
     meta["intent"] = {"options_n": len(intents), "order": list(qs["intent"].criteria)}
 

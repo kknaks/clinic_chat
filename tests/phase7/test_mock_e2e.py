@@ -41,3 +41,13 @@ def test_mock_e2e_one_question(tmp_path):
     assert len(by_case) == 3
     assert rec["settings"]["thinking"] == "between_tools" and rec["settings"]["effort"] == "high"
     assert all(rec["cases"][x]["timing"]["t0"] == 0.0 for x in rec["cases"])
+
+
+async def test_rest_list_query_is_comma(deps_factory, hub):
+    """허브 REST 목록 쿼리 = 쉼표(실물 대조 10-30 — 반복 키는 마지막만 남음)."""
+    deps = deps_factory()
+    await deps.hub_rest.call("procedure_card", {"id": "unit_procedure:U5-140", "sections": ["overview", "ops"]})
+    await deps.hub_rest.vocab(["intent", "menu"])
+    got = {t: a for via, t, a in hub.calls if via == "gold-rest"}
+    assert got["procedure_card"]["sections"] == ["overview", "ops"]
+    assert got["vocab"]["kinds"] == ["intent", "menu"]

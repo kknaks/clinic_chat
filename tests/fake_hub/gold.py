@@ -249,7 +249,7 @@ def vocab(kinds: list[str] | None = None) -> dict:
     out: dict[str, Any] = {}
     for k in ks:
         if k == "intent":
-            out[k] = [{"id": i, "name": n, "examples": [e]} for i, n, e in INTENTS]
+            out[k] = [{"id": i, "name": n, "tool": None} for i, n, _e in INTENTS]  # 실물 허브처럼 예시 없음
         elif k == "menu":
             out[k] = [{"id": f"menu:{m}", "label": m} for m in MENUS]
         elif k in all_kinds:

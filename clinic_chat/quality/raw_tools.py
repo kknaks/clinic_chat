@@ -55,11 +55,11 @@ def key_seg(k: str) -> str:
     return "." + k if _PLAIN_KEY.match(k) else "[" + json.dumps(k, ensure_ascii=False) + "]"
 
 
-_TOKEN = re.compile(r'\.([^.\[\]]+)|\[(\d+)\]|\[("(?:[^"\\]|\\.)*")\]')
+_TOKEN = re.compile(r'\.([^.\[\]"]+)|\[(\d+)\]|\["((?:[^"\\]|\\.)*)"\]')
 
 
 def parse_path(path: str) -> tuple[str, list[str | int]]:
-    m = re.match(r"^([^.\[\]]+)", path or "")
+    m = re.match(r'^([^.\[\]"]+)', path or "")
     if not m:
         raise RawToolError(f"경로 문법 오류: {path!r}")
     file, pos, segs = m.group(1), m.end(), []
@@ -72,7 +72,7 @@ def parse_path(path: str) -> tuple[str, list[str | int]]:
         elif t.group(2) is not None:
             segs.append(int(t.group(2)))
         else:
-            segs.append(json.loads(t.group(3)))
+            segs.append(json.loads('"' + t.group(3) + '"'))
         pos = t.end()
     return file, segs
 
@@ -99,8 +99,8 @@ class RawFile:
 
 class RawStore:
     def __init__(self, raw_dir: str | Path) -> None:
-        d = Path(raw_dir)
-        if not d.is_dir():
+        d = Path(raw_dir) if raw_dir else None
+        if d is None or not d.is_dir():
             raise RawToolError(f"RAW_DIR 없음: {raw_dir}")
         self.files: dict[str, RawFile] = {}
         for n in RAW_FILES:
@@ -109,33 +109,36 @@ class RawStore:
                 raise RawToolError(f"원장 파일 없음: {n}.json")
             b = p.read_bytes()
             self.files[n] = RawFile(n, len(b), hashlib.sha256(b).hexdigest()[:16], json.loads(b))
-        lines = "".join(f"{f.name}.json\t{f.bytes}\t{f.sha16}\n" for f in self.files.values())
-        self.dir_manifest_sha16 = hashlib.sha256(lines.encode()).hexdigest()[:16]
+        # 허브 raw-manifest 와 같은 셈 — files[{name, bytes, sha16}] 의 canonical JSON sha256 앞 16자
+        manifest = [{"name": f"{f.name}.json", "bytes": f.bytes, "sha16": f.sha16} for f in self.files.values()]
+        canon = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.dir_manifest_sha16 = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
 
     # 응답 머리
     def head(self, request: dict) -> dict:
         return {"raw": {"dir_manifest_sha16": self.dir_manifest_sha16, "files": len(self.files)}, "request": request}
 
-    def _file(self, name: str) -> RawFile:
-        if name not in self.files:
-            raise RawToolError(f"없는 원장 파일: {name}")
-        return self.files[name]
-
     def resolve(self, path: str) -> Any:
         file, segs = parse_path(path)
-        v = self._file(file).doc
+        if file not in self.files:
+            raise RawToolError(f"없는 경로: {path} — 파일 {file} 없음")
+        v = self.files[file].doc
+        cur = file
         for s in segs:
+            cur += f"[{s}]" if isinstance(s, int) else key_seg(s)
             if isinstance(s, int) and isinstance(v, list) and 0 <= s < len(v) or isinstance(s, str) and isinstance(v, dict) and s in v:
                 v = v[s]
             else:
-                raise RawToolError(f"없는 경로: {path}")
+                raise RawToolError(f"없는 경로: {path} — {cur}")
         return v
 
     # R1
     def raw_list(self, file: str | None = None, depth: int = 2) -> dict:
         if not 0 <= depth <= LIST_DEPTH_MAX:
             raise RawToolError(f"depth 는 0~{LIST_DEPTH_MAX}")
-        names = [self._file(file).name] if file else list(self.files)
+        if file is not None and file not in self.files:
+            raise RawToolError(f"없는 파일: {file} — {', '.join(sorted(self.files))}")
+        names = [file] if file else sorted(self.files)
 
         def struct(v: Any, d: int) -> dict:
             k = _kind(v)
@@ -165,29 +168,24 @@ class RawStore:
         total = _bytes(v)
         out: dict[str, Any] = {"path": path, "type": _kind(v), "bytes_total": total, "truncated": False}
         if isinstance(v, (list, dict)):
-            items = list(enumerate(v)) if isinstance(v, list) else list(v.items())
-            items = items[offset:]
-            taken, used = [], 2
-            for k, x in items:
-                b = _bytes(x) + (_bytes(k) + 1 if isinstance(v, dict) else 0) + 1
+            items = list(v.items()) if isinstance(v, dict) else list(v)
+            if offset > len(items):
+                raise RawToolError(f"offset 이 원소 수({len(items)})보다 큼")
+            taken, used, i = [], 2, offset
+            while i < len(items):
+                b = _bytes(dict([items[i]]) if isinstance(v, dict) else items[i]) + 1
                 if taken and used + b > cap:
                     break
-                taken.append((k, x))
+                taken.append(items[i])
                 used += b
-            val = [x for _, x in taken] if isinstance(v, list) else {k: x for k, x in taken}
-            out["value"] = val
-            if len(taken) < len(items):
-                out["truncated"] = True
-                out["next_offset"] = offset + len(taken)
+                i += 1
+            out["value"] = dict(taken) if isinstance(v, dict) else taken
+            out["truncated"] = i < len(items)
+            out.update({"offset": offset, "count": len(taken), "length": len(items)})
+            if out["truncated"]:
+                out["next_offset"] = i
         elif isinstance(v, str) and total > cap:
-            s, used = [], 2
-            for ch in v:
-                b = _bytes(ch) - 2
-                if used + b > cap:
-                    break
-                s.append(ch)
-                used += b
-            out["value"] = "".join(s)
+            out["value"] = v.encode("utf-8")[: max(0, cap - 2)].decode("utf-8", errors="ignore")
             out["truncated"] = True
         else:
             out["value"] = v
@@ -195,7 +193,7 @@ class RawStore:
 
     # R3
     def raw_search(self, query: str, files: list[str] | None = None, limit: int = 20, snippet_chars: int = 80) -> dict:
-        if not query or not 1 <= len(query) <= 100:
+        if not query or len(query) > 100:
             raise RawToolError("query 는 1~100자")
         if not 1 <= limit <= SEARCH_LIMIT_MAX:
             raise RawToolError(f"limit 은 1~{SEARCH_LIMIT_MAX}")
@@ -204,7 +202,10 @@ class RawStore:
         qn, _ = _norm_search(query)
         if not qn:
             raise RawToolError("query 가 공백뿐")
-        names = sorted(self._file(f).name for f in files) if files else sorted(self.files)
+        for f in files or []:
+            if f not in self.files:
+                raise RawToolError(f"없는 파일: {f}")
+        names = sorted(files or self.files)
         hits: list[dict] = []
         total = 0
 
@@ -215,7 +216,7 @@ class RawStore:
                 return None
             a, b = idx[j], idx[j + len(qn) - 1] + 1
             pad = max(0, (snippet_chars - (b - a)) // 2)
-            return s[max(0, a - pad): b + pad][:snippet_chars] if b - a <= snippet_chars else s[a:a + snippet_chars]
+            return s[max(0, a - pad): min(len(s), b + pad)]
 
         def walk(v: Any, path: str, file: str) -> None:
             nonlocal total
@@ -241,7 +242,7 @@ class RawStore:
         for n in names:
             walk(self.files[n].doc, n, n)
         req = {"query": query, "files": files, "limit": limit, "snippet_chars": snippet_chars}
-        return {**self.head(req), "query_norm": qn, "total": total, "truncated": total > len(hits), "hits": hits}
+        return {**self.head(req), "query_norm": qn, "total": total, "truncated": total > limit, "hits": hits}
 
     def call(self, name: str, args: dict) -> dict:
         fn = {"raw_list": self.raw_list, "raw_get": self.raw_get, "raw_search": self.raw_search}.get(name)

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -25,6 +25,11 @@ GOLD_MCP_URL = BASE + PREFIX + "/gold-mcp/mcp"
 RAW_MCP_URL = BASE + PREFIX + "/raw-mcp/mcp"
 REST_URL = BASE + PREFIX + "/gold"
 _SEC = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
+def _csv(v: str | None) -> list[str] | None:
+    """허브 REST 목록 쿼리 꼴 — 쉼표로 이음."""
+    return [x for x in v.split(",") if x] if v else None
 
 
 class FakeHub:
@@ -107,24 +112,24 @@ class FakeHub:
             return {"build": gold.BUILD, "raw": {"files": 21}}
 
         @app.get(g + "/vocab")
-        def vocab(kinds: Annotated[list[str] | None, Query()] = None):
-            return run("vocab", kinds=kinds)
+        def vocab(kinds: str | None = None):
+            return run("vocab", kinds=_csv(kinds))
 
         @app.get(g + "/resolve")
-        def resolve(text: str, kinds: Annotated[list[str] | None, Query()] = None, limit_per_span: int = 20):
-            return run("resolve", text=text, kinds=kinds, limit_per_span=limit_per_span)
+        def resolve(text: str, kinds: str | None = None, limit_per_span: int = 20):
+            return run("resolve", text=text, kinds=_csv(kinds), limit_per_span=limit_per_span)
 
         @app.post(g + "/recommend")
         async def recommend(req: Request):
             return run("recommend", **(await req.json()))
 
         @app.get(g + "/procedures/{pid}")
-        def card(pid: str, product: str | None = None, sections: Annotated[list[str] | None, Query()] = None, full: bool = False):
-            return run("procedure_card", id=pid, product=product, sections=sections, full=full)
+        def card(pid: str, product: str | None = None, sections: str | None = None, full: bool = False):
+            return run("procedure_card", id=pid, product=product, sections=_csv(sections), full=full)
 
         @app.get(g + "/procedures/{pid}/checks")
-        def checks(pid: str, conditions: Annotated[list[str] | None, Query()] = None):
-            return run("check_conditions", id=pid, conditions=conditions)
+        def checks(pid: str, conditions: str | None = None):
+            return run("check_conditions", id=pid, conditions=_csv(conditions))
 
         @app.post(g + "/pairs")
         async def pairs(req: Request):
