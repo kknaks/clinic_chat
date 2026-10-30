@@ -99,8 +99,12 @@ async def startup_check(deps: Deps) -> dict:
     s = deps.settings
     info["keys"] = {"anthropic": s.has_anthropic_key or deps.anthropic is not None,
                     "typesafe": s.has_typesafe_key or deps.jev is not None}
-    info["cases"] = {"case1": None if deps.anthropic else NO_KEY, "case2": None if deps.anthropic else NO_KEY,
-                     "case3": None if (deps.anthropic and deps.jev) else NO_KEY}
+    if s.default_provider == "sdk":
+        info["cases"] = {"case1": None if deps.anthropic else NO_KEY, "case2": None if deps.anthropic else NO_KEY,
+                         "case3": None if (deps.anthropic and deps.jev) else NO_KEY}
+    else:  # CLI 기본 — 구독 인증은 판마다 확인(/api/providers) · case3 은 Jev 키만
+        info["cases"] = {"case1": None, "case2": None, "case3": None if deps.jev else NO_KEY}
+    info["default_provider"] = s.default_provider
     try:
         h = await deps.hub_rest.health()
         info["hub_health"] = {"build": (h.get("build") or {}).get("id"), "raw": h.get("raw")}
