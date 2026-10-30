@@ -29,7 +29,10 @@ VOCAB_SLOTS = ("concern", "site", "purpose", "check_condition", "technique", "fa
 PROC_KINDS = ("unit_procedure", "product")
 NONE = "해당 없음"
 NOUL_MIN = 0.5  # R-6 · 짝 Noul
-SLOT_LABEL = {"concern": "고민", "site": "부위", "purpose": "목적", "check_condition": "확인 조건", "technique": "기법",
+# 시술 2개가 필요한 의도 — 필요한 시술 수(I-07 은 1개면 자기 쌍)
+TWO_PROC = {"I-06": 2, "I-07": 1, "I-08": 2}
+SLOT_LABEL = {"family_a": "첫 번째로 말한 시술 계열", "family_b": "두 번째로 말한 시술 계열(하나만 말했으면 해당 없음)",
+              "procedure_a": "첫 번째로 말한 시술", "procedure_b": "두 번째로 말한 시술","concern": "고민", "site": "부위", "purpose": "목적", "check_condition": "확인 조건", "technique": "기법",
               "family": "시술 계열", "menu": "메뉴(추천 패키지 라벨)", "procedure": "시술 · 제품"}
 CARD_INTENTS = ("I-02", "I-03", "I-04", "I-05", "I-10")  # 시술 카드(T3) 의도 — 어느 칸을 받을지는 Jev 가 고름
 # 「필요한 정보」 — Jev 가 질문마다 고르는 카드 칸(SPEC-005 §4-3 section 이름 · 안전 요약은 허브가 늘 줌)
@@ -110,6 +113,17 @@ def build_jev_questions(vocab: dict, cands: list[dict], seed: int) -> tuple[dict
         meta[slot]["order"] = list(qs[f"slot:{slot}"].criteria)
     for sec, desc in INFO_SECTIONS.items():  # 필요한 정보(같은 요청 · 병렬)
         qs[f"info:{sec}"] = Noul(instructions=f"이 질문에 답하려면 「{desc}」 정보가 필요한가?")
+    fam_items = list(v.get("family", []))
+    fam_reduced = len(fam_items) + 1 > CHOICE_MAX
+    if fam_reduced:  # 255 넘으면 ① 후보로 줄임(다른 슬롯과 같음)
+        ids = {c["id"] for c in cands}
+        fam_items = [x for x in fam_items if x["id"] in ids]
+    fams = {x["id"]: _desc(x) for x in fam_items}
+    for slot in ("family_a", "family_b"):  # 시술 2개 의도용 — 계열 둘(실물 27 · 같은 요청)
+        if fams:
+            crit = {**fams, NONE: "질문이 이 값을 말하지 않음"}
+            qs[f"slot:{slot}"] = Choice(instructions=f"질문이 말하는 {SLOT_LABEL[slot]}은(는)?", criteria=_shuffled(rng, crit))
+            meta[slot] = {"options_n": len(fams), "reduced": fam_reduced, "order": list(qs[f"slot:{slot}"].criteria)}
     for c in cands:  # 여러 고민(R-6)
         if c.get("kind") == "concern":
             qs[f"concern:{c['id']}"] = Noul(instructions=f"질문이 「{c.get('name', c['id'])}」 고민을 말하나?")
@@ -154,13 +168,14 @@ def _low(jev: dict, slot: str) -> bool:
     return bool(row.get("low_confidence")) and row.get("choice") not in (None, NONE)
 
 
-def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], question: str) -> dict:
+def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], question: str,
+              procs: list[str] | None = None) -> dict:
     """의도 → 도구 경로(SPEC-005 §6-1 · SPEC-006 §3-4). 필수 슬롯 없으면 tool=None + missing.
 
     T1 후보는 255 넘는 슬롯 줄이기 · 시술 슬롯 판단용일 뿐 거르기가 아니다 — Jev 가 고른 슬롯 값은 T1 후보가 비어도
     그대로 쓴다(10-30 코디 승인). Jev 가 「해당 없음」이면 T1 후보로 채우고, 낮은 신뢰면 되묻기.
     """
-    units = [c["id"] for c in cands if c.get("kind") == "unit_procedure"]
+    units = procs if procs is not None else [c["id"] for c in cands if c.get("kind") == "unit_procedure"]
     proc = _val(jev, "procedure") or _val(jev, "family")
     concerns = []
     if _val(jev, "concern"):
@@ -223,6 +238,71 @@ def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], ques
     return need("intent")
 
 
+async def family_units(deps: Deps, fam: str) -> list[dict]:
+    """계열의 단위 시술 [{id, name}] — 허브 procedure_card(family).card.units(앱 안 캐시)."""
+    cache = deps.startup.setdefault("family_units", {})
+    if fam not in cache:
+        card = (await deps.hub_rest.call("procedure_card", {"id": fam})).get("card") or {}
+        cache[fam] = [u for u in card.get("units") or [] if isinstance(u, dict) and u.get("id")]
+    return cache[fam]
+
+
+async def two_procs(deps: Deps, question: str, intent: str, jev: dict, cands: list[dict], seed: int,
+                    timer: CaseTimer, trace: dict, tokens: dict) -> list[str]:
+    """시술 2개 의도(I-06 · 07 · 08) — ① 후보 단위 시술 · 제품 → 모자라면 Jev 가 고른 계열(+부위)의 단위 시술을
+    procedure_a · procedure_b 두 Choice(한 요청 · jev#2)로 → 그래도 모자라면 계열 · 제품 id 그대로(허브가 펼침)."""
+    procs = [c["id"] for c in cands if c.get("kind") in PROC_KINDS]
+    fams = [x for x in (_val(jev, "family_a"), _val(jev, "family_b"), _val(jev, "family")) if x]
+    fams += [c["id"] for c in cands if c.get("kind") == "family"]
+    fams = list(dict.fromkeys(fams))[:2]
+    need = max(TWO_PROC[intent], min(2, len(fams)))  # 계열을 둘 말했으면 시술도 둘(I-07 「A 랑 B 같이」)
+    unpicked: list[str] = []  # 단위 시술을 못 고른 계열 — 모자라면 계열 id 로
+    site = _val(jev, "site")
+    site_name = next((x.get("name") for x in deps.vocab.get("vocab", deps.vocab).get("site", []) if x["id"] == site), None)
+    info: dict[str, Any] = {"from_resolve": list(procs), "families": fams}
+    if len(dict.fromkeys(procs)) < need and fams:
+        with timer.stage("hub_units"):
+            lists = [await family_units(deps, f) for f in fams]
+        qs: dict[str, Any] = {}
+        rng = random.Random(seed + 1)
+        slot_fam = dict(zip(("procedure_a", "procedure_b"), fams if len(fams) == 2 else fams * 2))
+        for slot, units in zip(("procedure_a", "procedure_b"), lists if len(lists) == 2 else lists * 2):
+            if site_name:  # 부위로 좁힘(이름에 부위가 든 단위 시술 · 없으면 그 계열 전부)
+                units = [u for u in units if site_name in u.get("name", "")] or units
+            units = units[:CHOICE_MAX - 1]
+            if not units:
+                continue
+            crit = {u["id"]: u.get("name") or u["id"] for u in units}
+            crit[NONE] = "질문이 이 시술을 말하지 않음"
+            qs[f"slot:{slot}"] = Choice(instructions=f"질문이 말하는 {SLOT_LABEL[slot]}은(는)?", criteria=_shuffled(rng, crit))
+            info[f"{slot}_options_n"] = len(units)
+        if qs:
+            try:
+                with timer.stage("jev#2") as st:
+                    resp = await deps.jev.system_one(state=question, questions=qs)
+                    st["tokens"] = {"input_tokens": resp.usage.input_tokens}
+                    st["cost_usd"] = cost_usd(deps.settings.typesafe_default_model, st["tokens"])
+                trace["jev_calls"] = trace.get("jev_calls", 1) + 1
+                tokens["jev#2"] = st["tokens"]
+                for name, a in resp.choices.items():
+                    slot = name.split(":", 1)[1]
+                    low = a.confidence < deps.settings.jev_confidence_min
+                    info[slot] = {"choice": a.choice, "confidence": round(a.confidence, 4), "low_confidence": low}
+                    if a.choice != NONE and not low:
+                        procs.append(a.choice)
+                    else:
+                        unpicked.append(slot_fam[slot])
+            except TypeSafeError as e:  # 2단 실패 — 계열 id 로 이어 감
+                info["error"] = _jev_error(e)
+    procs = list(dict.fromkeys(procs))
+    if len(procs) < need:  # 그래도 비면 계열 · 제품 id 로(허브가 펼침) — 못 고른 계열 먼저
+        procs = list(dict.fromkeys(procs + unpicked + fams))[:max(need, len(procs))]
+        info["fallback_ids"] = True
+    info["procedures"] = procs
+    trace["procedures"] = info
+    return procs
+
+
 def _jev_error(e: Exception) -> str:
     code = getattr(e, "status", None)
     return f"Jev 오류{f' {code}' if code else ''}: {type(e).__name__}"
@@ -264,7 +344,10 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
         trace["jev"] = jev
 
         intent = (jev.get("intent") or {}).get("choice")
-        path = plan_path(intent, jev, cands, menus, question)
+        procs = None
+        if intent in TWO_PROC:
+            procs = await two_procs(deps, question, intent, jev, cands, seed, timer, trace, tokens)
+        path = plan_path(intent, jev, cands, menus, question, procs)
         if path["tool"] in deps.section_tools and jev["sections"] and "sections" not in (path["input"] or {}):
             path["input"] = {**path["input"], "sections": jev["sections"]}  # Jev 가 고른 칸만
         hub_result = None

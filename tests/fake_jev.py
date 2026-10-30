@@ -40,6 +40,12 @@ class FakeJev:
             return self.intent(state) if callable(self.intent) else self.intent
         if name in self.choices:
             return self.choices[name]
+        if name.endswith(("_a", "_b")):  # 첫 번째 · 두 번째로 말한 것 — 질문 안 위치 순
+            hits = sorted((state.find(d.split(" · ")[0]), k) for k, d in crit.items()
+                          if k != NONE and isinstance(d, str) and d.split(" · ")[0] in state)
+            # 계열은 같은 목록에서 첫째 · 둘째 / 시술(procedure_a · b)은 목록이 따로라 제 목록에서 첫째
+            idx = 1 if name == "slot:family_b" else 0
+            return hits[idx][1] if len(hits) > idx else NONE
         for k, d in crit.items():
             if k != NONE and isinstance(d, str) and d.split(" · ")[0] in state:
                 return k

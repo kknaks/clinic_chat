@@ -25,6 +25,16 @@ NODES: dict[str, dict] = {
     "unit_procedure:U5-102": {"name": "울쎄라", "family": "family:M9", "syn": ["Ulthera"]},
     "unit_procedure:U5-140": {"name": "소프웨이브", "family": "family:M9", "syn": ["Sofwave"]},
     "product:M9-1-10": {"name": "10THERA", "family": "family:M9"},
+    # 시술 2개 의도 fixture(실물 run 꼴 — 보톡스랑 팔자 필러 · CO2 프락셀이랑 필러 · 필러랑 스컬트라)
+    "site:팔자": {"name": "팔자"},
+    "family:M3": {"name": "필러"},
+    "unit_procedure:U5-082": {"name": "팔자 필러", "family": "family:M3", "site": "site:팔자"},
+    "unit_procedure:U5-086": {"name": "이마 필러", "family": "family:M3", "site": "site:이마"},
+    "family:M7": {"name": "CO2 레이저", "syn": ["CO2"]},
+    "unit_procedure:U5-200": {"name": "얼굴 CO2 프락셀", "family": "family:M7"},
+    "family:M4": {"name": "콜라겐 부스터"},
+    "product:M4-1-1": {"name": "스컬트라", "family": "family:M4"},
+    "unit_procedure:U5-300": {"name": "볼 스컬트라", "family": "family:M4"},
 }
 for _id, _n in NODES.items():
     _n["kind"] = _id.split(":", 1)[0]
@@ -164,18 +174,25 @@ def procedure_card(id: str, product: str | None = None, sections: list[str] | No
     secs = [s for s in SECTIONS if s != "all"] if full or "all" in (sections or []) else (sections or [])
     facts = [_fact(id, s) for s in secs] or [_fact(id, "overview")]
     card = _card(id) if n["kind"] == "unit_procedure" else {"id": id, "name": n["name"], "kind": n["kind"]}
+    if n["kind"] == "family":  # 계열 카드 = 단위 시술 id 목록(SPEC-005 §5-4 · 실물 card.units 꼴)
+        card["units"] = [{"id": u, "name": x["name"]} for u, x in NODES.items()
+                         if x["kind"] == "unit_procedure" and x.get("family") == id]
     card["sections"] = {s: [f"{id}#{s}#fixture[0]"] for s in secs}
     req = {"id": id, "product": product, "sections": sections, "full": full}
     return _wrap(req, {"card": card}, facts, ["gap"])
 
 
 # T4
+# 허브가 계열 · 제품 id 를 단위 시술로 펼치게 고치는 중(10-30 코디) — 모의는 고친 뒤 꼴로 받음
+PROC_IN = ("unit_procedure", "product", "family")
+
+
 def pair_check(procedures: list[str], prior: dict | None = None, sub_condition: dict | None = None,
                include_conditional: bool = False, sections: list[str] | None = None) -> dict:
     if not 2 <= len(procedures) <= 6:
         raise GoldError("procedures 는 2~6개")
     for p in procedures:
-        _need(p, "unit_procedure")
+        _need(p, *PROC_IN)
     pairs = []
     for i in range(len(procedures)):
         for j in range(i + 1, len(procedures)):
@@ -213,7 +230,7 @@ def compare(procedures: list[str], sections: list[str] | None = None) -> dict:
         raise GoldError("procedures 는 2~4개")
     _check_sections(sections)
     for p in procedures:
-        _need(p, "unit_procedure")
+        _need(p, *PROC_IN)
     rows = [{"field": "family", "values": {p: NODES[p].get("family") for p in procedures}}]
     body = {"rows": rows, "source_comparisons": [], "alternatives": [], "safety": [_safety(p) for p in procedures]}
     return _wrap({"procedures": procedures, "sections": sections}, body, [_fact(p, "overview") for p in procedures])

@@ -219,3 +219,52 @@ async def test_low_confidence_slot_asks_back(deps_factory, hub):
     assert r["trace"]["jev"]["slots"]["concern"]["low_confidence"] is True
     assert r["trace"]["hub"]["tool"] is None and r["trace"]["hub"]["missing"] == ["concern"]
     assert [t for t, _ in gold_calls(hub)] == ["resolve"]
+
+
+# 시술 2개 의도(I-06 · 07 · 08) — ① 후보가 비어도 Jev 계열 → 단위 시술 2단 → 허브 호출(10-30 실물 발견)
+TWO_CASES = [
+    ("I-07", "보톡스랑 팔자 필러 같이 맞아도 돼요", "pair_check"),
+    ("I-07", "CO2 프락셀이랑 필러 같이 해도 돼요", "pair_check"),
+    ("I-06", "필러랑 스컬트라 뭐가 달라요", "compare"),
+]
+
+
+@pytest.mark.parametrize("intent,q,tool", TWO_CASES, ids=[c[1][:8] for c in TWO_CASES])
+async def test_two_procedures_reach_hub(deps_factory, hub, intent, q, tool):
+    jev = FakeJev(intent=intent)
+    r, fa, _ = await run(deps_factory, q, jev)
+    assert r["error"] is None, r["error"]
+    h, p = r["trace"]["hub"], r["trace"]["procedures"]
+    assert h["tool"] == tool and not h.get("missing")  # 「모름」 아님 · 허브 호출됨
+    assert [t for t, _ in gold_calls(hub) if t in ("pair_check", "compare")] == [tool]
+    procs = h["input"]["procedures"]
+    assert len(set(procs)) >= 2
+    assert p["families"] and len(p["families"]) <= 2
+    assert "needs_clarification" not in fa.calls[0]["messages"][0]["content"]
+    if len(jev.requests) == 2:  # 2단 — procedure_a · procedure_b 가 같은 한 요청에
+        q2 = jev.requests[1]["questions"]
+        assert set(q2) <= {"slot:procedure_a", "slot:procedure_b"} and q2
+        assert all(len(x["criteria"]) <= 255 for x in q2.values())
+        assert r["trace"]["jev_calls"] == 2 and "jev#2" in [s["name"] for s in r["timing"]["stages"]]
+
+
+async def test_two_procedures_case_shapes(deps_factory, hub):
+    # 보톡스랑 팔자 필러: 계열 2(보톡스 · 필러) → 팔자 필러는 부위로 좁혀 단위 시술 · 보톡스는 계열 id 로
+    r, _, _ = await run(deps_factory, "보톡스랑 팔자 필러 같이 맞아도 돼요", FakeJev(intent="I-07"))
+    assert "unit_procedure:U5-082" in r["trace"]["hub"]["input"]["procedures"]
+    # 필러랑 스컬트라: ① 이 제품(스컬트라)을 줌 + 필러 계열 → 2개
+    r, _, _ = await run(deps_factory, "필러랑 스컬트라 뭐가 달라요", FakeJev(intent="I-06"))
+    procs = r["trace"]["hub"]["input"]["procedures"]
+    assert "product:M4-1-1" in procs and len(procs) >= 2
+
+
+async def test_family_units_cached(deps_factory, hub):
+    jev = FakeJev(intent="I-07")
+    fa = FakeAnthropic([Turn(text=["답"])])
+    deps = deps_factory(anthropic=fa)
+    deps.jev = jev.client(deps.settings)
+    deps.vocab = await deps.hub_rest.vocab()
+    for _ in range(2):
+        await case3.run(deps, "보톡스랑 팔자 필러 같이 맞아도 돼요", CaseTimer(Clock()), lambda t: None)
+    fam_cards = [a for via, t, a in hub.calls if t == "procedure_card" and a["id"].startswith("family:")]
+    assert len(fam_cards) == len({a["id"] for a in fam_cards})  # 계열마다 한 번만
