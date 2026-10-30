@@ -29,8 +29,20 @@ def final_text(msg: Any) -> str:
     return "".join(b.text for b in msg.content if b.type == "text")
 
 
-async def extract_names(deps: Deps, answer: str) -> tuple[list[dict], dict]:
-    """→ (이름 목록, 토큰 usage)."""
+async def extract_names(deps: Deps, answer: str) -> tuple[list[dict], dict, float | None]:
+    """→ (이름 목록, 토큰 usage, 비용 $). 채점 provider 가 claude-cli 면 CLI(Opus · effort low · --json-schema)."""
+    if deps.settings.judge_provider == "claude-cli":
+        from clinic_chat.llm import cli
+        from clinic_chat.llm.specs import judge_spec
+        from clinic_chat.timing import CaseTimer, Clock
+
+        c = Clock(now=deps.now)
+        c.start()
+        r = await cli.run(judge_spec(deps.settings, "extract"), system=prompts.load("extract"), prompt=answer,
+                          timer=CaseTimer(c), on_text=lambda t: None, schema=NAMES_SCHEMA)
+        if r["error"] or not isinstance(r.get("structured"), dict):
+            raise RuntimeError(r["error"] or "이름 뽑기 구조화 출력 없음")
+        return r["structured"].get("names", []), (r["tokens"] or {}).get("total", {}), r["cost"].get("usd_estimate")
     if deps.anthropic is None:
         raise RuntimeError(NO_KEY)
     msg = await deps.anthropic.messages.create(
@@ -38,7 +50,8 @@ async def extract_names(deps: Deps, answer: str) -> tuple[list[dict], dict]:
         messages=[{"role": "user", "content": answer}],
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": NAMES_SCHEMA}},
     )
-    return json.loads(final_text(msg))["names"], usage_dict(msg.usage)
+    usage = usage_dict(msg.usage)
+    return json.loads(final_text(msg))["names"], usage, cost_usd(deps.settings.extract_model, usage)
 
 
 def _raw_index(deps: Deps) -> list[tuple[str, str, str]]:
@@ -88,10 +101,11 @@ def match_names(deps: Deps, names: list[dict]) -> dict:
 
 
 async def check_answer(deps: Deps, answer: str) -> dict:
-    names, usage = await extract_names(deps, answer)
+    names, usage, cost = await extract_names(deps, answer)
     res = match_names(deps, names)
     res["usage"] = usage
-    res["cost_usd"] = cost_usd(deps.settings.extract_model, usage)
+    res["cost_usd"] = cost
+    res["provider"] = deps.settings.judge_provider
     res["extracted"] = names  # 뽑기 결과 그대로(다시 대조 가능)
     res["extract_model"] = deps.settings.extract_model
     return res

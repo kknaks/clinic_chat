@@ -88,7 +88,57 @@ async def _tool(store: Any, name: str, args: dict) -> tuple[str, bool]:
         return f"오류: {e}", True
 
 
+def per_case_from(data: dict, order: list[str], store: Any) -> dict[str, dict]:
+    label_case = dict(zip(LABELS, order))
+    per_case: dict[str, dict] = {}
+    for a in data.get("answers", []):
+        c = label_case.get(a["label"])
+        if c is None:
+            continue
+        items, failures = {}, []
+        for it in a["items"]:
+            items[it["item"]] = it["verdict"]
+            if it["verdict"] == "실패":
+                valid = check_evidence(store, it.get("evidence"))
+                failures.append({"item": it["item"], "answer": a["label"], "claim": it["claim"],
+                                 "evidence": it.get("evidence"), "status": "valid" if valid else "invalid"})
+        per_case[c] = {"label": a["label"], "items": items, "failures": failures,
+                       "pass_count": sum(1 for v in items.values() if v == "통과"),
+                       "invalid_count": sum(1 for f in failures if f["status"] == "invalid")}
+    return per_case
+
+
+async def judge_cli(deps: Deps, question: str, answers: dict[str, str], order: list[str]) -> dict:
+    """② 채점 — Claude CLI Opus · 원장 도구 3 = 로컬 stdio MCP(raw_mcp) · --json-schema 로 마지막 답."""
+    import sys
+
+    from clinic_chat.config import ROOT
+    from clinic_chat.llm import cli
+    from clinic_chat.llm.cli import McpAttach
+    from clinic_chat.llm.specs import judge_spec
+    from clinic_chat.timing import CaseTimer, Clock
+
+    s = deps.settings
+    raw = McpAttach("raw", command=sys.executable, args=["-m", "clinic_chat.quality.raw_mcp"],
+                    env={"RAW_DIR": s.raw_dir, "PYTHONPATH": str(ROOT)})
+    prompt = judge_input(question, answers, order) + "\n\n자료 확인을 마치면 채점 결과를 지정된 JSON 꼴로만 내라."
+    c = Clock(now=deps.now)
+    c.start()
+    r = await cli.run(judge_spec(s, "judge"), system=prompts.load("judge"), prompt=prompt, timer=CaseTimer(c),
+                      on_text=lambda t: None, mcp=raw, schema=JUDGE_SCHEMA)
+    if r["error"] or not isinstance(r.get("structured"), dict):
+        raise RuntimeError(r["error"] or "채점 구조화 출력 없음")
+    return {"per_case": per_case_from(r["structured"], order, deps.raw_store), "rounds": r["timing"].get("llm_round_trips"),
+            "tool_calls": len(r["trace"]["tool_calls"]), "judge_model": s.judge_model, "provider": "claude-cli",
+            "usage": (r["tokens"] or {}).get("total", {}), "cost_usd": r["cost"].get("usd_estimate"),
+            "billed": "subscription", "calls": 1, "cli": r["trace"]["cli"]}
+
+
 async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[str]) -> dict:
+    if deps.raw_store is None:
+        raise RuntimeError("RAW_DIR 필요")
+    if deps.settings.judge_provider == "claude-cli":
+        return await judge_cli(deps, question, answers, order)
     if deps.anthropic is None:
         raise RuntimeError(NO_KEY)
     if deps.raw_store is None:
@@ -127,22 +177,7 @@ async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[
     usages.append(usage_dict(final.usage))
     data = json.loads(final_text(final))
 
-    label_case = dict(zip(LABELS, order))
-    per_case: dict[str, dict] = {}
-    for a in data.get("answers", []):
-        c = label_case.get(a["label"])
-        if c is None:
-            continue
-        items, failures = {}, []
-        for it in a["items"]:
-            items[it["item"]] = it["verdict"]
-            if it["verdict"] == "실패":
-                valid = check_evidence(deps.raw_store, it.get("evidence"))
-                failures.append({"item": it["item"], "answer": a["label"], "claim": it["claim"],
-                                 "evidence": it.get("evidence"), "status": "valid" if valid else "invalid"})
-        per_case[c] = {"label": a["label"], "items": items, "failures": failures,
-                       "pass_count": sum(1 for v in items.values() if v == "통과"),
-                       "invalid_count": sum(1 for f in failures if f["status"] == "invalid")}
+    per_case = per_case_from(data, order, deps.raw_store)
     usage = sum_usage(usages)
     return {"per_case": per_case, "rounds": rounds, "tool_calls": tool_calls, "judge_model": s.judge_model,
             "usage": usage, "cost_usd": round(sum(cost_usd(s.judge_model, u) or 0 for u in usages), 6),

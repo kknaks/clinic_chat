@@ -41,7 +41,7 @@ def build(runs_dir: str | None, realtime: bool = True) -> tuple[Deps, FakeHub]:
     sem = write_semantic(tmp / "semfx" / "sem.json")
     s = Settings(_env_file=None, anthropic_api_key="mock", typesafe_api_key="mock", raw_dir=str(raw),
                  semantic_json=str(sem), runs_dir=runs_dir or str(tmp / "runs"), hub_gold_mcp_url=GOLD_MCP_URL,
-                 hub_raw_mcp_url=RAW_MCP_URL, hub_rest_url=REST_URL)
+                 hub_raw_mcp_url=RAW_MCP_URL, hub_rest_url=REST_URL, judge_provider="sdk", default_provider="sdk")
     hub = FakeHub(str(raw))
     f = asgi_client_factory(hub.app)
     deps = Deps(settings=s, anthropic=FakeAnthropic(mock_policy, realtime=realtime),

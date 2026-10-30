@@ -8,7 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,7 +37,35 @@ class Settings(BaseSettings):
     case_tool_loop_max: int = 12
     jev_confidence_min: float = 0.3
     tool_result_max_bytes: int = 20_000  # case1 · 2 도구 결과를 Sonnet 에 넘길 때 상한(넘으면 잘림 표시)
-    auto_quality: bool = False  # ① · ② 를 질문마다 자동으로 돌릴지(기본 끔 — 화면 「채점」 버튼)
+    auto_quality: bool = False  # sdk 판 ① · ② 자동 여부(기본 끔 — 화면 「채점」 버튼). CLI 판은 늘 자동
+
+    # CLI provider(실험 — 구독 인증 · cli-research) — 10-30 사용자 결정 값
+    default_provider: str = "claude-cli"
+    claude_cli_bin: str = "claude"
+    codex_cli_bin: str = "codex"
+    claude_cli_model: str = "claude-sonnet-5-5"
+    claude_cli_effort: str = "medium"
+    codex_cli_model: str = "gpt-5.6-terra"
+    codex_cli_effort: str = "medium"
+    codex_service_tier: str = ""  # 비면 CLI 기본
+    cli_timeout_sec: float = 600  # 도구 루프 상한 대신(CLI 에 칸 없음 · D-3)
+    cli_max_budget_usd: float = 1.0  # Claude --max-budget-usd(추정 $ 상한)
+    judge_provider: str = "claude-cli"  # ① · ② 채점 provider(Opus) — claude-cli(기본) · sdk
+    judge_cli_effort: str = "medium"
+    extract_cli_effort: str = "low"
+    judge_max_budget_usd: float = 3.0
+
+    # 일괄 실행 — 값은 사용자가 정함(10-30 「한도는 구현부터 하고 정할게」) · 비면 배치를 시작하지 않음
+    batch_gap_sec: float | None = None  # 판 사이 간격
+    batch_retries: int | None = None  # 판 하나 재시도 수(기동 실패 · 비정상 종료 · 시간 초과 · 과부하만)
+    batch_retry_backoff_sec: str = ""  # 재시도 간격 목록(예 "60,180")
+    batch_limit_wait_sec: float | None = None  # 한도에 걸렸는데 다시 열리는 시각을 모를 때 기다릴 시간
+    questions_md: str = ""  # 질문 리스트 파일(레포 밖 · 사용자 경로)
+
+    @field_validator("batch_gap_sec", "batch_retries", "batch_limit_wait_sec", mode="before")
+    @classmethod
+    def _blank_none(cls, v):  # .env 의 빈칸 = 안 정함
+        return None if isinstance(v, str) and not v.strip() else v
 
     @property
     def has_anthropic_key(self) -> bool:

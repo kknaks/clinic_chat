@@ -71,7 +71,8 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert all(rec["cases"][c]["timing"]["t0"] == 0.0 for c in runner.CASES)
     assert all(rec["cases"][c]["error"] is None for c in runner.CASES), {c: rec["cases"][c]["error"] for c in runner.CASES}
     assert set(rec) == {"run_id", "asked_at", "question", "versions", "settings", "cases", "judge_order", "judge_seed",
-                        "cost"}
+                        "cost", "provider"}
+    assert rec["provider"] == "sdk" and rec["versions"]["answer_provider"] == "sdk" and rec["versions"]["auth_kind"] == "api"
     cost = rec["cost"]
     assert set(cost["cases"]) == set(runner.CASES) and cost["quality_usd"] is None
     assert cost["answers_usd"] == round(sum(cost["cases"].values()), 6) > 0 and cost["pricing_as_of"]
@@ -82,6 +83,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert v["gold_build_hash"] == "fixture0build0h1" and v["raw_manifest_sha16"] == hub.store.dir_manifest_sha16
     assert v["app_commit"] == "fixturecommit"
     assert rec["settings"] == {"thinking": "between_tools", "effort": "high", "tool_loop_max": 12,
+                               "max_budget_usd": None, "service_tier": None, "timeout_sec": None,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:
         assert set(rec["cases"][c]) >= {"answer", "stop_reason", "loop_capped", "error", "timing", "tokens", "trace",

@@ -22,6 +22,8 @@ from clinic_chat.cases.loop import cap_text, case_cost, new_case_result, node_id
 from clinic_chat.clients.anthropic_client import answer_params, stream_once, usage_dict
 from clinic_chat.clients.jev_client import CHOICE_MAX, choice_stats
 from clinic_chat.deps import NO_KEY, Deps
+from clinic_chat.llm import CLI_PROVIDERS, cli
+from clinic_chat.llm.specs import answer_spec
 from clinic_chat.pricing import cost_usd
 from clinic_chat.timing import CaseTimer
 
@@ -308,9 +310,11 @@ def _jev_error(e: Exception) -> str:
     return f"Jev 오류{f' {code}' if code else ''}: {type(e).__name__}"
 
 
-async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0) -> dict:
+async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0,
+              provider: str = "sdk") -> dict:
     res = new_case_result()
-    if deps.anthropic is None or deps.jev is None:
+    cli_res: dict | None = None
+    if deps.jev is None or (provider == "sdk" and deps.anthropic is None):
         res["error"] = NO_KEY
         return res
     trace: dict[str, Any] = {"hub_list": "cache" if deps.vocab is not None else "load"}
@@ -370,6 +374,14 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             trace["hub"]["truncated_to"] = deps.settings.tool_result_max_bytes
         user = (f"질문: {question}\n\n[앱이 해석한 의도 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
                 f"\n\n[허브 결과]\n{hub_text}")
+        if provider in CLI_PROVIDERS:  # ④ 를 CLI 로(도구 없음 · MCP 안 붙임) — 앞 단계는 그대로 앱
+            cli_res = await cli.run(answer_spec(deps.settings, provider), system=prompts.system_for("case3"),
+                                    prompt=user, timer=timer, on_text=on_text)
+            for k in ("answer", "stop_reason", "refusal", "error", "structured"):
+                res[k] = cli_res.get(k)
+            tokens["llm"] = cli_res["tokens"]
+            trace["cli"] = cli_res["trace"]["cli"]
+            return res
         params = answer_params(deps.settings.answer_model, prompts.system_for("case3"),
                                [{"role": "user", "content": user}], None)
 
@@ -394,7 +406,15 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
     except Exception as e:  # noqa: BLE001 — 허브 · Sonnet 오류 — 그 열만 오류
         res["error"] = f"{type(e).__name__}: {e}"[:500]
     finally:
-        timer.finish()
-        res["timing"] = timer.as_dict()
-        res["cost"] = case_cost(timer.stages)
+        if cli_res is not None:  # CLI 가 timer 를 끝냄 — cli_boot · ttft_kind 칸 그대로
+            res["timing"] = cli_res["timing"]
+            cost = case_cost(timer.stages)  # Jev(API)
+            est = cli_res["cost"].get("usd_estimate")
+            cost.update({"billed": "subscription", "usd_estimate": est,
+                         "usd": round(cost["usd"] + (est or 0.0), 6)})
+            res["cost"] = cost
+        else:
+            timer.finish()
+            res["timing"] = timer.as_dict()
+            res["cost"] = case_cost(timer.stages)
     return res
