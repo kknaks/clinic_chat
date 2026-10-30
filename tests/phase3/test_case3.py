@@ -268,3 +268,37 @@ async def test_family_units_cached(deps_factory, hub):
         await case3.run(deps, "보톡스랑 팔자 필러 같이 맞아도 돼요", CaseTimer(Clock()), lambda t: None)
     fam_cards = [a for via, t, a in hub.calls if t == "procedure_card" and a["id"].startswith("family:")]
     assert len(fam_cards) == len({a["id"] for a in fam_cards})  # 계열마다 한 번만
+
+
+async def test_sections_top4_by_probability(deps_factory, hub, monkeypatch):
+    """「필요한 정보」 — 0.5 이상 중 확률 높은 순 최대 4칸(10-30 실물 cb4403b42796: 9칸 → 잘림)."""
+    import re as _re
+
+    from tests import fake_jev
+
+    probs = {"overview": 0.55, "method": 0.6, "recovery": 0.9, "aftercare": 0.95, "timeline": 0.7,
+             "emergency": 0.52, "safety.side_effects": 0.8, "checks": 0.4, "dose": 0.65}
+    orig = fake_jev.FakeJev.handle
+
+    def handle(self, request):
+        resp = orig(self, request)
+        body = resp.json()
+        for name, a in body["answers"].items():
+            if name.startswith("info:"):
+                a["noul"] = probs.get(name[5:], 0.1)
+        return type(resp)(200, json=body)
+
+    monkeypatch.setattr(fake_jev.FakeJev, "handle", handle)
+    r, _, _ = await run(deps_factory, "소프웨이브 사후관리 알려줘", FakeJev(intent="I-03"))
+    j = r["trace"]["jev"]
+    assert j["sections"] == ["aftercare", "recovery", "safety.side_effects", "timeline"]
+    assert j["sections_dropped"] == ["dose", "method", "overview", "emergency"]
+    assert r["trace"]["hub"]["input"]["sections"] == j["sections"]
+    assert _re.match(r"^\d+$", str(r["trace"]["hub"]["result_bytes"]))
+
+
+async def test_case3_cap_same_as_other_cases(deps_factory, hub):
+    """입력 상한 하나 — sdk 판은 case3 허브 결과에도 같은 상한."""
+    r, fa, _ = await run(deps_factory, "소프웨이브 어떻게 하는 거예요?", FakeJev(intent="I-02"), tool_result_max_bytes=200)
+    assert r["trace"]["hub"]["input_cap_bytes"] == 200 and r["trace"]["hub"]["truncated_to"] == 200
+    assert "…[잘림:" in fa.calls[0]["messages"][0]["content"]

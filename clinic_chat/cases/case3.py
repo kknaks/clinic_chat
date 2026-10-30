@@ -31,6 +31,7 @@ VOCAB_SLOTS = ("concern", "site", "purpose", "check_condition", "technique", "fa
 PROC_KINDS = ("unit_procedure", "product")
 NONE = "해당 없음"
 NOUL_MIN = 0.5  # R-6 · 짝 Noul
+SECTIONS_MAX = 4  # 「필요한 정보」 최대 칸 수 — 확률 높은 순(10-30 실물: 9칸 → 카드가 커져 잘림)
 # 시술 2개가 필요한 의도 — 필요한 시술 수(I-07 은 1개면 자기 쌍)
 TWO_PROC = {"I-06": 2, "I-07": 1, "I-08": 2}
 SLOT_LABEL = {"family_a": "첫 번째로 말한 시술 계열", "family_b": "두 번째로 말한 시술 계열(하나만 말했으면 해당 없음)",
@@ -152,7 +153,10 @@ def read_jev(resp: Any, meta: dict, conf_min: float) -> dict:
         if slot != "intent" and slot not in out["slots"]:
             out["slots"][slot] = {"value": None, "skipped": True, **{k: x for k, x in m.items() if k != "order"}}
     out["info"] = {n.split(":", 1)[1]: round(a.noul, 4) for n, a in resp.nouls.items() if n.startswith("info:")}
-    out["sections"] = [sec for sec in INFO_SECTIONS if out["info"].get(sec, 0) >= NOUL_MIN]
+    picked = sorted((sec for sec in INFO_SECTIONS if out["info"].get(sec, 0) >= NOUL_MIN),
+                    key=lambda sec: -out["info"][sec])  # 확률 높은 순(같으면 INFO_SECTIONS 순 — sorted 는 안정)
+    out["sections"] = picked[:SECTIONS_MAX]
+    out["sections_dropped"] = picked[SECTIONS_MAX:]
     for name, a in resp.nouls.items():
         if name.startswith("concern:"):
             out["noul"][name.split(":", 1)[1]] = round(a.noul, 4)
@@ -368,10 +372,13 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             payload["needs_clarification"] = {"missing": path["missing"]}
         if path.get("price_unavailable"):
             payload["price_unavailable"] = True
-        hub_text, cut = ("(허브 호출 없음)", False) if hub_result is None else \
-            cap_text(json.dumps(hub_result, ensure_ascii=False), deps.settings.tool_result_max_bytes)
-        if cut:  # case1 · 2 도구 결과와 같은 상한(세 케이스 같은 조건)
-            trace["hub"]["truncated_to"] = deps.settings.tool_result_max_bytes
+        # 입력 상한은 세 케이스 같게 — sdk 판: TOOL_RESULT_MAX_BYTES 를 셋 다 / CLI 판: case1 · 2 에 넣을 수 없어 case3 도 안 넣음
+        cap = deps.settings.tool_result_max_bytes if provider == "sdk" else None
+        hub_json = "(허브 호출 없음)" if hub_result is None else json.dumps(hub_result, ensure_ascii=False)
+        hub_text, cut = cap_text(hub_json, cap) if cap else (hub_json, False)
+        trace["hub"].update({"result_bytes": len(hub_json.encode("utf-8")), "input_cap_bytes": cap})
+        if cut:
+            trace["hub"]["truncated_to"] = cap
         user = (f"질문: {question}\n\n[앱이 해석한 의도 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
                 f"\n\n[허브 결과]\n{hub_text}")
         if provider in CLI_PROVIDERS:  # ④ 를 CLI 로(도구 없음 · MCP 안 붙임) — 앞 단계는 그대로 앱

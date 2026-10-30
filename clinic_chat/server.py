@@ -165,18 +165,50 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
         return rs
 
     async def run_and_store(rs: RunState, question: str, extra: dict | None, provider: str | None) -> dict | None:
+        """답 세 열(잠금 안 · 속도 측정) → 기록 → `answers_done`(화면은 여기서 다음 질문 가능) → 자동 채점은 잠금 밖에서
+        이어서(`quality_start` · word_check · judge · `quality_done`) → `run_done`."""
         rec = None
         try:
-            async with state["lock"]:  # 질문은 한 번에 하나(속도 측정이 서로 섞이지 않게)
-                rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id, provider=provider)
+            async with state["lock"]:  # 답 세 열은 한 번에 한 질문(속도 측정이 서로 섞이지 않게)
+                rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id, provider=provider,
+                                           quality=False)
             rec.update(extra or {})
             state["store"].append_run(rec)
+            auto = runner.auto_quality(state["deps"].settings, rec["provider"]) and \
+                any(c.get("answer") and not c.get("error") for c in rec["cases"].values())
+            rs.push("answers_done", {"run_id": rs.run_id, "auto_quality": auto})
+            if auto:
+                await grade(rs.run_id, rs.push)
         except Exception as e:  # noqa: BLE001 — 화면에 오류 이벤트로
             rs.push("error", {"message": f"{type(e).__name__}: {e}"[:500]})
         finally:
             if not rs.done:
                 rs.push("run_done", {"run_id": rs.run_id})
         return rec
+
+    async def grade(run_id: str, emit) -> dict | None:
+        """① · ② 채점 — quality.jsonl 에 덧붙임(기록 줄은 그대로). 자동(CLI 판) · 「채점」 버튼이 같이 씀."""
+        rec = state["store"].get_raw(run_id)
+        if rec is None or run_id in state["grading"]:
+            return None
+        state["grading"].add(run_id)
+        emit("quality_start", {"run_id": run_id})
+        try:
+            cases = {c: {"answer": v.get("answer"), "error": v.get("error")} for c, v in rec["cases"].items()}
+            seed = random.randrange(2**31)
+            q = await runner.run_quality(state["deps"], rec["question"], cases, emit, seed)
+            entry = {"run_id": run_id, "at": now_iso(), "judge_order": q["judge_order"], "judge_seed": seed,
+                     "cost_usd": q["cost_usd"], "judge_usage": q.get("judge_usage"),
+                     "judge_provider": state["deps"].settings.judge_provider,
+                     "cases": {c: {k: v[k] for k in ("word_check", "judge") if k in v} for c, v in cases.items()}}
+            state["store"].add_quality(entry)
+            emit("quality_done", {"run_id": run_id, "cost_usd": q["cost_usd"]})
+            return entry
+        except Exception as e:  # noqa: BLE001 — 채점 실패는 표시만(답 기록은 남음)
+            emit("quality_error", {"run_id": run_id, "message": f"{type(e).__name__}: {e}"[:300]})
+            return None
+        finally:
+            state["grading"].discard(run_id)
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -215,7 +247,10 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50) -> dict:
-        return {"runs": state["store"].list(limit=max(1, min(limit, 500)))}
+        rows = state["store"].list(limit=max(1, min(limit, 500)))
+        for r in rows:
+            r["grading"] = r["run_id"] in state["grading"]  # 백그라운드 채점 중(화면 기록 표)
+        return {"runs": rows}
 
     @app.get("/api/runs/{run_id}")
     async def get_run(run_id: str) -> dict:
@@ -237,22 +272,12 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
     @app.post("/api/runs/{run_id}/quality")
     async def quality(run_id: str) -> dict:
         """「채점」 버튼 — ① 이름 뽑기 · ② Opus 채점을 이 기록의 답으로 돌려 quality.jsonl 에 덧붙임(기록 줄은 그대로)."""
-        rec = state["store"].get_raw(run_id)
-        if rec is None:
+        if state["store"].get_raw(run_id) is None:
             raise HTTPException(404, "기록 없음")
         if run_id in state["grading"]:
             raise HTTPException(409, "채점 중")
-        state["grading"].add(run_id)
-        try:
-            cases = {c: {"answer": v.get("answer"), "error": v.get("error")} for c, v in rec["cases"].items()}
-            seed = random.randrange(2**31)
-            q = await runner.run_quality(state["deps"], rec["question"], cases, lambda e, d: None, seed)
-            entry = {"run_id": run_id, "at": now_iso(), "judge_order": q["judge_order"], "judge_seed": seed,
-                     "cost_usd": q["cost_usd"], "judge_usage": q.get("judge_usage"),
-                     "cases": {c: {k: v[k] for k in ("word_check", "judge") if k in v} for c, v in cases.items()}}
-            state["store"].add_quality(entry)
-        finally:
-            state["grading"].discard(run_id)
+        rs = state["runs"].get(run_id)  # 그 질문 SSE 를 보고 있으면 같이 흘려 줌
+        await grade(run_id, rs.push if rs and not rs.done else (lambda e, d: None))
         return {"record": state["store"].get(run_id)}
 
     @app.post("/api/runs/{run_id}/rerun")

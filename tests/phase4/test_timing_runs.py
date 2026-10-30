@@ -84,6 +84,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert v["app_commit"] == "fixturecommit"
     assert rec["settings"] == {"thinking": "between_tools", "effort": "high", "tool_loop_max": 12,
                                "max_budget_usd": None, "service_tier": None, "timeout_sec": None,
+                               "input_cap_bytes": 20000,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:
         assert set(rec["cases"][c]) >= {"answer", "stop_reason", "loop_capped", "error", "timing", "tokens", "trace",

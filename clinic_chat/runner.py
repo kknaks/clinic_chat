@@ -37,7 +37,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
     if provider not in PROVIDERS:
         raise ValueError(f"모르는 provider: {provider}")
     if quality is None:
-        quality = True if provider in CLI_PROVIDERS else deps.settings.auto_quality
+        quality = auto_quality(deps.settings, provider)
     desc = describe(deps.settings, provider)
     auth_info = None
     if provider in CLI_PROVIDERS:  # 실행 앞 구독 확인 — 아니면 세 열 오류(조용히 API 과금 금지)
@@ -121,12 +121,19 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "tool_loop_max": s.case_tool_loop_max if provider == "sdk" else None,
                      "max_budget_usd": s.cli_max_budget_usd if provider == "claude-cli" else None,
                      "service_tier": desc.get("service_tier"), "timeout_sec": s.cli_timeout_sec if provider != "sdk" else None,
+                     # 도구 · 허브 결과 입력 상한(세 케이스 공통 하나) — CLI 판은 case1 · 2 에 못 넣어 셋 다 안 넣음
+                     "input_cap_bytes": s.tool_result_max_bytes if provider == "sdk" else None,
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
         "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed,
         "cost": run_cost(cases, quality_cost),
     }
     emit("cost", record["cost"])
     return record  # run_done 은 서버가 기록을 쓴 뒤 보냄
+
+
+def auto_quality(s, provider: str) -> bool:
+    """CLI 판은 자동 채점 · sdk 판은 설정 AUTO_QUALITY(기본 끔 — 「채점」 버튼)."""
+    return True if provider in CLI_PROVIDERS else s.auto_quality
 
 
 def desc_bin(s, provider: str) -> str:

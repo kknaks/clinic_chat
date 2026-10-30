@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     clinic_chat_port: int = 18210
     case_tool_loop_max: int = 12
     jev_confidence_min: float = 0.3
-    tool_result_max_bytes: int = 20_000  # case1 · 2 도구 결과를 Sonnet 에 넘길 때 상한(넘으면 잘림 표시)
+    # 도구 · 허브 결과 입력 상한(세 케이스 공통 하나) — sdk 판에서 case1 · 2 도구 결과와 case3 허브 결과에 같이.
+    # CLI 판은 case1 · 2 에 넣을 수 없어(CLI 가 직접 받음) case3 도 안 넣음 — 기록 settings.input_cap_bytes
+    tool_result_max_bytes: int = 20_000
     auto_quality: bool = False  # sdk 판 ① · ② 자동 여부(기본 끔 — 화면 「채점」 버튼). CLI 판은 늘 자동
 
     # CLI provider(실험 — 구독 인증 · cli-research) — 10-30 사용자 결정 값
