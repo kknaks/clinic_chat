@@ -27,14 +27,23 @@
     return e;
   }
   const ms = (x) => (typeof x === "number" ? `${Math.round(x)} ms` : "–");
-  const stageClass = (n) => (n.startsWith("claude") ? "s-claude" : n.startsWith("tool:") ? "s-tool" : n === "jev" ? "s-jev" : "s-hub");
+  const stageClass = (n) => `s-${S.stageKind(n)}`;
+
+  function legend(c) {
+    const items = S.legendItems(c.stages);
+    if (!items.length) return el("div", { class: "legend muted" }, "단계 –");
+    return el("div", { class: "legend" }, items.map((x) => el("span", { class: "lg" },
+      el("i", { class: `dot s-${x.kind}` }), `${x.label} ${x.dur}`)));
+  }
 
   function stageBar(c, scale) {
     const bar = el("div", { class: "stagebar" });
-    for (const st of c.stages) {
+    // 긴 단계부터 그려 짧은 단계(허브 3ms 등)가 위에 오게 — 최소 폭 3px 이 가려지지 않음
+    const dur = (st) => (st.end_ms == null ? 0 : st.end_ms - (st.start_ms || 0));
+    for (const st of [...c.stages].sort((x, y) => dur(y) - dur(x))) {
       const a = st.start_ms || 0, b = st.end_ms == null ? a : st.end_ms;
       bar.append(el("span", { class: stageClass(st.name), title: `${st.name} ${ms(a)} → ${ms(b)}`,
-        style: `left:${(a / scale) * 100}%;width:${Math.max(((b - a) / scale) * 100, 0.4)}%` }));
+        style: `left:${(a / scale) * 100}%;width:${((b - a) / scale) * 100}%` }));
     }
     return bar;
   }
@@ -127,7 +136,7 @@
         el("h3", {}, TITLE[name], ...badges),
         el("div", { class: "timing" }, `⏱ 첫 글자 ${ms(t.ttft_ms)} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`),
         stageBar(c, scale),
-        el("div", { class: "legend" }, name === "case3" ? "▏hub ▓ jev ▏hub ▓ claude" : "▓ claude ▓ 도구"),
+        legend(c),
         el("div", { class: "answer", "data-case": name }, c.text || (c.error && c.error !== S.NO_KEY ? c.error : "")),
         el("div", { class: "below" }, ...traceView(name, c), q1View(name, c), q2View(c),
           cur.run_id ? humanView(name) : null)));

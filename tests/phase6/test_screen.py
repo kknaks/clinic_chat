@@ -167,3 +167,52 @@ def test_page_layout_contract(client):
     page = client.get("/").text
     assert 'id="current"' in page
     assert 'class="warn"' not in page  # 경고 줄은 화면에서 뺌(10-30 사용자) — 규칙은 README · SPEC 에
+
+
+@pytest.mark.skipif(NODE is None, reason="node 없음")
+def test_stage_legend_items():
+    """범례 = 단계마다 색 · 이름 · 시간(같은 이름 여러 번이면 순서대로 각각) — 글자 견본(▩) 없음."""
+    script = (
+        "const S=require(process.argv[1]);console.log(JSON.stringify([S.legendItems(["
+        "{name:'hub_resolve',start_ms:0,end_ms:3.2},{name:'jev',start_ms:3.2,end_ms:823.2},"
+        "{name:'hub_path',start_ms:823.2,end_ms:830},{name:'claude',start_ms:830,end_ms:9530}]),"
+        "S.legendItems([{name:'claude#1',start_ms:0,end_ms:1000},{name:'tool:raw_get#1',start_ms:1000,end_ms:1012},"
+        "{name:'tool:raw_get#2',start_ms:1000,end_ms:1040},{name:'claude#2',start_ms:1040,end_ms:null}]),"
+        "S.fmtDur(999.6),S.fmtDur(8700)]))"
+    )
+    c3, c1, a, b = json.loads(subprocess.run([NODE, "-e", script, str(ROOT / "web" / "state.js")],
+                                             capture_output=True, text=True, check=True).stdout)
+    assert [(x["kind"], x["label"], x["dur"]) for x in c3] == [
+        ("hub", "hub", "3ms"), ("jev", "jev", "820ms"), ("hub", "hub", "7ms"), ("claude", "claude", "8.7s")]
+    assert [(x["kind"], x["label"], x["dur"]) for x in c1] == [
+        ("claude", "claude#1", "1.0s"), ("tool", "raw_get#1", "12ms"), ("tool", "raw_get#2", "40ms"),
+        ("claude", "claude#2", "…")]
+    assert (a, b) == ("1000ms", "8.7s")
+    js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    assert not any(ch in js for ch in "▩▓▏")
+
+
+def _lum(hexc: str) -> float:
+    rgb = [int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    x, y = sorted((_lum(a), _lum(b)), reverse=True)
+    return (x + 0.05) / (y + 0.05)
+
+
+def test_stage_colors_contrast_light_dark():
+    """단계 색(막대 · 범례 점) — 라이트 · 다크 둘 다 패널 · 막대 바탕과 3:1 이상, 최소 폭 3px."""
+    import re
+
+    css = (ROOT / "web" / "style.css").read_text(encoding="utf-8")
+    light = css[css.index(":root {"):css.index("@media (prefers-color-scheme: dark)")]
+    dark = css[css.index("@media (prefers-color-scheme: dark)"):]
+    for block in (light, dark):
+        tok = dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", block))
+        for k in ("claude", "tool", "hub", "jev"):
+            for bg in ("panel", "bg"):
+                assert _contrast(tok[k], tok[bg]) >= 3.0, (k, bg, tok[k], tok[bg])
+    assert "min-width: 3px" in css

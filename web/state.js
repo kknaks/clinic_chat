@@ -97,12 +97,35 @@
 
   function notFound(c) { return c.word_check && typeof c.word_check.not_found === "number" ? c.word_check.not_found : null; }
 
+  // 단계 색 종류 — 막대 · 범례 같은 색
+  function stageKind(name) {
+    if (name.startsWith("claude")) return "claude";
+    if (name.startsWith("tool:")) return "tool";
+    if (name === "jev") return "jev";
+    return "hub";
+  }
+
+  // 단계 시간 — 1초 미만은 ms(정수) · 이상은 s(소수 1자리)
+  function fmtDur(ms) {
+    if (typeof ms !== "number" || !isFinite(ms)) return "–";
+    return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  // 범례 — 단계마다(같은 이름이 여러 번이면 순서대로 각각) 색 · 이름 · 시간
+  function legendItems(stages) {
+    return (stages || []).map((st) => {
+      const end = st.end_ms == null ? null : st.end_ms;
+      const label = st.name.replace(/^tool:/, "").replace(/^hub_resolve$/, "hub").replace(/^hub_path$/, "hub");
+      return { kind: stageKind(st.name), label, dur: end == null ? "…" : fmtDur(end - (st.start_ms || 0)) };
+    });
+  }
+
   // 답 영역 스크롤 — 바닥 근처(px 여유)면 스트리밍을 따라감 · 위로 올리면 멈춤
   function atBottom(scrollTop, clientHeight, scrollHeight, slack) {
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom };
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);
