@@ -85,7 +85,7 @@ class HubSession:
         return ToolResult(text=text, is_error=bool(res.is_error), ms=ms, data=data)
 
 
-def asgi_client_factory(app: Any, base_url: str = "http://127.0.0.1") -> Any:
+def asgi_client_factory(app: Any, base_url: str = "http://fake-hub") -> Any:
     """시험 · 모의 판 — 포트를 열지 않고 ASGI 앱에 직접 붙는 httpx2 클라이언트."""
 
     def make() -> httpx2.AsyncClient:

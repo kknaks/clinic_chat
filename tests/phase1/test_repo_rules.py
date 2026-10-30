@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 RAW_FILES = [
     "anatomy-danger-zones", "combo-recipes", "complications", "consent-checklist", "contraindications",
@@ -46,7 +46,7 @@ def test_no_key_like_strings_in_sources():
         if not p.is_file() or p.suffix in {".png", ".jpg", ".lock"}:
             continue
         txt = p.read_text(encoding="utf-8", errors="ignore")
-        if f == "tests/test_repo_rules.py":
+        if f == "tests/phase1/test_repo_rules.py":
             continue
         if pat.search(txt):
             hits.append(f)
@@ -63,6 +63,6 @@ def test_env_example_keys_blank_and_no_home_path():
 
 
 def test_no_home_path_in_tracked_sources():
-    hits = [f for f in tracked() if (ROOT / f).is_file() and f != "tests/test_repo_rules.py"
+    hits = [f for f in tracked() if (ROOT / f).is_file() and f != "tests/phase1/test_repo_rules.py"
             and "/Users/" in (ROOT / f).read_text(encoding="utf-8", errors="ignore")]
     assert hits == []
