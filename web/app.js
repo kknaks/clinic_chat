@@ -289,7 +289,8 @@
       const nf = S.CASES.map((c) => (cs[c] || {}).not_found ?? "–").join(" / ");
       const jp = S.CASES.map((c) => (cs[c] || {}).judge_pass ?? "–").join(" / ");
       const hu = S.CASES.map((c) => ({ 맞음: "✓", 틀림: "✗" })[(cs[c] || {}).human] || "–").join(" ");
-      const tr = el("tr", {}, el("td", {}, (x.asked_at || "").replace("T", " ").slice(0, 19)),
+      const tr = el("tr", {}, el("td", { title: x.topic || "" }, x.question_no || "–"),
+        el("td", {}, (x.asked_at || "").replace("T", " ").slice(0, 19)),
         el("td", { class: "qcell" }, x.question, x.rerun_of ? el("span", { class: "muted" }, " (다시)") : null,
           x.batch_id ? el("span", { class: "muted" }, ` (일괄 ${x.batch_id})`) : null),
         el("td", { title: [x.model, x.effort].filter(Boolean).join(" · ") }, x.provider || "sdk"),

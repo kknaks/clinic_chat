@@ -46,10 +46,41 @@ def parse_questions(md: str) -> list[dict]:
     return out
 
 
+META = ("question_no", "src_id", "topic", "reference_answer", "source_kind", "group")
+
+
+def parse_question_set(data: dict) -> list[dict]:
+    """question-set.json → [{n, text, meta}] — meta 는 기록(runs · quality)에 그대로 남김. 참고 답은 채점에 넣지 않음."""
+    out = []
+    for q in data.get("questions", []):
+        meta = {"question_no": q["no"], "src_id": q.get("src_id"), "topic": q.get("topic"),
+                "reference_answer": q.get("reference_answer"), "source_kind": q.get("source_kind"), "group": q.get("group")}
+        out.append({"n": q["no"], "text": q["question"], "meta": meta})
+    return out
+
+
 def load_questions(s: Settings) -> list[dict]:
+    if s.question_set_json:
+        if not Path(s.question_set_json).is_file():
+            raise BatchConfigError("QUESTION_SET_JSON 파일 없음")
+        return parse_question_set(json.loads(Path(s.question_set_json).read_text(encoding="utf-8")))
     if not s.questions_md or not Path(s.questions_md).is_file():
-        raise BatchConfigError("QUESTIONS_MD 없음(질문 리스트 파일)")
+        raise BatchConfigError("QUESTION_SET_JSON · QUESTIONS_MD 없음(질문 파일)")
     return parse_questions(Path(s.questions_md).read_text(encoding="utf-8"))
+
+
+def parse_pick(spec: str) -> list | None:
+    """「Q001-Q003,Q010」 · 「1,3,4」 → 번호 목록(문자 번호는 범위 펼침)."""
+    out: list = []
+    for part in [x.strip() for x in spec.split(",") if x.strip()]:
+        m = re.match(r"^([A-Za-z]*)(\d+)-([A-Za-z]*)(\d+)$", part)
+        if m:
+            pre, a, b = m.group(1), int(m.group(2)), int(m.group(4))
+            width = len(m.group(2))
+            out += [f"{pre}{i:0{width}d}" if pre else i for i in range(a, b + 1)]
+        else:
+            out.append(int(part) if part.isdigit() else part)
+    return out or None
 
 
 def config_problems(s: Settings) -> list[str]:
@@ -97,13 +128,14 @@ class BatchStore:
         return out
 
 
-def make_plan(questions: list[dict], providers: list[str], pick: list[int] | None = None) -> dict:
+def make_plan(questions: list[dict], providers: list[str], pick: list | None = None, skip: set | None = None) -> dict:
+    """skip = 이미 끝난 번호(재개 때 건너뜀)."""
     for p in providers:
         if p not in PROVIDERS:
             raise BatchConfigError(f"모르는 provider: {p}")
-    qs = [q for q in questions if not pick or q["n"] in pick]
+    qs = [q for q in questions if (not pick or q["n"] in pick) and not (skip and q["n"] in skip)]
     items = [{"key": f"{q['n']}:{p}", "n": q["n"], "question": q["text"], "provider": p, "status": "todo",
-              "attempts": 0, "run_id": None, "error": None} for q in qs for p in providers]
+              "attempts": 0, "run_id": None, "error": None, "meta": q.get("meta") or {}} for q in qs for p in providers]
     plan = {"batch_id": f"b{time.strftime('%Y%m%d%H%M')}-{uuid.uuid4().hex[:6]}", "created_at": now_iso(),
             "providers": providers, "questions": [q["n"] for q in qs], "state": "planned", "items": items,
             "paused": {}, "log": []}
@@ -140,7 +172,9 @@ def resume_fix(plan: dict, store: RunStore) -> None:
 
 async def run_batch(plan: dict, *, settings: Settings, bstore: BatchStore, execute: Executor,
                     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, now: Callable[[], float] = time.time,
-                    should_stop: Callable[[], bool] = lambda: False, run_store: RunStore | None = None) -> dict:
+                    should_stop: Callable[[], bool] = lambda: False, run_store: RunStore | None = None,
+                    report: Callable[[dict], None] | None = None, report_every: float = 1800) -> dict:
+    """report — report_every 초마다 진행 한 줄(진행 수 · 오류 수 · 지금 번호)."""
     bad = config_problems(settings)
     if bad:
         raise BatchConfigError("일괄 실행 설정을 먼저 정하세요: " + " · ".join(bad))
@@ -151,7 +185,11 @@ async def run_batch(plan: dict, *, settings: Settings, bstore: BatchStore, execu
     plan["state"] = "running"
     bstore.save(plan)
     first = True
+    last_report = now()
     while True:
+        if report and now() - last_report >= report_every:
+            last_report = now()
+            report(summary(plan))
         todo = [i for i in plan["items"] if i["status"] == "todo"]
         if not todo or should_stop():
             break
@@ -171,7 +209,8 @@ async def run_batch(plan: dict, *, settings: Settings, bstore: BatchStore, execu
         it["status"], it["attempts"] = "running", it["attempts"] + 1
         bstore.save(plan)
         try:
-            rec = await execute(it["question"], it["provider"], {"batch_id": plan["batch_id"], "batch_item": it["key"]})
+            rec = await execute(it["question"], it["provider"],
+                                {"batch_id": plan["batch_id"], "batch_item": it["key"], **(it.get("meta") or {})})
             kind, info = outcome(rec)
             it["run_id"] = rec.get("run_id")
         except Exception as e:  # noqa: BLE001 — 판 하나 실패는 재시도 판정으로
@@ -211,9 +250,10 @@ async def _main() -> None:
     from clinic_chat.server import build_deps, startup_check
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--providers", default="claude-cli,codex-cli")
-    ap.add_argument("--questions", default="")
+    ap.add_argument("--providers", default="claude-cli")
+    ap.add_argument("--questions", default="", help="예 Q001-Q003 · 비면 전체")
     ap.add_argument("--resume")
+    ap.add_argument("--skip-done", action="store_true", help="runs.jsonl 에 이미 있는 번호는 건너뜀")
     ap.add_argument("--plan-only", action="store_true")
     a = ap.parse_args()
     s = get_settings()
@@ -221,26 +261,53 @@ async def _main() -> None:
     if a.resume:
         plan = bstore.load(a.resume)
     else:
-        pick = [int(x) for x in a.questions.split(",") if x.strip()] or None
-        plan = make_plan(load_questions(s), [p.strip() for p in a.providers.split(",") if p.strip()], pick)
+        skip = None
+        if a.skip_done:  # 끝난 번호 = 답 기록 + 열마다 채점이 있는 것
+            skip = {r.get("question_no") for r in rstore._read("runs.jsonl") if r.get("question_no")
+                    and any((c or {}).get("judge") for c in (r.get("cases") or {}).values())}
+        plan = make_plan(load_questions(s), [p.strip() for p in a.providers.split(",") if p.strip()],
+                         parse_pick(a.questions), skip)
         bstore.save(plan)
     print(f"[batch] {plan['batch_id']} · {plan['progress']}", flush=True)
     if a.plan_only:
         return
     deps = build_deps(s)
     deps.app_commit = app_commit()
-    await startup_check(deps)
+    from clinic_chat.llm import cli
+
+    cli.MAX_CONCURRENT = max(1, s.cli_max_concurrent)
+    st = await startup_check(deps)
+    print(f"[batch] 기동 · 허브 {st.get('hub_health')} · 골드 MCP {st.get('gold_mcp')} · 원장 MCP {st.get('raw_mcp')}",
+          flush=True)
+    if not isinstance(st.get("gold_mcp"), int) or not isinstance(st.get("raw_mcp"), int):
+        raise SystemExit("[batch] 허브(18005) 연결 안 됨 — 멈춤")
 
     async def execute(q: str, provider: str, extra: dict) -> dict:
-        rec = await runner.execute(deps, q, lambda e, d: None, provider=provider)
+        # 답 세 열 + 열마다 ①② 채점이 모두 끝난 뒤 돌아옴(다음 문항은 그 뒤)
+        rec = await runner.execute(deps, q, lambda e, d: None, provider=provider,
+                                   quality=runner.auto_quality(s, provider))
         rec.update(extra)
         rstore.append_run(rec)
+        meta = {k: extra.get(k) for k in META if k in extra}
+        for c in runner.gradable(rec["cases"]):
+            cr = rec["cases"][c]
+            if cr.get("judge"):
+                rstore.add_quality({"run_id": rec["run_id"], "case": c, "at": now_iso(), "mode": "absolute",
+                                    "judge_provider": s.judge_provider, "word_check": cr.get("word_check"),
+                                    "judge": cr.get("judge"), "cost_usd": None, **meta})
+        errs = sum(1 for cr in rec["cases"].values() if cr.get("error"))
+        print(f"[batch] {extra.get('question_no') or extra.get('batch_item')} 끝 · 오류 열 {errs} · "
+              f"통과 {[ (rec['cases'][c].get('judge') or {}).get('pass_count') for c in runner.CASES]}", flush=True)
         return rec
 
-    plan = await run_batch(plan, settings=s, bstore=bstore, execute=execute, run_store=rstore)
+    def report(sm: dict) -> None:
+        p = sm["progress"]
+        print(f"[batch] {time.strftime('%H:%M')} 진행 {p['done']}/{p['total']} · 실패 {p['failed']} · "
+              f"지금 {sm.get('now')} · 한도 멈춤 {sm.get('paused') or '-'}", flush=True)
+
+    plan = await run_batch(plan, settings=s, bstore=bstore, execute=execute, run_store=rstore, report=report)
     print(f"[batch] 끝 · {plan['state']} · {plan['progress']}", flush=True)
 
 
 if __name__ == "__main__":
     asyncio.run(_main())
-

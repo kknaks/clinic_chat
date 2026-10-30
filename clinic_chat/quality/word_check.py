@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from clinic_chat import prompts
@@ -75,6 +76,49 @@ def _dict_index(deps: Deps) -> dict[str, str]:
     return cache
 
 
+HUB_SUB_MIN = 4  # 단위 시술 이름 안 부분 일치 최소 길이(정규화 뒤) — 짧은 낱말(「리프팅」)로 거짓 「있음」 막기
+_PAREN = re.compile(r"\s*[(\[][^)\]]*[)\]]\s*")
+
+
+def _hub_index(deps: Deps) -> dict:
+    """허브 정본 이름(시맨틱 사전) — 단위 시술 이름 · 부위를 뗀 핵심 이름(「얼굴 전체 무바늘 스킨부스터」 → 「무바늘 스킨부스터」)."""
+    cache = getattr(deps, "_hub_norm", None)
+    if cache is None:
+        exprs = (deps.semantic or {}).get("expressions", [])
+        n = deps.normalizer
+        sites = sorted({n(e["expr"]) for e in exprs if any(s.startswith("step3 nodes[]") for s in e.get("sources", []))},
+                       key=len, reverse=True)
+        units = {n(e["expr"]): e["expr"] for e in exprs if "step5 units[].name" in e.get("sources", [])}
+        cores: dict[str, str] = {}
+        for un, expr in units.items():
+            for sn in sites:
+                if sn and un.startswith(sn) and len(un) - len(sn) >= HUB_SUB_MIN:
+                    cores.setdefault(un[len(sn):], expr)
+                    break
+        cache = {"units": units, "cores": cores}
+        deps._hub_norm = cache
+    return cache
+
+
+def hub_name(deps: Deps, name: str, norm: str) -> str | None:
+    """「허브 이름」 — 원장 · 사전 정확 일치는 못 했지만 허브 정본 이름의 꼴(괄호 뗌 · 부위 뗀 핵심 · 단위 시술 이름 안 부분).
+    세 케이스 같은 규칙(결정론). 맞으면 그 허브 이름을 돌려줌."""
+    dic, hub = _dict_index(deps), _hub_index(deps)
+    bare = deps.normalizer(_PAREN.sub(" ", name).strip())
+    for k in dict.fromkeys((norm, bare)):
+        if not k:
+            continue
+        if k in dic:
+            return dic[k]
+        if k in hub["cores"]:
+            return hub["cores"][k]
+        if len(k) >= HUB_SUB_MIN:
+            hit = next((expr for un, expr in hub["units"].items() if k in un), None)
+            if hit:
+                return hit
+    return None
+
+
 def match_names(deps: Deps, names: list[dict]) -> dict:
     """결정론 대조 — 뽑기 결과(names)만으로 다시 돌릴 수 있다."""
     if deps.raw_store is None or deps.normalizer is None:
@@ -93,11 +137,17 @@ def match_names(deps: Deps, names: list[dict]) -> dict:
             continue
         where = [{"file": f, "path": p} for f, p, s in raw if norm in s][:WHERE_MAX]
         via = "원장" if where else ("사전" if norm in dic else None)
+        hub = None if via else hub_name(deps, name, norm)
+        if hub:
+            via = "허브 이름"  # 「없는 이름」에서 뺌(허브 정본 이름의 꼴 — 10-30 거짓 경보)
         row = {"name": name, "kind": n.get("kind"), "norm": norm, "found": via is not None, "where": where, "via": via}
         if via == "사전":
             row["dict_expr"] = dic[norm]
+        if hub:
+            row["hub_name"] = hub
         out.append(row)
-    return {"names": out, "not_found": sum(1 for r in out if not r["found"]), "skipped": skipped}
+    return {"names": out, "not_found": sum(1 for r in out if not r["found"]), "skipped": skipped,
+            "hub_names": sum(1 for r in out if r["via"] == "허브 이름")}
 
 
 async def check_answer(deps: Deps, answer: str) -> dict:

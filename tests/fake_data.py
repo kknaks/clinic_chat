@@ -48,6 +48,13 @@ SEMANTIC_FIXTURE = {
             {"expr": "울쎄라", "variants": ["Ulthera", "울세라"], "targets": [{"id": "unit_procedure:U5-102"}]},
             {"expr": "소프웨이브", "variants": ["Sofwave"], "targets": [{"id": "unit_procedure:U5-140"}]},
             {"expr": "보톡스", "variants": ["보툴리눔"], "targets": [{"id": "family:M2"}]},
+            # 허브 정본 이름(단위 시술 = 부위 + 핵심) · 부위 — 「허브 이름」 시험용
+            {"expr": "얼굴 전체 무바늘 스킨부스터", "variants": [], "sources": ["step5 units[].name"],
+             "targets": [{"id": "unit_procedure:U5-037"}]},
+            {"expr": "얼굴 전체 고주파 리프팅", "variants": [], "sources": ["step5 units[].name"],
+             "targets": [{"id": "unit_procedure:U5-103"}]},
+            {"expr": "얼굴 전체", "variants": [], "sources": ["step3 nodes[].name"], "targets": [{"id": "site:face"}]},
+            {"expr": "리프팅", "variants": [], "sources": ["step7-decisions resolver.fam_kw[]"], "targets": []},
         ],
     }
 }

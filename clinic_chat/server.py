@@ -175,7 +175,8 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
 
         def case_done(c: str, r: dict) -> None:
             if auto and r.get("answer") and not r.get("error"):
-                tasks.append(asyncio.create_task(grade_case_task(rs.run_id, c, question, r["answer"], rs.push)))
+                tasks.append(asyncio.create_task(grade_case_task(rs.run_id, c, question, r["answer"], rs.push,
+                                                                 meta=extra)))
 
         try:
             rec = await runner.execute(deps, question, rs.push, run_id=rs.run_id, provider=provider, quality=False,
@@ -193,7 +194,8 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
                 rs.push("run_done", {"run_id": rs.run_id})
         return rec
 
-    async def grade_case_task(run_id: str, case: str, question: str, answer: str, emit) -> dict | None:
+    async def grade_case_task(run_id: str, case: str, question: str, answer: str, emit,
+                              meta: dict | None = None) -> dict | None:
         """열 하나 채점 → quality.jsonl 에 그 열 한 줄(기록 줄은 그대로). 자동 · 「채점」 버튼이 같이 씀."""
         key = (run_id, case)
         if key in state["grading"]:
@@ -203,7 +205,8 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
             g = await runner.grade_case(state["deps"], question, case, answer, emit)
             entry = {"run_id": run_id, "case": case, "at": now_iso(), "mode": g["mode"],
                      "judge_provider": state["deps"].settings.judge_provider, "cost_usd": g["cost_usd"],
-                     "word_check": g["word_check"], "judge": g["judge"]}
+                     "word_check": g["word_check"], "judge": g["judge"],
+                     **{k: (meta or {}).get(k) for k in batch.META if k in (meta or {})}}  # 질문 번호 등(참고 답은 채점 안 씀)
             state["store"].add_quality(entry)
             return entry
         except Exception as e:  # noqa: BLE001 — 채점 실패는 그 열 표시만(답 기록은 남음)

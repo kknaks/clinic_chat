@@ -176,3 +176,18 @@ async def test_quality_usage_and_cost_recorded(deps_factory):
     assert jr["cost_usd"] > 0
     for p in fa.calls[1:]:
         assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and p["cache_control"] == {"type": "ephemeral"}
+
+
+def test_hub_names_not_counted_missing(deps_factory):
+    """허브 정본 이름의 꼴은 「허브 이름」으로 분리 — 「없는 이름」에서 뺌(10-30 거짓 경보). 지어낸 이름은 그대로 없음."""
+    deps = deps_factory()
+    names = [{"text": t, "kind": "시술"} for t in
+             ["무바늘 스킨부스터", "고주파 리프팅(RF)", "얼굴 전체 고주파 리프팅", "울트라포커스 X 리프팅", "스킨부"]]
+    r = word_check.match_names(deps, names)
+    by = {x["name"]: x for x in r["names"]}
+    assert by["무바늘 스킨부스터"]["via"] == "허브 이름" and by["무바늘 스킨부스터"]["hub_name"] == "얼굴 전체 무바늘 스킨부스터"
+    assert by["고주파 리프팅(RF)"]["via"] == "허브 이름"  # 괄호 뗀 핵심 = 부위 뗀 단위 시술 이름
+    assert by["얼굴 전체 고주파 리프팅"]["via"] == "사전"  # 정확 일치는 그대로
+    assert by["울트라포커스 X 리프팅"]["found"] is False  # 짧은 허브 낱말(리프팅)을 품어도 없음
+    assert by["스킨부"]["found"] is False  # 4자 미만 부분 일치는 안 셈
+    assert r["not_found"] == 2 and r["hub_names"] == 2

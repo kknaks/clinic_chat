@@ -109,6 +109,7 @@ class RunStore:
             v = r.get("versions") or {}
             out.append({"run_id": r["run_id"], "asked_at": r.get("asked_at"), "question": r.get("question"),
                         "provider": r.get("provider") or "sdk", "model": v.get("answer_model"),
+                        "question_no": r.get("question_no"), "topic": r.get("topic"),
                         "effort": v.get("answer_effort"), "batch_id": r.get("batch_id"),
                         "gold": gh[:8] if gh else None, "cases": cases, "rerun_of": r.get("rerun_of"),
                         "cost": r.get("cost"), "graded": bool(r.get("graded_cases") or r.get("judge_order"))})

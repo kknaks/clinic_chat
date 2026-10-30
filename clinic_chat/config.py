@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     batch_retry_backoff_sec: str = ""  # 재시도 간격 목록(예 "60,180")
     batch_limit_wait_sec: float | None = None  # 한도에 걸렸는데 다시 열리는 시각을 모를 때 기다릴 시간
     questions_md: str = ""  # 질문 리스트 파일(레포 밖 · 사용자 경로)
+    question_set_json: str = ""  # 질문 세트 {questions:[{no, src_id, topic, question, reference_answer, …}]} — 있으면 이것을 씀
 
     @field_validator("batch_gap_sec", "batch_retries", "batch_limit_wait_sec", mode="before")
     @classmethod

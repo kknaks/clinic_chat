@@ -139,3 +139,13 @@ def test_server_providers_and_ask(tmp_path, route, monkeypatch):
         b = c.get("/api/batches").json()
         assert set(b["config_missing"]) == {"BATCH_GAP_SEC", "BATCH_RETRIES", "BATCH_LIMIT_WAIT_SEC"}
         assert c.get("/api/questions").status_code == 409  # QUESTIONS_MD 없음
+
+
+async def test_reference_answer_never_in_judge_input(deps_factory, route, tmp_path):
+    """참고 답은 기록에만 — 채점(①②) 입력에 들어가지 않음."""
+    deps = cli_deps(deps_factory)
+    deps.vocab = await deps.hub_rest.vocab()
+    rec = await runner.execute(deps, "소프웨이브 어떻게 해요?", lambda e, d: None, provider="claude-cli")
+    rec.update({"question_no": "Q001", "reference_answer": "참고답비밀문장"})
+    calls = [json.loads(x) for x in route.read_text().splitlines()]
+    assert all("참고답비밀문장" not in (x.get("stdin") or "") and "참고답비밀문장" not in " ".join(x["argv"]) for x in calls)

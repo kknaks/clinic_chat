@@ -116,3 +116,51 @@ def test_resume_running_items(tmp_path):
     plan["items"][1].update(status="running", run_id="lost")
     batch.resume_fix(plan, rs)
     assert [i["status"] for i in plan["items"]] == ["done", "todo"]
+
+
+QSET = {"version": 1, "n": 3, "questions": [
+    {"no": "Q001", "src_id": "E01", "topic": "고민 → 추천 시술", "question": "이마 주름이 신경 쓰여요?",
+     "reference_answer": "참고 답 1", "source_kind": "기존 평가", "group": "1"},
+    {"no": "Q002", "src_id": "E02", "topic": "t", "question": "팔자주름?", "reference_answer": "참고 답 2",
+     "source_kind": "x", "group": "1"},
+    {"no": "Q010", "src_id": "S1", "topic": "t", "question": "울쎄라?", "reference_answer": "참고 답 10",
+     "source_kind": "x", "group": "2"}]}
+
+
+def test_question_set_meta_pick_and_skip(tmp_path):
+    p = tmp_path / "qs.json"
+    p.write_text(__import__("json").dumps(QSET, ensure_ascii=False), encoding="utf-8")
+    s = make_settings(tmp_path, question_set_json=str(p))
+    qs = batch.load_questions(s)
+    assert [q["n"] for q in qs] == ["Q001", "Q002", "Q010"]
+    assert qs[0]["meta"] == {"question_no": "Q001", "src_id": "E01", "topic": "고민 → 추천 시술",
+                             "reference_answer": "참고 답 1", "source_kind": "기존 평가", "group": "1"}
+    assert batch.parse_pick("Q001-Q003,Q010") == ["Q001", "Q002", "Q003", "Q010"]
+    assert batch.parse_pick("1,3") == [1, 3] and batch.parse_pick("") is None
+    plan = batch.make_plan(qs, ["claude-cli"], batch.parse_pick("Q001-Q003"), skip={"Q002"})
+    assert [i["key"] for i in plan["items"]] == ["Q001:claude-cli"] and plan["items"][0]["meta"]["src_id"] == "E01"
+
+
+async def test_meta_reaches_record_and_progress_report(tmp_path):
+    p = tmp_path / "qs.json"
+    p.write_text(__import__("json").dumps(QSET, ensure_ascii=False), encoding="utf-8")
+    s = settings(tmp_path, question_set_json=str(p))
+    clock = {"t": 0.0}
+    seen: list[dict] = []
+    reports: list[dict] = []
+
+    async def ex(q, provider, extra):
+        seen.append(extra)
+        clock["t"] += 1000  # 판마다 1000초
+        return {**rec(f"r{len(seen)}"), **extra}
+
+    async def sleep(x):
+        clock["t"] += x
+
+    plan = batch.make_plan(batch.load_questions(s), ["claude-cli"])
+    out = await batch.run_batch(plan, settings=s, bstore=batch.BatchStore(tmp_path), execute=ex, sleep=sleep,
+                                now=lambda: clock["t"], report=reports.append, report_every=1800)
+    assert out["progress"]["done"] == 3
+    assert [x["question_no"] for x in seen] == ["Q001", "Q002", "Q010"]
+    assert seen[0]["reference_answer"] == "참고 답 1" and seen[0]["topic"] == "고민 → 추천 시술"
+    assert reports and {"progress", "now"} <= set(reports[0])  # 30분(1800초)마다 한 줄
