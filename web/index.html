@@ -1,2 +1,40 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>clinic_chat</title></head><body></body></html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hub-evals</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <p class="warn">⚠ 환자 정보 넣지 말 것 · 질문과 노드 이름이 Jev(TypeSafe · 미국)로 나감</p>
+    <form id="ask">
+      <input id="q" type="text" maxlength="2000" placeholder="상담 질문 하나(환자 정보 없이)" autocomplete="off" required>
+      <button type="submit" id="send">보내기</button>
+    </form>
+    <p id="status" class="muted"></p>
+  </header>
+
+  <main id="cols" class="cols"></main>
+
+  <section class="bar">
+    <button id="rerun" disabled>같은 질문 다시 ×3</button>
+    <span id="rerun-out" class="muted"></span>
+  </section>
+
+  <section>
+    <h2>질문 기록</h2>
+    <div class="table-wrap">
+      <table id="runs">
+        <thead><tr><th>시각</th><th>질문</th><th>case1 ms</th><th>case2 ms</th><th>case3 ms</th>
+          <th>없는 이름</th><th>② 통과</th><th>사람 확인</th><th>판</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script src="/static/state.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

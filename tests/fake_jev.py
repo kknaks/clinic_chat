@@ -14,7 +14,7 @@ NONE = "해당 없음"
 
 
 class FakeJev:
-    def __init__(self, intent: str | None = None, choices: dict[str, str] | None = None,
+    def __init__(self, intent: Any = None, choices: dict[str, str] | None = None,
                  flat: set[str] | None = None, status: int | None = None, timeout: bool = False) -> None:
         self.intent = intent
         self.choices = choices or {}
@@ -30,7 +30,7 @@ class FakeJev:
     def _pick(self, name: str, q: dict, state: str) -> str:
         crit: dict[str, Any] = q["criteria"]
         if name == "intent" and self.intent:
-            return self.intent
+            return self.intent(state) if callable(self.intent) else self.intent
         if name in self.choices:
             return self.choices[name]
         for k, d in crit.items():

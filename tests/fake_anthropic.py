@@ -55,8 +55,8 @@ class Turn:
 
 
 class _Stream:
-    def __init__(self, turn: Turn, model: str, clock: FakeClock | None) -> None:
-        self.turn, self.model, self.clock = turn, model, clock
+    def __init__(self, turn: Turn, model: str, clock: FakeClock | None, realtime: bool = False) -> None:
+        self.turn, self.model, self.clock, self.realtime = turn, model, clock, realtime
 
     async def __aenter__(self):
         return self
@@ -67,7 +67,7 @@ class _Stream:
     async def _wait(self, ms: float) -> None:
         if self.clock:
             self.clock.advance(ms)
-        await asyncio.sleep(0)
+        await asyncio.sleep(ms / 1000 if self.realtime else 0)
 
     async def __aiter__(self):
         await self._wait(self.turn.first_ms)
@@ -83,7 +83,9 @@ class _Stream:
 
 
 class FakeAnthropic:
-    def __init__(self, policy: Callable[[dict, int], Turn] | list[Turn], clock: FakeClock | None = None) -> None:
+    def __init__(self, policy: Callable[[dict, int], Turn] | list[Turn], clock: FakeClock | None = None,
+                 realtime: bool = False) -> None:
+        self.realtime = realtime
         if isinstance(policy, list):
             seq = list(policy)
             policy = lambda p, n: seq[min(n, len(seq) - 1)]  # noqa: E731
@@ -98,12 +100,14 @@ class FakeAnthropic:
         return self.policy(params, n)
 
     def _stream(self, **params: Any) -> _Stream:
-        return _Stream(self._next(params), params["model"], self.clock)
+        return _Stream(self._next(params), params["model"], self.clock, self.realtime)
 
     async def _create(self, **params: Any) -> Message:
         t = self._next(params)
         if self.clock:
             self.clock.advance(t.first_ms)
+        if self.realtime:
+            await asyncio.sleep(t.first_ms / 1000)
         return t.message(params["model"])
 
 

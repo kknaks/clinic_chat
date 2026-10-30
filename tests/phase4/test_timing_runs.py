@@ -84,7 +84,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
                                         "word_check", "judge"}
         assert set(rec["cases"][c]["timing"]) >= {"ttft_ms", "ttft_answer_ms", "total_ms", "stages", "llm_round_trips"}
     kinds = [e for e, _ in events]
-    assert kinds.count("case_done") == 3 and kinds[-1] == "run_done" and "text" in kinds and "stage" in kinds
+    assert kinds.count("case_done") == 3 and "text" in kinds and "stage" in kinds
 
     store = RunStore(deps.settings.runs_path)
     store.append_run(rec)

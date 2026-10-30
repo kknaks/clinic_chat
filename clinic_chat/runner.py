@@ -1,6 +1,6 @@
 """한 질문 실행 — 세 케이스를 같은 `t0` 에서 `gather` 로 동시 시작 · 한 열 오류여도 나머지 계속(SPEC-006 §2-1 · §4).
 
-셋 다 끝나면 ① 단어 검사 → ② Opus 채점(§5) → 기록 한 줄. 이벤트는 SSE 계약(§4-3) 이름 그대로 emit.
+셋 다 끝나면 ① 단어 검사 → ② Opus 채점(§5) → 기록 줄 dict. 이벤트는 SSE 계약(§4-3) 이름 그대로 emit.
 """
 
 from __future__ import annotations
@@ -87,8 +87,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
         "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed,
     }
-    emit("run_done", {"run_id": run_id})
-    return record
+    return record  # run_done 은 서버가 기록을 쓴 뒤 보냄
 
 
 async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int) -> list[str]:
