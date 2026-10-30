@@ -192,3 +192,46 @@ def mock_policy(params: dict, n: int) -> Turn:
     if params["model"].startswith("claude-sonnet"):
         return answer_policy(params, n)
     return quality_policy(params, n)
+
+
+# ───── 토큰 · 캐시 · 지연 어림(비용 추정용 — tests/estimate_cost.py) ─────
+BYTES_PER_TOKEN = 3.5  # 어림(한국어 · JSON 섞임) — 실물 usage 로 다시 맞춤
+MIN_CACHE_TOKENS = 512  # Sonnet 5.5 · Opus 5.5 최소 캐시 길이(claude-api 스킬 prompt-caching)
+
+
+def est_tokens(s: str, bpt: float | None = None) -> int:
+    return max(1, int(len(s.encode("utf-8")) / (bpt or BYTES_PER_TOKEN)))
+
+
+class EstimatingAnthropic(FakeAnthropic):
+    """요청 크기로 usage 를 어림 — cache_control 이 있으면 앞 요청과 같은 앞부분을 캐시 읽기로 셈.
+    지연: 첫 이벤트 = 300ms + 캐시 안 된 입력 1k 토큰당 40ms + 캐시 읽기 1k 당 4ms · 출력 델타마다 15ms."""
+
+    def __init__(self, policy, clock=None):
+        super().__init__(policy, clock=clock)
+        self.cache: list[str] = []
+        self.log: list[dict] = []
+
+    def _next(self, params: dict) -> Turn:
+        t = super()._next(params)
+        head = json.dumps(params.get("tools", []), ensure_ascii=False) + json.dumps(params.get("system"), ensure_ascii=False)
+        # 메시지마다 이어 붙임(앞 요청이 그대로 앞부분이 되도록 — 배열 닫는 괄호 없이)
+        full = head + "".join(json.dumps(m, ensure_ascii=False) for m in params.get("messages") or [])
+        total = est_tokens(full)
+        read_s = max((c for c in self.cache if full.startswith(c)), key=len, default="")
+        read = est_tokens(read_s) if read_s else 0
+        sys_marked = isinstance(params.get("system"), list) and any("cache_control" in b for b in params["system"])
+        write = 0
+        if params.get("cache_control"):
+            if total >= MIN_CACHE_TOKENS:
+                write, _ = total - read, self.cache.append(full)
+        elif sys_marked and est_tokens(head) >= MIN_CACHE_TOKENS and head not in self.cache:
+            write, _ = est_tokens(head) - read, self.cache.append(head)
+        write = max(write, 0)
+        out = est_tokens("".join(t.text) + json.dumps(t.tools, ensure_ascii=False)) if (t.text or t.tools) else 1
+        t.usage = {"input_tokens": max(total - read - write, 0), "output_tokens": out,
+                   "cache_creation_input_tokens": write, "cache_read_input_tokens": read}
+        t.first_ms = 300 + (total - read) / 1000 * 40 + read / 1000 * 4
+        t.chunk_ms = 15
+        self.log.append({"model": params["model"], **t.usage})
+        return t

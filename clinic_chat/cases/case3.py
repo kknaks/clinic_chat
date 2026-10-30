@@ -18,7 +18,7 @@ from typing import Any
 from typesafe_sdk import Choice, Noul, TypeSafeError
 
 from clinic_chat import prompts
-from clinic_chat.cases.loop import case_cost, new_case_result, node_ids
+from clinic_chat.cases.loop import cap_text, case_cost, new_case_result, node_ids
 from clinic_chat.clients.anthropic_client import answer_params, stream_once, usage_dict
 from clinic_chat.clients.jev_client import CHOICE_MAX, choice_stats
 from clinic_chat.deps import NO_KEY, Deps
@@ -276,12 +276,17 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
 
         slot_table = {k: {x: v[x] for x in ("value", "choice", "confidence", "low_confidence") if x in v}
                       for k, v in jev["slots"].items()}
-        payload = {"intent": jev.get("intent"), "slots": slot_table, "hub_result": hub_result}
+        payload = {"intent": jev.get("intent"), "slots": slot_table}
         if path.get("missing"):
             payload["needs_clarification"] = {"missing": path["missing"]}
         if path.get("price_unavailable"):
             payload["price_unavailable"] = True
-        user = f"질문: {question}\n\n[앱이 찾은 허브 결과 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
+        hub_text, cut = ("(허브 호출 없음)", False) if hub_result is None else \
+            cap_text(json.dumps(hub_result, ensure_ascii=False), deps.settings.tool_result_max_bytes)
+        if cut:  # case1 · 2 도구 결과와 같은 상한(세 케이스 같은 조건)
+            trace["hub"]["truncated_to"] = deps.settings.tool_result_max_bytes
+        user = (f"질문: {question}\n\n[앱이 해석한 의도 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
+                f"\n\n[허브 결과]\n{hub_text}")
         params = answer_params(deps.settings.answer_model, prompts.system_for("case3"),
                                [{"role": "user", "content": user}], None)
 

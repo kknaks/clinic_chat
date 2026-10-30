@@ -223,3 +223,27 @@ def test_stage_colors_contrast_light_dark():
             for bg in ("panel", "bg"):
                 assert _contrast(tok[k], tok[bg]) >= 3.0, (k, bg, tok[k], tok[bg])
     assert "min-width: 3px" in css
+
+
+@pytest.mark.skipif(NODE is None, reason="node 없음")
+def test_cost_state_and_format():
+    """비용 표시 — 열마다(case_done.cost) · 합계(cost 이벤트) · 채점 비용(quality_cost) · 기록에서 다시 그림."""
+    script = (
+        "const S=require(process.argv[1]);const s=S.initial('r','q');"
+        "S.reduce(s,'case_done',{case:'case1',timing:{stages:[]},cost:{usd:0.0444,by_stage:{}}});"
+        "S.reduce(s,'cost',{cases:{case1:0.0444},answers_usd:0.1037,quality_usd:null,total_usd:0.1037});"
+        "S.reduce(s,'quality_cost',{cost_usd:0.21});"
+        "const r=S.fromRecord({run_id:'x',question:'q',cases:{case1:{answer:'a',cost:{usd:0.01}}},cost:{answers_usd:0.01}});"
+        "console.log(JSON.stringify([s.cases.case1.cost.usd,s.cost.answers_usd,s.cost.quality_usd,r.cases.case1.cost.usd,"
+        "r.cost.answers_usd,S.fmtUsd(0.0042),S.fmtUsd(0.1037),S.fmtUsd(null)]))"
+    )
+    out = json.loads(subprocess.run([NODE, "-e", script, str(ROOT / "web" / "state.js")], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out == [0.0444, 0.1037, 0.21, 0.01, 0.01, "$0.0042", "$0.104", "–"]
+
+
+def test_grade_button_and_cost_columns(client):
+    page = client.get("/").text
+    assert 'id="grade"' in page and "예상 $" in page and "<th>채점</th>" in page
+    js = client.get("/static/app.js").text
+    assert "/quality`" in js and "S.fmtUsd(" in js

@@ -28,6 +28,7 @@ class FakeJev:
         self.status = status
         self.timeout = timeout
         self.requests: list[dict] = []
+        self.estimate_tokens = None  # 비용 추정 때 요청 크기 → 입력 토큰 어림
 
     def client(self, settings):
         return make_client(settings, transport=httpx2.MockTransport(self.handle), compression=False,
@@ -85,5 +86,6 @@ class FakeJev:
                     label = q["instructions"].split("「")[1].split("」")[0] if "「" in q["instructions"] else ""
                     v = 0.9 if label and label in state else 0.1
                 answers[name] = {"type": "noul", "noul": v}
+        tokens = self.estimate_tokens(request.content) if self.estimate_tokens else 321
         return httpx2.Response(200, json={"model": body.get("model") or "jev-1.14.0",
-                                          "usage": {"input_tokens": 321, "output_tokens": 0}, "answers": answers})
+                                          "usage": {"input_tokens": tokens, "output_tokens": 0}, "answers": answers})

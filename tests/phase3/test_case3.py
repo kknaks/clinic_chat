@@ -160,7 +160,8 @@ async def test_low_confidence_marked(deps_factory, hub):
     assert j["intent"]["low_confidence"] is True and j["intent"]["confidence"] < 0.3
     assert j["slots"]["concern"]["low_confidence"] is True
     assert j["intent"]["p_max"] > 0 and j["intent"]["ratio"] is not None
-    payload = fa.calls[0]["messages"][0]["content"].split("\n", 3)[-1]
+    content = fa.calls[0]["messages"][0]["content"]
+    payload = content.split("[앱이 해석한 의도 · 슬롯 표]\n")[1].split("\n\n[허브 결과]")[0]
     assert json.loads(payload)["slots"]["concern"]["low_confidence"] is True
 
 
