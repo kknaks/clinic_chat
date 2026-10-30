@@ -7,6 +7,7 @@ policy(params, n) → Turn 으로 바퀴마다 응답을 정한다. 받은 요�
 from __future__ import annotations
 
 import asyncio
+import json
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -138,3 +139,52 @@ def answer_policy(params: dict, n: int) -> Turn:
         call = ("raw_search", {"query": "소프웨이브"}) if c == "case1" else ("resolve", {"text": q[:200]})
         return Turn(tools=[call], first_ms=5)
     return Turn(text=ANSWERS[c], first_ms=5, chunk_ms=5)
+
+
+NAME_POOL = [("소프웨이브", "시술"), ("HIFU 리프팅", "시술"), ("울트라포커스 X", "장비"), ("Nd:YAG", "장비"),
+             ("CaHA", "성분"), ("보톡스", "시술"), ("울세라", "시술"), ("턱", "부위")]
+GOOD_EV = {"file": "procedure-profiles", "path": "procedure-profiles.M9.aftercare", "quote": "당일 사우나 피하기"}
+BAD_EV = {"file": "procedure-profiles", "path": "procedure-profiles.M9.aftercare", "quote": "2주 사우나 금지"}
+
+
+def _all_text(params: dict) -> str:
+    out = []
+    for m in params.get("messages", []):
+        c = m["content"]
+        if isinstance(c, str):
+            out.append(c)
+        else:
+            out += [b.get("text", "") or str(b.get("content", "")) for b in c]
+    return "\n".join(out)
+
+
+def quality_policy(params: dict, n: int) -> Turn:
+    """① 이름 뽑기 · ② 채점(모의 Opus)."""
+    fmt = (params.get("output_config") or {}).get("format")
+    text = _all_text(params)
+    if fmt and "names" in fmt["schema"]["properties"]:
+        names = [{"text": t, "kind": k} for t, k in NAME_POOL if t in text]
+        return Turn(text=[json.dumps({"names": names}, ensure_ascii=False)])
+    if fmt:
+        answers = []
+        for lab in ("A", "B", "C"):
+            if f"답 {lab}" not in text:
+                continue
+            items = [{"item": i, "verdict": "통과", "claim": "", "evidence": None}
+                     for i in ("accuracy", "safety", "candidates", "uncertainty", "on_topic")]
+            if lab == "A":
+                items[0] = {"item": "accuracy", "verdict": "실패", "claim": "fixture 실패", "evidence": GOOD_EV}
+            if lab == "B":
+                items[1] = {"item": "safety", "verdict": "실패", "claim": "fixture 실패", "evidence": BAD_EV}
+            answers.append({"label": lab, "items": items})
+        return Turn(text=[json.dumps({"answers": answers}, ensure_ascii=False)])
+    if not _has_tool_result(params):
+        return Turn(tools=[("raw_get", {"path": "procedure-profiles.M9"})])
+    return Turn(text=["확인 끝"])
+
+
+def mock_policy(params: dict, n: int) -> Turn:
+    """모의 판 전체 — 답 모델(Sonnet)은 answer_policy · 그 밖(Opus)은 quality_policy."""
+    if params["model"].startswith("claude-sonnet"):
+        return answer_policy(params, n)
+    return quality_policy(params, n)
