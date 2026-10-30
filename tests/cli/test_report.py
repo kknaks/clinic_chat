@@ -26,3 +26,14 @@ def test_report_sections():
     assert "⚠ 근거 무효" in md
     assert "합 2건" in md  # case1 통과 · 골드 실패(정확성 · 안전)
     assert "열마다 {'case3': 1}" in md
+
+
+def test_error_kinds_grouped_with_followup():
+    e = 'HubRestError: GET /procedures/family:M8/checks → 400 {"detail":"id: family:M8 는 family"}'
+    assert report.error_kind(e) == "case3 I-09 계열 id → check_conditions(허브 400)"
+    runs = [{"run_id": f"r{i}", "question_no": f"Q00{i}", "question": "q", "provider": "claude-cli", "versions": {},
+             "cases": {"case1": case(OK), "case2": case(OK), "case3": {**case(OK), "error": e, "judge": {}}}}
+            for i in (8, 9)]
+    md = report.build(runs, [])
+    assert "case3 I-09 계열 id → check_conditions(허브 400)** — 2건 · 문항 Q008(case3), Q009(case3)" in md
+    assert "다음(제안):" in md

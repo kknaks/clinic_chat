@@ -175,9 +175,15 @@ def build(runs: list[dict], plans: list[dict]) -> str:
     # 7. 오류 · 재시도
     w("## 7. 오류 · 재시도\n")
     errs = [(r, c, (r["cases"].get(c) or {}).get("error")) for r in runs for c in CASES if (r["cases"].get(c) or {}).get("error")]
-    w(f"- 오류 열 {len(errs)}")
+    w(f"- 오류 열 {len(errs)} — 같은 꼴끼리 묶음")
+    kinds: dict[str, list] = defaultdict(list)
     for r, c, e in errs:
-        w(f"  - {r.get('question_no')} {c}: {_cell(e, 200)}")
+        kinds[error_kind(e)].append((r, c, e))
+    for k, rows in sorted(kinds.items(), key=lambda kv: -len(kv[1])):
+        w(f"  - **{k}** — {len(rows)}건 · 문항 {', '.join(str(r.get('question_no')) + '(' + c + ')' for r, c, _ in rows)}")
+        w(f"    - 예: {_cell(rows[0][2], 220)}")
+        if k in FOLLOWUP:
+            w(f"    - 다음(제안): {FOLLOWUP[k]}")
     qe = [(r, c, ((r["cases"].get(c) or {}).get("judge") or {}).get("error")) for r in runs for c in CASES
           if ((r["cases"].get(c) or {}).get("judge") or {}).get("error")]
     w(f"- 채점 오류 {len(qe)}")
@@ -191,6 +197,26 @@ def build(runs: list[dict], plans: list[dict]) -> str:
     w("")
     w("> 고치지 않음 — 허브 데이터 수정은 이 보고서를 보고 코디가 따로 발주한다.")
     return "\n".join(L) + "\n"
+
+
+FOLLOWUP = {
+    "case3 I-09 계열 id → check_conditions(허브 400)":
+        "앱 case3 I-09 경로에서 계열 id 면 check_conditions 대신 그 계열 단위 시술로 펼치거나 procedure_card(sections=checks)로 — "
+        "고친 뒤 이 문항들의 case3 만 다시 돌림(실행 중엔 안 고침 · 결정론이라 재시도로 안 풀림)",
+}
+
+
+def error_kind(e: str) -> str:
+    """오류 문구 → 묶음 이름(id · 숫자를 지운 꼴)."""
+    if re.search(r"/procedures/family:[^/]+/checks .*400", e or ""):
+        return "case3 I-09 계열 id → check_conditions(허브 400)"
+    if "HubRestError" in (e or ""):
+        return "허브 REST " + re.sub(r"[A-Za-z_]+:[A-Za-z0-9.\-_]+", "<id>", e.split("→")[0].replace("HubRestError: ", "")).strip()
+    if "시간 초과" in (e or ""):
+        return "시간 초과"
+    if "한도" in (e or "") or "limit" in (e or "").lower():
+        return "구독 한도"
+    return re.sub(r"\d+", "N", (e or "")[:60])
 
 
 def _cell(s, n):
