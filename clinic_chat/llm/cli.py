@@ -91,9 +91,12 @@ class ClaudeIngest:
         self.collect, self.mcp = collect_node_ids, mcp
         self.cli = res["trace"]["cli"]
         self.round: dict | None = None
+        self.last_round: dict | None = None
         self.n_round = 0
         self.n_tool = 0
         self.round_first: float | None = None
+        self.th_start: float | None = None
+        self.th_end: float | None = None
         self.tools: dict[str, tuple[dict, dict]] = {}  # tool_use id → (stage, call)
         self.cli.update({"thinking_seen": False, "rate_limits": [], "api_retries": [], "events": 0})
 
@@ -108,6 +111,10 @@ class ClaudeIngest:
         t = ev.get("type")
         if t == "system" and ev.get("subtype") == "init":
             self._init(ev)
+        elif t == "system" and ev.get("subtype") == "status" and ev.get("status") == "requesting":
+            self._round_open()
+        elif t == "system" and ev.get("subtype") == "thinking_tokens":
+            self._thinking()
         elif t == "system" and ev.get("subtype") == "api_retry":
             self.cli["api_retries"].append({k: ev.get(k) for k in ("error", "attempt", "retry_delay_ms") if k in ev})
         elif t == "stream_event":
@@ -148,41 +155,80 @@ class ClaudeIngest:
                 self.res["error"] = f"MCP 연결 안 됨: {self.mcp.name}={st.get(self.mcp.name)}"
                 raise StopRun
 
+    # 바퀴 시간(10-30 실물 순서): status:requesting → message_start → [thinking] → tool_use 블록 · assistant(tool_use)
+    # → message_stop → user(tool_result) → status:requesting … / 마지막 바퀴는 text Δ … message_stop → result.
+    # claude#N = 요청 시작 ~ 그 바퀴 마지막 이벤트(도구 호출 시작 또는 답 끝) · thinking_ms 는 따로 칸.
+    def _round_open(self) -> None:
+        if self.boot.get("end_ms") is None:
+            self.timer.close_stage(self.boot)
+        if self.round is not None:
+            self._round_close()
+        self.n_round += 1
+        self.round = self.timer.open_stage(f"claude#{self.n_round}")
+        self.round_first = None
+        self.th_start = self.th_end = None
+
+    def _thinking(self) -> None:
+        self.cli["thinking_seen"] = True
+        if self.round is None:
+            return
+        now = self.timer.clock.ms()
+        if self.th_start is None:
+            self.th_start = now
+            self.round["thinking"] = True
+            self.timer.touch(self.round)  # 화면: 「생각 중」
+        self.th_end = now
+
+    def _output(self) -> None:
+        """바퀴의 첫 출력(글 · 도구 호출) — 생각 끝."""
+        if self.round is not None and self.th_start is not None and self.round.get("thinking_ms") is None:
+            self.round["thinking_ms"] = round(self.timer.clock.ms() - self.th_start, 1)
+
+    def _round_close(self, at: float | None = None) -> None:
+        st = self.round
+        if st is None:
+            return
+        if self.th_start is not None and st.get("thinking_ms") is None:
+            st["thinking_ms"] = round((self.th_end or self.timer.clock.ms()) - self.th_start, 1)
+        self.timer.close_stage(st, at)
+        self.timer.llm_round_trips += 1
+        self.timer.ttft_answer_ms = self.round_first
+        self.last_round = st
+        self.round = None
+
     def _stream(self, e: dict) -> None:
         et = e.get("type")
         if et == "message_start":
-            if self.boot.get("end_ms") is None:
-                self.timer.close_stage(self.boot)
-            self.n_round += 1
-            self.round = self.timer.open_stage(f"claude#{self.n_round}")
-            self.round_first = None
+            if self.round is None:  # status:requesting 가 없는 판 — 여기서 엶
+                self._round_open()
             u = (e.get("message") or {}).get("usage")
             if u:
                 self.round["tokens"] = _claude_usage(u)
+        elif et == "content_block_start":
+            kind = (e.get("content_block") or {}).get("type")
+            if kind in ("thinking", "redacted_thinking"):
+                self._thinking()
+            elif kind in ("tool_use", "text"):
+                self._output()
         elif et == "content_block_delta":
             d = e.get("delta") or {}
             if d.get("type") == "text_delta" and d.get("text"):
+                self._output()
                 ms = self.timer.mark_text()
                 if self.round_first is None:
                     self.round_first = ms
-                    self.timer.ttft_answer_ms = ms
                 self.res["answer"] += d["text"]
                 self.on_text(d["text"])
             elif d.get("type") in ("thinking_delta", "signature_delta"):
-                self.cli["thinking_seen"] = True
-        elif et == "content_block_start" and (e.get("content_block") or {}).get("type") == "thinking":
-            self.cli["thinking_seen"] = True
+                self._thinking()
         elif et == "message_delta":
-            if self.round is not None and e.get("usage"):
-                self.round["tokens"] = {**(self.round.get("tokens") or {}), **_claude_usage(e["usage"])}
+            tgt = self.round or self.last_round
+            if tgt is not None and e.get("usage"):
+                tgt["tokens"] = {**(tgt.get("tokens") or {}), **_claude_usage(e["usage"])}
             if (e.get("delta") or {}).get("stop_reason"):
                 self.res["stop_reason"] = e["delta"]["stop_reason"]
         elif et == "message_stop" and self.round is not None:
-            self.timer.close_stage(self.round)
-            self.timer.llm_round_trips += 1
-            if self.round_first is None:
-                self.timer.ttft_answer_ms = None
-            self.round = None
+            self._round_close()  # 답 끝(도구가 없던 바퀴)
 
     def _assistant(self, ev: dict) -> None:
         for b in (ev.get("message") or {}).get("content") or []:
@@ -196,8 +242,11 @@ class ClaudeIngest:
                     self.res["structured"] = b["input"]
                 continue
             short = name.split("__", 2)[-1] if name.startswith(MCP_PREFIX) else name
+            now = self.timer.clock.ms()
+            if self.round is not None:  # 바퀴 끝 = 도구 호출 시작(같은 시각)
+                self._round_close(now)
             self.n_tool += 1
-            st = self.timer.open_stage(f"tool:{short}#{self.n_tool}")
+            st = self.timer.open_stage(f"tool:{short}#{self.n_tool}", at=now)
             call = {"tool": short, "input": b.get("input"), "output_bytes": None, "ms": None, "is_error": None}
             self.tools[str(b.get("id"))] = (st, call)
             self.res["trace"]["tool_calls"].append(call)
@@ -221,6 +270,8 @@ class ClaudeIngest:
                     call["node_ids"] = []
 
     def _result(self, ev: dict) -> None:
+        if self.round is not None:
+            self._round_close()
         u = _claude_usage(ev.get("usage") or {})
         self.res["tokens"] = {"total": u, "by_model": {m: _claude_usage(v) for m, v in (ev.get("modelUsage") or {}).items()}}
         self.cli.update({"num_turns": ev.get("num_turns"), "duration_ms": ev.get("duration_ms"),
@@ -317,6 +368,7 @@ class CodexIngest:
         self.res, self.timer, self.on_text, self.boot, self.collect = res, timer, on_text, boot, collect_node_ids
         self.cli = res["trace"]["cli"]
         self.turn: dict | None = None
+        self.n_seg = 0
         self.n_tool = 0
         self.tools: dict[str, tuple[dict, dict]] = {}
         self.cli.update({"thinking_seen": False, "item_types": [], "events": 0, "messages": 0, "warnings": []})
@@ -336,8 +388,7 @@ class CodexIngest:
         if t == "thread.started":
             self.cli["thread_started_ms"] = self.timer.clock.ms()
         elif t == "turn.started":
-            self.timer.close_stage(self.boot)
-            self.turn = self.timer.open_stage("codex#1")
+            self._seg_open(at=self.timer.close_stage(self.boot))
         elif t in ("turn.completed", "turn.failed"):
             if isinstance(ev.get("usage"), dict):
                 u = ev["usage"]
@@ -345,9 +396,7 @@ class CodexIngest:
                                                 "cache_read_input_tokens": u.get("cached_input_tokens", 0),
                                                 "output_tokens": u.get("output_tokens", 0),
                                                 "reasoning_output_tokens": u.get("reasoning_output_tokens", 0)}}
-            if self.turn is not None:
-                self.timer.close_stage(self.turn)
-                self.timer.llm_round_trips += 1
+            self._seg_close()
             if t == "turn.failed":
                 self._fail(ev.get("error") or ev)
             else:
@@ -376,6 +425,17 @@ class CodexIngest:
             self.cli["rate_limited"] = True
         self.res["error"] = self.res["error"] or f"Codex CLI: {msg}"
 
+    # 모델 구간 — 턴을 도구 호출로 나눔(codex#1 → tool → codex#2 …): 단계가 겹치지 않고 합이 맞게(10-30 피드백)
+    def _seg_open(self, at: float | None = None) -> None:
+        self.n_seg += 1
+        self.turn = self.timer.open_stage(f"codex#{self.n_seg}", at=at)
+
+    def _seg_close(self, at: float | None = None) -> None:
+        if self.turn is not None:
+            self.timer.close_stage(self.turn, at)
+            self.timer.llm_round_trips += 1
+            self.turn = None
+
     def _item(self, phase: str, item: dict) -> None:
         it = str(item.get("type", ""))
         if it and it not in self.cli["item_types"]:
@@ -383,6 +443,10 @@ class CodexIngest:
         iid = str(item.get("id") or f"item-{self.n_tool}")
         if it == "reasoning":
             self.cli["thinking_seen"] = True
+            if self.turn is not None and phase == "completed" and self.turn.get("thinking_ms") is None:
+                self.turn["thinking"] = True  # reasoning item 이 끝난 때까지 = 생각(어림)
+                self.turn["thinking_ms"] = round(self.timer.clock.ms() - self.turn["start_ms"], 1)
+                self.timer.touch(self.turn)
         elif it == "agent_message" and phase == "completed" and isinstance(item.get("text"), str):
             ms = self.timer.mark_text()  # 메시지 단위
             self.timer.ttft_answer_ms = ms
@@ -395,16 +459,20 @@ class CodexIngest:
                 self._warn(item.get("message"))
         elif it == "mcp_tool_call" or "tool" in it or it in ("command_execution", "web_search", "file_change"):
             if iid not in self.tools:
+                now = self.timer.clock.ms()
+                self._seg_close(now)  # 모델 구간 끝 = 도구 호출 시작(같은 시각)
                 self.n_tool += 1
                 name = str(item.get("tool") or item.get("name") or it)
-                st = self.timer.open_stage(f"tool:{name}#{self.n_tool}")
+                st = self.timer.open_stage(f"tool:{name}#{self.n_tool}", at=now)
                 call = {"tool": name, "input": item.get("arguments"), "output_bytes": None, "ms": None,
                         "is_error": None, "item_type": it}
                 self.tools[iid] = (st, call)
                 self.res["trace"]["tool_calls"].append(call)
             st, call = self.tools[iid]
-            if phase == "completed":
-                self.timer.close_stage(st)
+            if phase == "completed" and st.get("end_ms") is None:
+                end = self.timer.close_stage(st)
+                if self.turn is None and not self.completed:
+                    self._seg_open(at=end)  # 도구 결과 뒤 다음 모델 구간(같은 시각)
                 result = item.get("result")
                 # 10-30 실물 꼴: result = {content: [{type: text, text}], structured_content} — 모델이 받은 글 = content
                 if isinstance(result, dict) and isinstance(result.get("content"), list):
@@ -444,6 +512,37 @@ async def run(spec: CliSpec, *, system: str, prompt: str, timer: CaseTimer, on_t
         res["timing"] = _timing(timer, spec)
         return res
     CACHE_DIR.mkdir(exist_ok=True)
+    sem = _semaphore()
+    if sem.locked():  # 동시 CLI 상한(설정 CLI_MAX_CONCURRENT) — 기다린 시간은 cli_queue 단계로
+        q = timer.open_stage("cli_queue")
+        await sem.acquire()
+        timer.close_stage(q)
+    else:
+        await sem.acquire()
+    try:
+        return await _run_locked(spec, res, cli, system=system, prompt=prompt, timer=timer, on_text=on_text, mcp=mcp,
+                                 schema=schema, collect_node_ids=collect_node_ids)
+    finally:
+        sem.release()
+
+
+_SEMS: dict[int, Any] = {}
+MAX_CONCURRENT = 6  # server 가 설정(CLI_MAX_CONCURRENT)으로 바꿈
+
+
+def _semaphore():
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    if key not in _SEMS or _SEMS[key][0] != MAX_CONCURRENT:
+        _SEMS[key] = (MAX_CONCURRENT, asyncio.Semaphore(MAX_CONCURRENT))
+    return _SEMS[key][1]
+
+
+async def _run_locked(spec: CliSpec, res: dict, cli: dict, *, system: str, prompt: str, timer: CaseTimer,
+                      on_text: Callable[[str], None], mcp: McpAttach | None, schema: dict | None,
+                      collect_node_ids: bool) -> dict:
     # 임시 cwd 는 레포 밖(시스템 임시 폴더) — git 상태 · 프로젝트 자동 메모리 경로가 레포에 묶이지 않게(10-30 실물 init.memory_paths)
     work = Path(tempfile.mkdtemp(prefix="clinic-chat-cli-"))
     boot = timer.open_stage("cli_boot")
@@ -490,8 +589,47 @@ async def run(spec: CliSpec, *, system: str, prompt: str, timer: CaseTimer, on_t
     return res
 
 
+GAP = "(측정 밖)"
+
+
+def fill_gaps(stages: list[dict], total_ms: float | None) -> list[dict]:
+    """0 ~ total 중 어느 단계도 덮지 않은 구간을 「(측정 밖)#k」 단계로 — 덮인 합 + 빈틈 = total(10-30 피드백)."""
+    if total_ms is None:
+        return stages
+    spans = sorted((s["start_ms"], s["end_ms"]) for s in stages if s.get("end_ms") is not None)
+    gaps, cur = [], 0.0
+    for a, b in spans:
+        if a > cur + 1:
+            gaps.append((cur, a))
+        cur = max(cur, b)
+    if total_ms > cur + 1:
+        gaps.append((cur, total_ms))
+    out = list(stages)
+    for k, (a, b) in enumerate(gaps, 1):
+        out.append({"name": f"{GAP}#{k}", "start_ms": round(a, 1), "end_ms": round(b, 1), "gap": True})
+    return sorted(out, key=lambda s: (s["start_ms"], s.get("end_ms") or 0))
+
+
+def coverage(stages: list[dict]) -> float:
+    """단계들이 덮는 시간(겹침은 한 번만)."""
+    spans = sorted((s["start_ms"], s["end_ms"]) for s in stages if s.get("end_ms") is not None)
+    tot, cur_a, cur_b = 0.0, None, None
+    for a, b in spans:
+        if cur_b is None or a > cur_b:
+            if cur_b is not None:
+                tot += cur_b - cur_a
+            cur_a, cur_b = a, b
+        else:
+            cur_b = max(cur_b, b)
+    if cur_b is not None:
+        tot += cur_b - cur_a
+    return round(tot, 1)
+
+
 def _timing(timer: CaseTimer, spec: CliSpec) -> dict:
     t = timer.as_dict()
+    t["stages"] = fill_gaps([s for s in t["stages"] if not s.get("gap")], t.get("total_ms"))
+    t["thinking_ms"] = round(sum(s.get("thinking_ms") or 0 for s in t["stages"]), 1) or None
     boot = next((s for s in t["stages"] if s["name"] == "cli_boot" and s.get("end_ms") is not None), None)
     b = round(boot["end_ms"] - boot["start_ms"], 1) if boot else None
     t.update({"cli_boot_ms": b, "ttft_kind": "token" if spec.provider == "claude-cli" else "message",

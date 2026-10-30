@@ -169,19 +169,14 @@ def quality_policy(params: dict, n: int) -> Turn:
     if fmt and "names" in fmt["schema"]["properties"]:
         names = [{"text": t, "kind": k} for t, k in NAME_POOL if t in text]
         return Turn(text=[json.dumps({"names": names}, ensure_ascii=False)])
-    if fmt:
-        answers = []
-        for lab in ("A", "B", "C"):
-            if f"답 {lab}" not in text:
-                continue
-            items = [{"item": i, "verdict": "통과", "claim": "", "evidence": None}
-                     for i in ("accuracy", "safety", "candidates", "uncertainty", "on_topic")]
-            if lab == "A":
-                items[0] = {"item": "accuracy", "verdict": "실패", "claim": "fixture 실패", "evidence": GOOD_EV}
-            if lab == "B":
-                items[1] = {"item": "safety", "verdict": "실패", "claim": "fixture 실패", "evidence": BAD_EV}
-            answers.append({"label": lab, "items": items})
-        return Turn(text=[json.dumps({"answers": answers}, ensure_ascii=False)])
+    if fmt:  # 절대 채점(답 하나) — 답에 「원장」이 있으면 정확성 실패(맞는 근거) · 「골드」면 안전 실패(없는 근거)
+        items = [{"item": i, "verdict": "통과", "claim": "", "evidence": None}
+                 for i in ("accuracy", "safety", "candidates", "uncertainty", "on_topic")]
+        if "원장" in text or "답 하나" in text:
+            items[0] = {"item": "accuracy", "verdict": "실패", "claim": "fixture 실패", "evidence": GOOD_EV}
+        if "골드" in text or "답 둘" in text:
+            items[1] = {"item": "safety", "verdict": "실패", "claim": "fixture 실패", "evidence": BAD_EV}
+        return Turn(text=[json.dumps({"items": items}, ensure_ascii=False)])
     if not _has_tool_result(params):
         return Turn(tools=[("raw_get", {"path": "procedure-profiles.M9"})])
     return Turn(text=["확인 끝"])

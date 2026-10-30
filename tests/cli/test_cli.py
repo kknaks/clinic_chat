@@ -105,6 +105,10 @@ def spec(kind: str) -> CliSpec:
     return CliSpec("codex-cli", str(FAKE / "codex"), "gpt-5.6-terra", "medium", 30)
 
 
+def names(t: dict) -> list[str]:
+    return [s["name"] for s in t["stages"] if not s.get("gap")]
+
+
 def timer() -> CaseTimer:
     c = Clock()
     c.start()
@@ -141,7 +145,7 @@ async def test_claude_answer_isolated_and_measured(fake, monkeypatch):
     t = r["timing"]
     assert t["ttft_kind"] == "token" and t["ttft_ms"] is not None and t["cli_boot_ms"] is not None
     assert t["ttft_ms_ex_boot"] == round(t["ttft_ms"] - t["cli_boot_ms"], 1)
-    assert [s["name"] for s in t["stages"]] == ["cli_boot", "claude#1"] and t["llm_round_trips"] == 1
+    assert names(t) == ["cli_boot", "claude#1"] and t["llm_round_trips"] == 1
     assert r["cost"]["usd_estimate"] == 0.0123 and r["cost"]["billed"] == "subscription"
     c = r["trace"]["cli"]
     assert c["auth_kind"] == "subscription" and c["observed_model"] == "claude-sonnet-5-5"
@@ -167,8 +171,7 @@ async def test_claude_tool_loop_via_mcp(fake):
     r = await cli.run(spec("claude"), system="s", prompt="q", timer=timer(), on_text=lambda t: None,
                       mcp=McpAttach("hub", url="http://hub.test/procedure-hub/gold-mcp/mcp"), collect_node_ids=True)
     assert r["error"] is None
-    names = [s["name"] for s in r["timing"]["stages"]]
-    assert names == ["cli_boot", "claude#1", "tool:recommend#1", "claude#2"]
+    assert names(r["timing"]) == ["cli_boot", "claude#1", "tool:recommend#1", "claude#2"]
     call = r["trace"]["tool_calls"][0]
     assert call["tool"] == "recommend" and call["is_error"] is False and call["output_bytes"] > 0
     assert "unit_procedure:U5-102" in call["node_ids"]
@@ -226,7 +229,7 @@ async def test_codex_isolated_message_ttft_and_tools(fake, tmp_path):
     assert r["error"] is None and r["answer"] == "울쎄라를 권합니다." == "".join(out)
     t = r["timing"]
     assert t["ttft_kind"] == "message" and t["ttft_ms"] is not None
-    assert [s["name"] for s in t["stages"]] == ["cli_boot", "codex#1", "tool:recommend#1"]
+    assert names(t) == ["cli_boot", "codex#1", "tool:recommend#1", "codex#2"]
     assert r["trace"]["tool_calls"][0]["node_ids"] == ["unit_procedure:U5-102", "family:M9"]
     assert r["tokens"]["total"]["reasoning_output_tokens"] == 12 and r["trace"]["cli"]["thinking_seen"] is True
     assert r["trace"]["cli"]["item_types"] == ["error", "mcp_tool_call", "reasoning", "agent_message"]
@@ -322,3 +325,83 @@ async def test_claude_real_shapes_model_usage_and_windows(fake):
     w = r["trace"]["cli"]["rate_limits"][0]
     assert w["utilization"] == 0.16 and w["windows"]["seven_day"]["utilization"] == 0.61
     assert r["trace"]["cli"]["cli_ttft_ms"] == 1234
+
+
+# 10-30 피드백 3 — 단계 합 + 빈틈 = total · 바퀴 = 요청 시작 ~ 마지막 이벤트 · thinking_ms 따로
+REAL_ORDER = j(
+    init("hub"),
+    {"type": "system", "subtype": "status", "status": "requesting"},
+    se({"type": "message_start", "message": {"usage": {"input_tokens": 2}}}),
+    se({"type": "content_block_start", "content_block": {"type": "tool_use"}}),
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__hub__resolve",
+                                                   "input": {"text": "울쎄라"}}]}},
+    se({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 30}}),
+    se({"type": "message_stop"}),
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": TOOL_RESULT}]}},
+    {"type": "system", "subtype": "status", "status": "requesting"},
+    se({"type": "message_start", "message": {"usage": {"input_tokens": 2}}}),
+    se({"type": "content_block_start", "content_block": {"type": "thinking"}}),
+    {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 50},
+    se({"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}}),
+    {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 90},
+    se({"type": "content_block_start", "content_block": {"type": "text"}}),
+    se({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "울쎄라 "}}),
+    se({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "회복은 짧아요."}}),
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "울쎄라 회복은 짧아요."}]}},
+    se({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 40}}),
+    se({"type": "message_stop"}),
+    {**RESULT, "num_turns": 2},
+)
+
+
+async def test_claude_stage_times_cover_total(fake, monkeypatch):
+    lines, _ = fake
+    lines(REAL_ORDER)
+    monkeypatch.setenv("FAKE_CLI_SLEEP", "0.04")
+    seen: list[dict] = []
+    c = Clock()
+    c.start()
+    tm = CaseTimer(c, emit_stage=seen.append)
+    r = await cli.run(spec("claude"), system="s", prompt="q", timer=tm, on_text=lambda x: None,
+                      mcp=McpAttach("hub", url="http://hub.test/x"))
+    t = r["timing"]
+    assert r["error"] is None
+    assert names(t) == ["cli_boot", "claude#1", "tool:resolve#1", "claude#2"]
+    real = [s for s in t["stages"] if not s.get("gap")]
+    gaps = [s for s in t["stages"] if s.get("gap")]
+    assert abs(cli.coverage(real) + sum(g["end_ms"] - g["start_ms"] for g in gaps) - t["total_ms"]) <= 1.5
+    st = {s["name"]: s for s in t["stages"]}
+    # 바퀴 1 = 요청 시작 ~ 도구 호출 시작(tool 단계 시작과 붙음) · 모델 단계가 첫 이벤트에서 끝나지 않음
+    assert st["claude#1"]["end_ms"] == st["tool:resolve#1"]["start_ms"]
+    assert st["claude#1"]["end_ms"] - st["claude#1"]["start_ms"] >= 80  # message_start · tool_use 블록 · assistant 까지
+    assert st["claude#2"]["end_ms"] - st["claude#2"]["start_ms"] >= 300  # 생각 · 글 · message_stop 까지
+    assert st["claude#2"]["thinking"] is True and st["claude#2"]["thinking_ms"] >= 80 and t["thinking_ms"]
+    assert "thinking_ms" not in st["claude#1"]
+    assert t["llm_round_trips"] == 2 and r["answer"] == "울쎄라 회복은 짧아요."
+    assert any(x["name"] == "claude#2" and x["end_ms"] is None for x in seen)  # 열 때도 알림(화면 실시간)
+    assert any(x["name"] == "claude#2" and x.get("thinking") and x["end_ms"] is None for x in seen)
+
+
+async def test_codex_stage_times_cover_total(fake, monkeypatch):
+    lines, _ = fake
+    lines(CODEX)
+    monkeypatch.setenv("FAKE_CLI_SLEEP", "0.03")
+    r = await cli.run(spec("codex"), system="s", prompt="q", timer=timer(), on_text=lambda x: None,
+                      mcp=McpAttach("hub", url="http://hub.test/gold"))
+    t = r["timing"]
+    real = [s for s in t["stages"] if not s.get("gap")]
+    gaps = [s for s in t["stages"] if s.get("gap")]
+    assert abs(cli.coverage(real) + sum(g["end_ms"] - g["start_ms"] for g in gaps) - t["total_ms"]) <= 1.5
+    st = {s["name"]: s for s in t["stages"]}
+    assert st["codex#1"]["end_ms"] == st["tool:recommend#1"]["start_ms"]
+    assert st["codex#2"]["start_ms"] == st["tool:recommend#1"]["end_ms"] and st["codex#2"]["thinking"] is True
+
+
+def test_fill_gaps_partition():
+    stages = [{"name": "a", "start_ms": 10, "end_ms": 50}, {"name": "b", "start_ms": 40, "end_ms": 60},
+              {"name": "c", "start_ms": 100, "end_ms": 120}]
+    out = cli.fill_gaps(stages, 150)
+    gaps = [(g["start_ms"], g["end_ms"]) for g in out if g.get("gap")]
+    assert gaps == [(0.0, 10), (60, 100), (120, 150)]
+    assert [g["name"] for g in out if g.get("gap")] == ["(측정 밖)#1", "(측정 밖)#2", "(측정 밖)#3"]
+    assert cli.coverage(stages) + sum(b - a for a, b in gaps) == 150

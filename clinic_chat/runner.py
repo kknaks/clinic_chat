@@ -30,7 +30,8 @@ def new_run_id() -> str:
 
 
 async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None = None, quality: bool | None = None,
-                  jev_seed: int | None = None, judge_seed: int | None = None, provider: str | None = None) -> dict:
+                  jev_seed: int | None = None, judge_seed: int | None = None, provider: str | None = None,
+                  on_case_done: Callable[[str, dict], None] | None = None) -> dict:
     """provider = sdk · claude-cli · codex-cli(질문마다 · 세 케이스 모두 같은 provider).
     quality=None 이면 CLI 판은 자동 채점 · sdk 판은 설정 AUTO_QUALITY(기본 끔 — 「채점」 버튼)."""
     provider = provider or deps.settings.default_provider
@@ -50,7 +51,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         emit("provider", desc)
     run_id = run_id or new_run_id()
     jev_seed = random.randrange(2**31) if jev_seed is None else jev_seed
-    judge_seed = random.randrange(2**31) if judge_seed is None else judge_seed
+    judge_seed = None  # 절대 채점(답 하나씩) — 섞을 순서 없음(옛 비교 채점 칸은 기록 꼴 유지용)
     asked_at = now_iso()
     clock = Clock(now=deps.now)
     clock.start()  # t0 — 세 케이스 같은 값
@@ -69,6 +70,12 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         runners = {c: refused for c in CASES}
 
     async def one(c: str) -> dict:
+        r = await one_inner(c)
+        if on_case_done:  # 서버: 이 열 채점을 바로 시작(다른 열을 기다리지 않음)
+            on_case_done(c, r)
+        return r
+
+    async def one_inner(c: str) -> dict:
         try:
             r = await runners[c]()
         except Exception as e:  # noqa: BLE001 — 그 열만 오류
@@ -124,7 +131,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      # 도구 · 허브 결과 입력 상한(세 케이스 공통 하나) — CLI 판은 case1 · 2 에 못 넣어 셋 다 안 넣음
                      "input_cap_bytes": s.tool_result_max_bytes if provider == "sdk" else None,
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
-        "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed,
+        "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed, "judge_mode": "absolute",
         "cost": run_cost(cases, quality_cost),
     }
     emit("cost", record["cost"])
@@ -149,31 +156,37 @@ def run_cost(cases: dict, quality_usd: float | None) -> dict:
             "total_usd": round(answers + (quality_usd or 0.0), 6), "pricing_as_of": PRICING_AS_OF}
 
 
-async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int) -> dict:
-    """① → ② (셋 다 끝난 뒤 · README §5). → {judge_order, cost_usd, usage}. 기록 칸 word_check · judge 를 채운다."""
+async def grade_case(deps: Deps, question: str, case: str, answer: str, emit: Emit) -> dict:
+    """한 열 채점 — ① 이름 뽑기 → ② 절대 채점(답 하나 · 가림). 열이 끝나면 바로(세 열을 기다리지 않음 · 10-30 사용자).
+    → {case, word_check, judge, cost_usd}. 이벤트: case_quality_start · word_check · judge · case_quality_done."""
     from clinic_chat.quality import judge, word_check
 
-    for c in CASES:
-        r = cases[c]
-        if r.get("error") or not r.get("answer"):
-            continue
-        try:
-            r["word_check"] = await word_check.check_answer(deps, r["answer"])
-        except Exception as e:  # noqa: BLE001 — ① 실패는 그 열 표시만
-            r["word_check"] = {"error": f"{type(e).__name__}: {e}"[:300]}
-        emit("word_check", {"case": c, **r["word_check"]})
-    q_costs = [(cases[c].get("word_check") or {}).get("cost_usd") or 0.0 for c in CASES]
-    order = judge.blind_order([c for c in CASES if cases[c].get("answer") and not cases[c].get("error")], judge_seed)
-    if not order:
-        return {"judge_order": [], "cost_usd": round(sum(q_costs), 6)}
+    emit("case_quality_start", {"case": case})
+    out: dict[str, Any] = {"case": case, "mode": judge.MODE}
     try:
-        jr = await judge.judge(deps, question, {c: cases[c]["answer"] for c in order}, order)
+        out["word_check"] = await word_check.check_answer(deps, answer)
+    except Exception as e:  # noqa: BLE001 — ① 실패는 그 열 표시만
+        out["word_check"] = {"error": f"{type(e).__name__}: {e}"[:300]}
+    emit("word_check", {"case": case, **out["word_check"]})
+    try:
+        out["judge"] = await judge.judge_one(deps, question, answer)
     except Exception as e:  # noqa: BLE001 — ② 실패는 표시만
-        jr = {"error": f"{type(e).__name__}: {e}"[:300], "per_case": {}}
-    for c in order:
-        cases[c]["judge"] = jr.get("per_case", {}).get(c, {"error": jr.get("error")})
-    emit("judge", {"cases": {c: cases[c]["judge"] for c in order}, "order": order, "error": jr.get("error"),
-                   "cost_usd": jr.get("cost_usd"), "usage": jr.get("usage")})
-    total = round(sum(q_costs) + (jr.get("cost_usd") or 0.0), 6)
+        out["judge"] = {"error": f"{type(e).__name__}: {e}"[:300]}
+    emit("judge", {"case": case, **out["judge"]})
+    out["cost_usd"] = round((out["word_check"].get("cost_usd") or 0.0) + (out["judge"].get("cost_usd") or 0.0), 6)
+    emit("case_quality_done", {"case": case, "cost_usd": out["cost_usd"]})
+    return out
+
+
+def gradable(cases: dict) -> list[str]:
+    return [c for c in CASES if (cases.get(c) or {}).get("answer") and not (cases.get(c) or {}).get("error")]
+
+
+async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int | None = None) -> dict:
+    """세 열을 열마다 따로(동시에) 채점 — 기록 칸 word_check · judge 를 채운다. → {cost_usd, per_case}."""
+    done = await asyncio.gather(*(grade_case(deps, question, c, cases[c]["answer"], emit) for c in gradable(cases)))
+    for g in done:
+        cases[g["case"]]["word_check"], cases[g["case"]]["judge"] = g["word_check"], g["judge"]
+    total = round(sum(g["cost_usd"] for g in done), 6)
     emit("quality_cost", {"cost_usd": total})
-    return {"judge_order": order, "cost_usd": total, "judge_usage": jr.get("usage"), "judge_cost_usd": jr.get("cost_usd")}
+    return {"judge_order": [], "cost_usd": total, "per_case": {g["case"]: g for g in done}}

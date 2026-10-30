@@ -55,7 +55,9 @@ def test_sse_contract_and_records(client):
     opus_before = [p for p in client.deps.anthropic.calls if p["model"].startswith("claude-opus")]
     assert opus_before == []
     graded = client.post(f"/api/runs/{rid}/quality").json()["record"]
-    assert graded["judge_order"] and all("not_found" in graded["cases"][c]["word_check"] for c in graded["cases"])
+    assert graded["graded_cases"] == ["case1", "case2", "case3"]
+    assert all("not_found" in graded["cases"][c]["word_check"] for c in graded["cases"])
+    assert all(graded["cases"][c]["judge"]["mode"] == "absolute" for c in graded["cases"])
     assert graded["cost"]["quality_usd"] > 0 and graded["cost"]["total_usd"] > graded["cost"]["answers_usd"]
     raw = (client.deps.settings.runs_path / "runs.jsonl").read_text(encoding="utf-8")
     assert json.loads(raw.splitlines()[-1])["judge_order"] == []  # 기록 줄은 그대로 · 채점은 quality.jsonl
@@ -63,7 +65,7 @@ def test_sse_contract_and_records(client):
         if e in ("stage", "text", "trace", "case_done", "word_check"):
             assert d["case"] in ("case1", "case2", "case3")
     rec = client.get(f"/api/runs/{rid}").json()["record"]
-    assert rec["run_id"] == rid and rec["judge_order"]
+    assert rec["run_id"] == rid and rec["graded_cases"] == ["case1", "case2", "case3"]
     lst = client.get("/api/runs?limit=5").json()["runs"]
     assert lst[0]["run_id"] == rid and set(lst[0]["cases"]) == {"case1", "case2", "case3"}
     assert client.post(f"/api/runs/{rid}/human_check", json={"case": "case1", "verdict": "맞음", "note": "x"}).status_code == 200

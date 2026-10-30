@@ -5,6 +5,7 @@
 
   function emptyCase() {
     return { text: "", stages: [], timing: null, tokens: {}, trace: null, error: null, word_check: null, cost: null,
+             grading: false, quality_error: null,
              judge: null, done: false, stop_reason: null, loop_capped: false, refusal: false };
   }
 
@@ -15,7 +16,8 @@
       if (disabled && disabled[c]) cases[c].error = disabled[c];
     }
     return { run_id: runId || null, question: question || "", cases, judge_order: [], judge_error: null,
-             done: false, errors: [], cost: null, provider: null };
+             done: false, errors: [], cost: null, provider: null,
+             answers_done: false, grading: false, graded: false, quality_error: null, stream_lost: false };
   }
 
   function reduce(s, type, d) {
@@ -41,14 +43,26 @@
       case "quality_cost": s.cost = { ...(s.cost || {}), quality_usd: d.cost_usd }; break;
       case "word_check": { const { case: _c, ...rest } = d; c.word_check = rest; break; }
       case "judge":
-        s.judge_order = d.order || [];
+        if (c) { const { case: _c, ...rest } = d; c.judge = rest; s.graded = true; break; }  // 열마다(절대 채점)
+        s.judge_order = d.order || [];  // 옛 꼴(세 답 한꺼번에) — 기록 다시 그리기용
         s.judge_error = d.error || null;
         for (const k of Object.keys(d.cases || {})) s.cases[k].judge = d.cases[k];
+        break;
+      case "case_quality_start": c.grading = true; s.grading = true; break;
+      case "case_quality_done":
+      case "case_quality_error":
+        c.grading = false;
+        if (type === "case_quality_error") c.quality_error = d.message || "채점 실패";
+        s.grading = CASES.some((k) => s.cases[k].grading);
         break;
       case "error":
         if (c) c.error = d.message; else s.errors.push(d.message);
         break;
-      case "run_done": s.done = true; break;
+      case "answers_done": s.answers_done = true; s.grading = !!d.auto_quality; break;
+      case "quality_start": s.grading = true; break;
+      case "quality_done": s.grading = false; s.graded = s.graded || CASES.some((k) => s.cases[k].judge); break;
+      case "quality_error": s.grading = false; s.quality_error = d.message || "채점 실패"; break;
+      case "run_done": s.done = true; s.grading = false; for (const k of CASES) s.cases[k].grading = false; break;
     }
     return s;
   }
@@ -67,6 +81,8 @@
       });
     }
     s.judge_order = rec.judge_order || [];
+    s.graded = (rec.judge_order || []).length > 0 || (rec.graded_cases || []).length > 0;
+    s.answers_done = true;
     s.cost = rec.cost || null;
     const v = rec.versions || {};
     s.provider = { provider: rec.provider || "sdk", model: v.answer_model, effort: v.answer_effort,
@@ -108,6 +124,7 @@
 
   // 단계 색 종류 — 막대 · 범례 같은 색
   function stageKind(name) {
+    if (name.startsWith("(측정 밖)")) return "gap";
     if (name.startsWith("claude") || name.startsWith("codex")) return "claude";
     if (name === "cli_boot") return "boot";
     if (name.startsWith("tool:")) return "tool";
@@ -125,9 +142,20 @@
   function legendItems(stages) {
     return (stages || []).map((st) => {
       const end = st.end_ms == null ? null : st.end_ms;
-      const label = st.name.replace(/^tool:/, "").replace(/^hub_resolve$/, "hub").replace(/^hub_path$/, "hub");
-      return { kind: stageKind(st.name), label, dur: end == null ? "…" : fmtDur(end - (st.start_ms || 0)) };
+      const label = st.name.replace(/^tool:/, "").replace(/^hub_resolve$/, "hub").replace(/^hub_path$/, "hub")
+        .replace(/^\(측정 밖\)#\d+$/, "(측정 밖)").replace(/^cli_boot$/, "기동").replace(/^cli_queue$/, "대기");
+      const think = st.thinking ? (end == null ? " · 생각 중" : st.thinking_ms != null ? ` · 생각 ${fmtDur(st.thinking_ms)}` : "") : "";
+      return { kind: stageKind(st.name), label: label + think, dur: end == null ? "…" : fmtDur(end - (st.start_ms || 0)) };
     });
+  }
+
+  // 보내기 버튼 — 답 세 열이 끝나면(answers_done) 바로 다음 질문 · 채점은 백그라운드 · 끊김 · 오류도 풀림
+  function sendState(s, requesting) {
+    if (requesting) return { disabled: true, label: "보내는 중…", title: "질문을 서버에 보내는 중" };
+    const busy = s && s.run_id && !s.answers_done && !s.done && !s.stream_lost;
+    if (busy) return { disabled: true, label: "진행 중 · 답 받는 중", title: "세 열 답이 끝나면 다음 질문을 보낼 수 있음" };
+    return { disabled: false, label: "보내기",
+             title: s && s.grading ? "이전 질문 채점은 백그라운드로 계속됨(기록 표에 채워짐)" : "" };
   }
 
   // 열 머리 provider 줄
@@ -147,7 +175,7 @@
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd, providerLabel };
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd, providerLabel, sendState };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);

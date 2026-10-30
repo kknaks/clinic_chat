@@ -23,7 +23,7 @@ def test_mock_e2e_one_question(tmp_path):
             assert r["error"] is None and r["answer"] and r["timing"]["total_ms"] > 0
             assert "not_found" in r["word_check"] and r["judge"]["pass_count"] >= 0
         assert rec["cases"]["case3"]["trace"]["hub"]["tool"] == "compare"
-        assert sorted(rec["judge_order"]) == ["case1", "case2", "case3"]
+        assert rec["graded_cases"] == ["case1", "case2", "case3"] and rec["judge_mode"] == "absolute"
         assert c.post(f"/api/runs/{rid}/human_check", json={"case": "case3", "verdict": "틀림", "note": "e2e"}).json()
     lines = (runs / "runs.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1 and json.loads(lines[0])["run_id"] == rid

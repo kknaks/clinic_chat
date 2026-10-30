@@ -13,10 +13,9 @@ from tests.fake_anthropic import FakeAnthropic, answer_policy
 from tests.fake_jev import FakeJev
 
 EXTRACT = j(init(), *turn([""]), {**RESULT, "structured_output": {"names": [{"text": "울쎄라", "kind": "시술"}]}})
-JUDGE = j(init("raw"), *turn(["확인"]), {**RESULT, "structured_output": {"answers": [
-    {"label": lab, "items": [{"item": i, "verdict": "통과", "claim": "", "evidence": None}
-                             for i in ("accuracy", "safety", "candidates", "uncertainty", "on_topic")]}
-    for lab in "ABC"]}})
+JUDGE = j(init("raw"), *turn(["확인"]), {**RESULT, "structured_output": {"items": [
+    {"item": i, "verdict": "통과", "claim": "", "evidence": None}
+    for i in ("accuracy", "safety", "candidates", "uncertainty", "on_topic")]}})
 
 
 @pytest.fixture
@@ -63,10 +62,16 @@ async def test_claude_cli_run_record_and_auto_quality(deps_factory, route):
     assert [x["tool"] for x in rec["cases"]["case2"]["trace"]["tool_calls"]] == ["recommend"]
     assert rec["cases"]["case3"]["trace"]["hub"]["tool"] == "procedure_card"  # 앞 단계는 앱 그대로
     # CLI 판 = 자동 채점(Claude CLI Opus) · 원장 도구 = 로컬 stdio MCP
-    assert rec["judge_order"] and all(rec["cases"][c]["judge"]["pass_count"] == 5 for c in runner.CASES)
+    assert all(rec["cases"][c]["judge"]["pass_count"] == 5 for c in runner.CASES)  # 열마다 절대 채점
     assert all(rec["cases"][c]["word_check"]["provider"] == "claude-cli" for c in runner.CASES)
     calls = [json.loads(x) for x in route.read_text().splitlines()]
-    judge = next(x for x in calls if "--json-schema" in x["argv"] and '"answers"' in x["argv"][x["argv"].index("--json-schema") + 1])
+    judges = [x for x in calls if "--json-schema" in x["argv"] and '"items"' in x["argv"][x["argv"].index("--json-schema") + 1]
+              and '"names"' not in x["argv"][x["argv"].index("--json-schema") + 1]]
+    assert len(judges) == 3  # 열마다 한 번(답 하나씩)
+    for jc in judges:
+        for bad in ("case1", "case2", "case3", "claude-cli", "codex"):
+            assert bad not in jc["stdin"]  # 가림
+    judge = judges[0]
     a = judge["argv"]
     assert a[a.index("--model") + 1] == "claude-opus-5-5" and a[a.index("--effort") + 1] == "medium"
     cfg = json.loads(a[a.index("--mcp-config") + 1])["mcpServers"]["raw"]

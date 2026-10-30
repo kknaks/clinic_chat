@@ -36,12 +36,15 @@ if route:
     if kind == "codex":
         name = "codex.jsonl"
     elif "--json-schema" in argv:
-        name = "extract.jsonl" if '"names"' in argv[argv.index("--json-schema") + 1] else "judge.jsonl"
+        name = "extract.jsonl" if '"names"' in argv[argv.index("--json-schema") + 1] else "judge.jsonl"  # 절대 채점 {items}
     elif "--mcp-config" in argv:
         name = "tools.jsonl"
     else:
         name = "answer.jsonl"
     lines = str(Path(route) / name)
+    sl = Path(route) / name.replace(".jsonl", ".sleep")  # 호출 꼴마다 줄 간격(느린 채점 등)
+    if sl.is_file():
+        os.environ["FAKE_CLI_SLEEP"] = sl.read_text().strip()
 gap = float(os.environ.get("FAKE_CLI_SLEEP", "0.01"))
 if lines:
     for ln in Path(lines).read_text(encoding="utf-8").splitlines():

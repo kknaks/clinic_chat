@@ -71,7 +71,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert all(rec["cases"][c]["timing"]["t0"] == 0.0 for c in runner.CASES)
     assert all(rec["cases"][c]["error"] is None for c in runner.CASES), {c: rec["cases"][c]["error"] for c in runner.CASES}
     assert set(rec) == {"run_id", "asked_at", "question", "versions", "settings", "cases", "judge_order", "judge_seed",
-                        "cost", "provider"}
+                        "cost", "provider", "judge_mode"}
     assert rec["provider"] == "sdk" and rec["versions"]["answer_provider"] == "sdk" and rec["versions"]["auth_kind"] == "api"
     cost = rec["cost"]
     assert set(cost["cases"]) == set(runner.CASES) and cost["quality_usd"] is None

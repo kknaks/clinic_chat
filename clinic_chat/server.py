@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,7 +26,7 @@ from clinic_chat.clients.hub_mcp import HubMCP
 from clinic_chat.clients.hub_rest import HubRest
 from clinic_chat.config import ROOT, Settings, get_settings
 from clinic_chat.deps import NO_KEY, Deps
-from clinic_chat.llm import PROVIDERS, auth
+from clinic_chat.llm import PROVIDERS, auth, cli
 from clinic_chat.llm.specs import describe
 from clinic_chat.runs import RunStore, app_commit, now_iso
 
@@ -140,7 +139,7 @@ async def startup_check(deps: Deps) -> dict:
 
 def create_app(deps: Deps | None = None, *, check: bool = True, before_start: Any = None) -> FastAPI:
     """deps 를 주면 그것을 씀(시험 · 모의 판). before_start = 기동 전에 같은 이벤트 루프에서 부를 async 함수."""
-    state: dict[str, Any] = {"deps": deps, "runs": {}, "lock": asyncio.Lock(), "grading": set()}
+    state: dict[str, Any] = {"deps": deps, "runs": {}, "grading": set()}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -148,6 +147,7 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
             await before_start()
         d = state["deps"] or build_deps(get_settings())
         d.app_commit = d.app_commit or app_commit()
+        cli.MAX_CONCURRENT = max(1, d.settings.cli_max_concurrent)  # 동시 CLI 상한(답 · 채점 같이)
         state["deps"] = d
         state["store"] = RunStore(d.settings.runs_path)
         state["status"] = await startup_check(d) if check else {}
@@ -165,20 +165,27 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
         return rs
 
     async def run_and_store(rs: RunState, question: str, extra: dict | None, provider: str | None) -> dict | None:
-        """답 세 열(잠금 안 · 속도 측정) → 기록 → `answers_done`(화면은 여기서 다음 질문 가능) → 자동 채점은 잠금 밖에서
-        이어서(`quality_start` · word_check · judge · `quality_done`) → `run_done`."""
+        """답 세 열 → 열 하나가 끝나면 그 열 채점을 바로 백그라운드로(자동 채점 판) → 세 열 끝 = 기록 · `answers_done`
+        (화면은 여기서 다음 질문 가능) → 남은 채점이 끝나면 `run_done`. 질문 · 채점이 서로 막지 않음(잠금 없음 · CLI 동시 수만 상한)."""
         rec = None
+        tasks: list[asyncio.Task] = []
+        deps = state["deps"]
+        prov = provider or deps.settings.default_provider
+        auto = runner.auto_quality(deps.settings, prov) if prov in PROVIDERS else False
+
+        def case_done(c: str, r: dict) -> None:
+            if auto and r.get("answer") and not r.get("error"):
+                tasks.append(asyncio.create_task(grade_case_task(rs.run_id, c, question, r["answer"], rs.push)))
+
         try:
-            async with state["lock"]:  # 답 세 열은 한 번에 한 질문(속도 측정이 서로 섞이지 않게)
-                rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id, provider=provider,
-                                           quality=False)
+            rec = await runner.execute(deps, question, rs.push, run_id=rs.run_id, provider=provider, quality=False,
+                                       on_case_done=case_done)
             rec.update(extra or {})
             state["store"].append_run(rec)
-            auto = runner.auto_quality(state["deps"].settings, rec["provider"]) and \
-                any(c.get("answer") and not c.get("error") for c in rec["cases"].values())
-            rs.push("answers_done", {"run_id": rs.run_id, "auto_quality": auto})
-            if auto:
-                await grade(rs.run_id, rs.push)
+            rs.push("answers_done", {"run_id": rs.run_id, "auto_quality": bool(tasks)})
+            if tasks:
+                await asyncio.gather(*tasks)
+                rs.push("quality_done", {"run_id": rs.run_id})
         except Exception as e:  # noqa: BLE001 — 화면에 오류 이벤트로
             rs.push("error", {"message": f"{type(e).__name__}: {e}"[:500]})
         finally:
@@ -186,29 +193,27 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
                 rs.push("run_done", {"run_id": rs.run_id})
         return rec
 
-    async def grade(run_id: str, emit) -> dict | None:
-        """① · ② 채점 — quality.jsonl 에 덧붙임(기록 줄은 그대로). 자동(CLI 판) · 「채점」 버튼이 같이 씀."""
-        rec = state["store"].get_raw(run_id)
-        if rec is None or run_id in state["grading"]:
+    async def grade_case_task(run_id: str, case: str, question: str, answer: str, emit) -> dict | None:
+        """열 하나 채점 → quality.jsonl 에 그 열 한 줄(기록 줄은 그대로). 자동 · 「채점」 버튼이 같이 씀."""
+        key = (run_id, case)
+        if key in state["grading"]:
             return None
-        state["grading"].add(run_id)
-        emit("quality_start", {"run_id": run_id})
+        state["grading"].add(key)
         try:
-            cases = {c: {"answer": v.get("answer"), "error": v.get("error")} for c, v in rec["cases"].items()}
-            seed = random.randrange(2**31)
-            q = await runner.run_quality(state["deps"], rec["question"], cases, emit, seed)
-            entry = {"run_id": run_id, "at": now_iso(), "judge_order": q["judge_order"], "judge_seed": seed,
-                     "cost_usd": q["cost_usd"], "judge_usage": q.get("judge_usage"),
-                     "judge_provider": state["deps"].settings.judge_provider,
-                     "cases": {c: {k: v[k] for k in ("word_check", "judge") if k in v} for c, v in cases.items()}}
+            g = await runner.grade_case(state["deps"], question, case, answer, emit)
+            entry = {"run_id": run_id, "case": case, "at": now_iso(), "mode": g["mode"],
+                     "judge_provider": state["deps"].settings.judge_provider, "cost_usd": g["cost_usd"],
+                     "word_check": g["word_check"], "judge": g["judge"]}
             state["store"].add_quality(entry)
-            emit("quality_done", {"run_id": run_id, "cost_usd": q["cost_usd"]})
             return entry
-        except Exception as e:  # noqa: BLE001 — 채점 실패는 표시만(답 기록은 남음)
-            emit("quality_error", {"run_id": run_id, "message": f"{type(e).__name__}: {e}"[:300]})
+        except Exception as e:  # noqa: BLE001 — 채점 실패는 그 열 표시만(답 기록은 남음)
+            emit("case_quality_error", {"case": case, "message": f"{type(e).__name__}: {e}"[:300]})
             return None
         finally:
-            state["grading"].discard(run_id)
+            state["grading"].discard(key)
+
+    def grading_any(run_id: str) -> bool:
+        return any(k[0] == run_id for k in state["grading"])
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -249,7 +254,7 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
     async def list_runs(limit: int = 50) -> dict:
         rows = state["store"].list(limit=max(1, min(limit, 500)))
         for r in rows:
-            r["grading"] = r["run_id"] in state["grading"]  # 백그라운드 채점 중(화면 기록 표)
+            r["grading"] = grading_any(r["run_id"])  # 백그라운드 채점 중(화면 기록 표)
         return {"runs": rows}
 
     @app.get("/api/runs/{run_id}")
@@ -272,12 +277,16 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
     @app.post("/api/runs/{run_id}/quality")
     async def quality(run_id: str) -> dict:
         """「채점」 버튼 — ① 이름 뽑기 · ② Opus 채점을 이 기록의 답으로 돌려 quality.jsonl 에 덧붙임(기록 줄은 그대로)."""
-        if state["store"].get_raw(run_id) is None:
+        rec = state["store"].get_raw(run_id)
+        if rec is None:
             raise HTTPException(404, "기록 없음")
-        if run_id in state["grading"]:
+        if grading_any(run_id):
             raise HTTPException(409, "채점 중")
         rs = state["runs"].get(run_id)  # 그 질문 SSE 를 보고 있으면 같이 흘려 줌
-        await grade(run_id, rs.push if rs and not rs.done else (lambda e, d: None))
+        emit = rs.push if rs and not rs.done else (lambda e, d: None)
+        done = set(state["store"].latest_quality().get(run_id, {}))
+        todo = [c for c in runner.gradable(rec["cases"]) if c not in done]
+        await asyncio.gather(*(grade_case_task(run_id, c, rec["question"], rec["cases"][c]["answer"], emit) for c in todo))
         return {"record": state["store"].get(run_id)}
 
     @app.post("/api/runs/{run_id}/rerun")

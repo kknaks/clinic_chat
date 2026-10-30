@@ -8,6 +8,10 @@
   let lastRunId = null;
   let es = null;
   const grading = new Set();
+  let requesting = false;
+  const EVENTS = ["provider", "stage", "text", "trace", "case_done", "cost", "answers_done", "quality_start",
+                  "case_quality_start", "word_check", "judge", "case_quality_done", "case_quality_error",
+                  "quality_cost", "quality_done", "quality_error", "error", "run_done"];
   // 화면 보기 상태 — 다시 그려도 유지(열마다 따라가기 · 스크롤 위치 · 펼친 칸)
   let follow = {};
   let opened = new Set();
@@ -79,7 +83,7 @@
 
   function q1View(name, c) {
     const w = c.word_check;
-    if (!w) return el("div", { class: "muted" }, "① 대기");
+    if (!w) return el("div", { class: "muted" }, c.grading ? "① 채점 중…" : "① 대기");
     if (w.error) return el("div", { class: "bad" }, `① 오류: ${w.error}`);
     return el("details", { "data-key": `${name}:q1` }, el("summary", {}, el("span", { class: w.not_found ? "bad" : "ok" }, `① 없는 이름 ${w.not_found}`),
       ` / ${w.names.length}`),
@@ -89,11 +93,11 @@
 
   function q2View(c) {
     const j = c.judge;
-    if (!j) return el("div", { class: "muted" }, "② 대기");
+    if (!j) return el("div", { class: "muted" }, c.grading ? "② 채점 중…" : "② 대기");
     if (j.error) return el("div", { class: "bad" }, `② 오류: ${j.error}`);
     const mark = (v) => (v === "통과" ? "●" : v === "실패" ? "✕" : "–");
     return el("div", { class: "q2" },
-      el("div", {}, `② ${j.label ? `(${j.label}) ` : ""}통과 ${j.pass_count}/5 `,
+      el("div", {}, `② ${j.label ? `(${j.label}) ` : ""}통과 ${j.pass_count}/5 ${j.mode === "absolute" ? "(절대) " : ""}`,
         ...Object.keys(ITEMS).map((k) => el("span", { class: (j.items || {})[k] === "실패" ? "bad" : (j.items || {})[k] === "통과" ? "ok" : "muted", title: ITEMS[k] }, mark((j.items || {})[k]) + " "))),
       (j.failures || []).length ? el("ul", {}, j.failures.map((f) => el("li", { class: f.status === "invalid" ? "invalid" : "bad" },
         `${ITEMS[f.item] || f.item}: ${f.claim}${f.status === "invalid" ? " (근거 무효)" : ""}`,
@@ -137,7 +141,10 @@
       if (c.error) badges.push(el("span", { class: "badge bad" }, c.error === S.NO_KEY ? S.NO_KEY : "오류"));
       if (c.refusal) badges.push(el("span", { class: "badge bad" }, "거절"));
       if (c.loop_capped) badges.push(el("span", { class: "badge" }, "도구 상한"));
-      if (!c.done && cur.run_id && !c.error) badges.push(el("span", { class: "badge" }, "도는 중"));
+      if (!c.done && cur.run_id && !c.error && !cur.stream_lost) badges.push(el("span", { class: "badge" }, "도는 중"));
+      if (c.grading) badges.push(el("span", { class: "badge" }, "채점 중"));
+      if (c.quality_error) badges.push(el("span", { class: "badge bad", title: c.quality_error }, "채점 실패"));
+      if (cur.stream_lost && !c.done) badges.push(el("span", { class: "badge bad" }, "연결 끊김 — 기록 표에서 보기"));
       const t = c.timing || {};
       cols.append(el("section", { class: "col", "data-case": name },
         el("h3", {}, TITLE[name], ...badges),
@@ -159,45 +166,76 @@
       a.scrollTop = follow[c] ? a.scrollHeight : (scrolls[c] || 0);
       a.addEventListener("scroll", () => { follow[c] = S.atBottom(a.scrollTop, a.clientHeight, a.scrollHeight); });
     }
-    $("rerun").disabled = !(cur.done && cur.run_id);
-    const graded = (cur.judge_order || []).length > 0;
-    $("grade").disabled = !(cur.done && cur.run_id) || graded || grading.has(cur.run_id);
-    $("grade").textContent = graded ? "채점 끝(①②)" : grading.has(cur.run_id) ? "채점 중…" : "채점 ①②";
+    const ready = cur.run_id && (cur.answers_done || cur.done);
+    $("rerun").disabled = !ready || requesting;
+    const graded = cur.graded || (cur.judge_order || []).length > 0;
+    const busyGrade = cur.grading || grading.has(cur.run_id);
+    $("grade").disabled = !ready || graded || busyGrade;
+    $("grade").textContent = graded ? "채점 끝(①②)" : busyGrade ? "채점 중…" : "채점 ①②";
+    const sb = S.sendState(cur, requesting);
+    $("send").disabled = sb.disabled;
+    $("send").textContent = sb.label;
+    $("send").title = sb.title;
   }
 
+  // SSE — 답 세 열이 끝나면(answers_done) 약속을 풂(다음 질문 가능) · 채점 이벤트는 run_done 까지 계속 받음
   function subscribe(runId, onState) {
     return new Promise((resolve) => {
       const st = S.initial(runId, "", disabled);
       const src = new EventSource(`/api/runs/${runId}/events`);
-      for (const type of ["stage", "text", "trace", "case_done", "word_check", "judge", "cost", "quality_cost", "error", "run_done"]) {
+      let settled = false;
+      const settle = () => { if (!settled) { settled = true; resolve(st); } };
+      for (const type of EVENTS) {
         src.addEventListener(type, (ev) => {
-          S.reduce(st, type, JSON.parse(ev.data));
+          if (type === "error" && !ev.data) return;  // 연결 오류(이름이 같음) — onerror 에서
+          let data = {};
+          try { data = JSON.parse(ev.data); } catch (e) { return; }
+          S.reduce(st, type, data);
           if (onState) onState(st);
-          if (type === "run_done") { src.close(); resolve(st); }
+          if (type === "answers_done") settle();
+          if (type === "run_done") { src.close(); settle(); if (st.graded) loadRuns(); }
+          if (type === "quality_done" || type === "quality_error") loadRuns();
         });
       }
-      src.onerror = () => { src.close(); resolve(st); };
+      src.onerror = () => {  // 끊김 · 서버 재시작 · 시간 초과 — 상태를 풀고 기록 표로
+        if (src.readyState === EventSource.CLOSED || !st.done) {
+          st.stream_lost = !st.done;
+          src.close();
+          if (onState) onState(st);
+          settle();
+        }
+      };
       es = src;
     });
   }
 
   async function ask(question) {
-    if (es) es.close();
-    $("send").disabled = true;
+    if (es) es.close();  // 이전 질문의 채점은 서버에서 계속 — 기록 표에 채워짐
+    requesting = true;
     $("rerun-out").textContent = "";
     $("q").value = "";  // 보낸 뒤 비움(질문은 기록 표 · 열 위 줄에 남음)
     resetView();
     cur = S.initial(null, question, disabled);  // 이전 결과를 바로 비움
     render();
-    const provider = $("provider").value || null;
-    const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question, provider }) });
-    const { run_id } = await r.json();
-    lastRunId = run_id;
-    cur = S.initial(run_id, question, disabled);
-    render();
-    await subscribe(run_id, (st) => { st.question = question; cur = st; render(); });
-    $("send").disabled = false;
-    loadRuns();
+    try {
+      const provider = $("provider").value || null;
+      const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question, provider }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.run_id) throw new Error(d.detail || `보내기 실패 ${r.status}`);
+      lastRunId = d.run_id;
+      cur = S.initial(d.run_id, question, disabled);
+      requesting = false;
+      render();
+      loadRuns();
+      await subscribe(d.run_id, (st) => { st.question = question; cur = st; render(); });
+    } catch (e) {
+      cur.errors.push(String(e.message || e));
+      $("current").textContent = `질문: ${question}  ·  오류: ${e.message || e}`;
+    } finally {
+      requesting = false;
+      render();
+      loadRuns();
+    }
   }
 
   async function rerun() {
@@ -235,9 +273,16 @@
     }
   }
 
+  let runsTimer = null;
   async function loadRuns() {
-    const r = await fetch("/api/runs?limit=100");
-    const { runs } = await r.json();
+    let runs = [];
+    try {
+      const r = await fetch("/api/runs?limit=100");
+      if (!r.ok) return;
+      runs = (await r.json()).runs || [];
+    } catch (e) { return; }
+    clearTimeout(runsTimer);
+    if (runs.some((x) => x.grading)) runsTimer = setTimeout(loadRuns, 4000);  // 백그라운드 채점이 끝나면 채움
     const tb = document.querySelector("#runs tbody");
     tb.replaceChildren(...runs.map((x) => {
       const cs = x.cases || {};
@@ -251,7 +296,7 @@
         ...S.CASES.map((c) => el("td", {}, (cs[c] || {}).error ? "오류" : ms((cs[c] || {}).total_ms))),
         el("td", {}, nf), el("td", {}, jp), el("td", {}, hu),
         el("td", { title: "답 합계(+채점)" }, S.fmtUsd((x.cost || {}).total_usd ?? (x.cost || {}).answers_usd)),
-        el("td", {}, x.graded ? "끝" : (() => {
+        el("td", {}, x.grading ? "채점 중…" : x.graded ? "끝" : (() => {
           const b = el("button", { type: "button", class: "mini" }, grading.has(x.run_id) ? "채점 중…" : "채점");
           b.disabled = grading.has(x.run_id);
           b.addEventListener("click", (e) => { e.stopPropagation(); grade(x.run_id); });

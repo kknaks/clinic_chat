@@ -45,17 +45,25 @@ class CaseTimer:
             if self.emit_stage:
                 self.emit_stage(dict(st))
 
-    def open_stage(self, name: str, **extra: Any) -> dict:
-        """스트림 이벤트로 여닫는 단계(CLI) — close_stage 로 닫음."""
-        st = {"name": name, "start_ms": self.clock.ms(), "end_ms": None, **extra}
+    def open_stage(self, name: str, at: float | None = None, **extra: Any) -> dict:
+        """스트림 이벤트로 여닫는 단계(CLI) — 열 때도 알림(화면이 지금 무엇을 하는지 바로 그림) · close_stage 로 닫음.
+        at = 앞 단계를 닫은 같은 시각(붙은 단계 사이에 틈이 생기지 않게)."""
+        st = {"name": name, "start_ms": self.clock.ms() if at is None else at, "end_ms": None, **extra}
         self.stages.append(st)
+        self.touch(st)
         return st
 
-    def close_stage(self, st: dict) -> None:
+    def touch(self, st: dict) -> None:
+        """열린 단계의 칸이 바뀜(예: 생각 중) — 다시 알림."""
+        if self.emit_stage:
+            self.emit_stage(dict(st))
+
+    def close_stage(self, st: dict, at: float | None = None) -> float:
         if st.get("end_ms") is None:
-            st["end_ms"] = self.clock.ms()
+            st["end_ms"] = self.clock.ms() if at is None else at
             if self.emit_stage:
                 self.emit_stage(dict(st))
+        return st["end_ms"]
 
     def close_open(self) -> None:
         for st in self.stages:

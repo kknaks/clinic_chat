@@ -64,27 +64,26 @@ async def test_extract_input_is_answer_only(deps_factory):
 ANSWERS = {"case1": "답 하나 fixture", "case2": "답 둘 fixture", "case3": "답 셋 fixture"}
 
 
-async def test_judge_blind_evidence_and_no_hub(deps_factory, hub):
+async def test_judge_one_absolute_blind_evidence_and_no_hub(deps_factory, hub):
+    """② 절대 채점 — 답 하나씩 · 가림(질문 + 답 원문만) · 근거 확인 · 허브 호출 0."""
     fa = FakeAnthropic(quality_policy)
     deps = deps_factory(anthropic=fa)
-    order = judge.blind_order(list(ANSWERS), 11)
-    r = await judge.judge(deps, "소프웨이브 사우나?", ANSWERS, order)
+    a = await judge.judge_one(deps, "소프웨이브 사우나?", ANSWERS["case1"])
     first = fa.calls[0]["messages"][0]["content"]
-    for bad in ("case1", "case2", "case3", "raw_search", "resolve", "ms", "ttft"):
-        assert bad not in first  # 가리기
-    assert all(f"답 {lab}" in first for lab in "ABC")
+    assert first == judge.judge_input("소프웨이브 사우나?", ANSWERS["case1"])
+    for bad in ("case1", "case2", "case3", "답 둘", "답 셋", "claude-cli", "provider", "ttft", "raw_search"):
+        assert bad not in first  # 다른 답 · case 이름 · provider · 흔적 없음
     for p in fa.calls:
         assert p["model"] == "claude-opus-5-5" and p["output_config"]["effort"] == "medium" and "thinking" not in p
         assert p["tool_choice"]["type"] in ("auto", "none")
         assert [t["name"] for t in p["tools"]] == ["raw_list", "raw_get", "raw_search"]
-    assert fa.calls[-1]["output_config"]["format"]["type"] == "json_schema"
-    assert r["tool_calls"] == 1
-    a_case, b_case = order[0], order[1]
-    fa_ = r["per_case"][a_case]["failures"][0]
-    assert fa_["item"] == "accuracy" and fa_["status"] == "valid"  # 맞는 경로 · 있는 quote
-    fb = r["per_case"][b_case]["failures"][0]
-    assert fb["status"] == "invalid"  # 없는 quote
-    assert r["per_case"][order[2]]["pass_count"] == 5
+    assert fa.calls[-1]["output_config"]["format"]["schema"] == judge.JUDGE_SCHEMA
+    assert a["mode"] == "absolute" and a["tool_calls"] == 1
+    assert a["failures"][0]["item"] == "accuracy" and a["failures"][0]["status"] == "valid"  # 맞는 경로 · 있는 quote
+    b = await judge.judge_one(deps, "q", ANSWERS["case2"])
+    assert b["failures"][0]["status"] == "invalid" and b["invalid_count"] == 1  # 없는 quote
+    c = await judge.judge_one(deps, "q", ANSWERS["case3"])
+    assert c["pass_count"] == 5 and c["failures"] == []
     assert hub.calls == []  # 채점 경로 허브 호출 0
 
 
@@ -98,10 +97,16 @@ def test_evidence_check(deps_factory):
     assert not judge.check_evidence(st, None)
 
 
-def test_blind_order_seed():
-    cs = ["case1", "case2", "case3"]
-    assert judge.blind_order(cs, 5) == judge.blind_order(cs, 5)
-    assert len({tuple(judge.blind_order(cs, s)) for s in range(20)}) > 1
+async def test_grade_case_per_column_events(deps_factory):
+    from clinic_chat import runner
+
+    fa = FakeAnthropic(quality_policy)
+    deps = deps_factory(anthropic=fa)
+    evs: list[tuple[str, dict]] = []
+    g = await runner.grade_case(deps, "q", "case2", "소프웨이브 권합니다", lambda e, d: evs.append((e, d)))
+    assert [e for e, _ in evs] == ["case_quality_start", "word_check", "judge", "case_quality_done"]
+    assert all(d["case"] == "case2" for _, d in evs)
+    assert g["judge"]["pass_count"] == 5 and g["cost_usd"] > 0 and g["mode"] == "absolute"
 
 
 # 로컬 원장 도구 3 — SPEC-005 §5-12 계약 꼴
@@ -166,7 +171,7 @@ async def test_quality_usage_and_cost_recorded(deps_factory):
     deps = deps_factory(anthropic=fa)
     wc = await word_check.check_answer(deps, "소프웨이브 권합니다")
     assert wc["usage"]["input_tokens"] == 100 and wc["cost_usd"] > 0
-    jr = await judge.judge(deps, "q", ANSWERS, judge.blind_order(list(ANSWERS), 1))
+    jr = await judge.judge_one(deps, "q", ANSWERS["case3"])
     assert jr["calls"] == len(fa.calls) - 1 and jr["usage"]["input_tokens"] == 100 * jr["calls"]
     assert jr["cost_usd"] > 0
     for p in fa.calls[1:]:

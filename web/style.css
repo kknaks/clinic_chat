@@ -32,6 +32,8 @@ button:disabled { opacity: .5; cursor: default; }
 .stagebar span { position: absolute; top: 0; bottom: 0; min-width: 3px; box-shadow: inset -1px 0 0 var(--panel); }
 .s-claude { background: var(--claude); } .s-tool { background: var(--tool); }
 .s-hub { background: var(--hub); } .s-jev { background: var(--jev); } .s-boot { background: var(--boot); }
+.s-gap { background: repeating-linear-gradient(45deg, var(--line) 0 3px, transparent 3px 6px); }
+.dot.s-gap { border: 1px solid var(--muted); }
 #provider { padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); max-width: 40%; }
 .prov { font-size: 12px; margin-bottom: 2px; }
 details.batch { margin-top: 16px; } .batch-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }

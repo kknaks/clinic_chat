@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     codex_service_tier: str = ""  # 비면 CLI 기본
     cli_timeout_sec: float = 600  # 도구 루프 상한 대신(CLI 에 칸 없음 · D-3)
     cli_max_budget_usd: float = 1.0  # Claude --max-budget-usd(추정 $ 상한)
+    cli_max_concurrent: int = 6  # 동시에 띄우는 CLI 수 상한(답 세 열 + 열마다 채점 · 질문끼리 공유) — 넘으면 cli_queue 로 기다림
     judge_provider: str = "claude-cli"  # ① · ② 채점 provider(Opus) — claude-cli(기본) · sdk
     judge_cli_effort: str = "medium"
     extract_cli_effort: str = "low"

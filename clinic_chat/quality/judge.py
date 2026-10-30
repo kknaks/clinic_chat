@@ -1,14 +1,15 @@
-"""② Opus 채점(SPEC-006 §5-2) — 가리기(seed 로 섞어 A · B · C) · 원장 도구 3(앱 안 로컬 · R-10) · 항목 5 × 답 3.
+"""② Opus 채점 — **답 하나씩 같은 기준으로 절대 채점**(10-30 사용자: 열마다 따로 · 끝나는 대로).
 
-effort medium · thinking 기본 · tool_choice auto · 도구 루프(상한 CASE_TOOL_LOOP_MAX) 뒤 마지막 응답을 구조화 출력으로.
-실패 근거 `{file, path, quote}` 는 원장 로컬 파일로 확인 → quote 가 그 경로 원문에 없으면 `invalid`.
+SPEC-006 §5-2 는 세 답을 섞어 A · B · C 로 한 번에 비교했다 → 지금은 열 답 하나를 받아 항목 5 를 매긴다(SPEC 다른 점).
+가리기는 유지: 채점 입력에 case 이름 · provider · 도구 흔적 · 속도 · 다른 답이 없다(질문 + 답 원문만).
+원장 도구 3(앱 안 로컬 · R-10 · CLI 판은 로컬 stdio MCP) · 실패 근거 `{file, path, quote}` 를 원장 로컬 파일로 확인 → 없으면 `invalid`.
+sdk 판: effort medium · 도구 루프(상한 CASE_TOOL_LOOP_MAX) 뒤 구조화 출력 / CLI 판: Claude CLI Opus · --json-schema.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import random
 from typing import Any
 
 from clinic_chat import prompts
@@ -20,39 +21,24 @@ from clinic_chat.quality.word_check import final_text
 
 ITEMS = ["accuracy", "safety", "candidates", "uncertainty", "on_topic"]
 VERDICTS = ["통과", "실패", "해당 없음"]
-LABELS = ["A", "B", "C"]
 JUDGE_EFFORT = "medium"
-JUDGE_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["answers"],
-    "properties": {"answers": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False, "required": ["label", "items"],
-        "properties": {
-            "label": {"type": "string", "enum": LABELS},
-            "items": {"type": "array", "items": {
-                "type": "object", "additionalProperties": False, "required": ["item", "verdict", "claim", "evidence"],
-                "properties": {
-                    "item": {"type": "string", "enum": ITEMS},
-                    "verdict": {"type": "string", "enum": VERDICTS},
-                    "claim": {"type": "string"},
-                    "evidence": {"anyOf": [{"type": "null"}, {
-                        "type": "object", "additionalProperties": False, "required": ["file", "path", "quote"],
-                        "properties": {"file": {"type": "string"}, "path": {"type": "string"},
-                                       "quote": {"type": "string"}}}]}}}}}}}},
-}
+MODE = "absolute"
+ITEM_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["item", "verdict", "claim", "evidence"],
+    "properties": {
+        "item": {"type": "string", "enum": ITEMS},
+        "verdict": {"type": "string", "enum": VERDICTS},
+        "claim": {"type": "string"},
+        "evidence": {"anyOf": [{"type": "null"}, {
+            "type": "object", "additionalProperties": False, "required": ["file", "path", "quote"],
+            "properties": {"file": {"type": "string"}, "path": {"type": "string"}, "quote": {"type": "string"}}}]}}}
+JUDGE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["items"],
+                "properties": {"items": {"type": "array", "items": ITEM_SCHEMA}}}
 
 
-def blind_order(cases: list[str], seed: int) -> list[str]:
-    order = list(cases)
-    random.Random(seed).shuffle(order)
-    return order
-
-
-def judge_input(question: str, answers: dict[str, str], order: list[str]) -> str:
-    """가린 입력 — 답 원문만(case 이름 · 도구 흔적 · 속도 없음)."""
-    parts = [f"질문: {question}", ""]
-    for label, c in zip(LABELS, order):
-        parts += [f"--- 답 {label} ---", answers[c], ""]
-    return "\n".join(parts)
+def judge_input(question: str, answer: str) -> str:
+    """가린 입력 — 질문 + 답 원문만(case 이름 · provider · 도구 흔적 · 속도 · 다른 답 없음)."""
+    return f"질문: {question}\n\n--- 답 ---\n{answer}\n"
 
 
 def _strings(v: Any):
@@ -81,6 +67,19 @@ def check_evidence(store: Any, ev: dict | None) -> bool:
     return any(ev["quote"] in s for s in _strings(v))
 
 
+def verdicts(data: dict, store: Any) -> dict:
+    """구조화 출력 {items:[…]} → {items: {항목: 판정}, failures, pass_count, invalid_count}."""
+    items, failures = {}, []
+    for it in data.get("items", []):
+        items[it["item"]] = it["verdict"]
+        if it["verdict"] == "실패":
+            valid = check_evidence(store, it.get("evidence"))
+            failures.append({"item": it["item"], "claim": it["claim"], "evidence": it.get("evidence"),
+                             "status": "valid" if valid else "invalid"})
+    return {"items": items, "failures": failures, "pass_count": sum(1 for v in items.values() if v == "통과"),
+            "invalid_count": sum(1 for f in failures if f["status"] == "invalid")}
+
+
 async def _tool(store: Any, name: str, args: dict) -> tuple[str, bool]:
     try:
         return json.dumps(store.call(name, args), ensure_ascii=False), False
@@ -88,28 +87,8 @@ async def _tool(store: Any, name: str, args: dict) -> tuple[str, bool]:
         return f"오류: {e}", True
 
 
-def per_case_from(data: dict, order: list[str], store: Any) -> dict[str, dict]:
-    label_case = dict(zip(LABELS, order))
-    per_case: dict[str, dict] = {}
-    for a in data.get("answers", []):
-        c = label_case.get(a["label"])
-        if c is None:
-            continue
-        items, failures = {}, []
-        for it in a["items"]:
-            items[it["item"]] = it["verdict"]
-            if it["verdict"] == "실패":
-                valid = check_evidence(store, it.get("evidence"))
-                failures.append({"item": it["item"], "answer": a["label"], "claim": it["claim"],
-                                 "evidence": it.get("evidence"), "status": "valid" if valid else "invalid"})
-        per_case[c] = {"label": a["label"], "items": items, "failures": failures,
-                       "pass_count": sum(1 for v in items.values() if v == "통과"),
-                       "invalid_count": sum(1 for f in failures if f["status"] == "invalid")}
-    return per_case
-
-
-async def judge_cli(deps: Deps, question: str, answers: dict[str, str], order: list[str]) -> dict:
-    """② 채점 — Claude CLI Opus · 원장 도구 3 = 로컬 stdio MCP(raw_mcp) · --json-schema 로 마지막 답."""
+async def judge_one_cli(deps: Deps, question: str, answer: str) -> dict:
+    """Claude CLI Opus · 원장 도구 3 = 로컬 stdio MCP(raw_mcp) · --json-schema 로 마지막 답."""
     import sys
 
     from clinic_chat.config import ROOT
@@ -121,47 +100,44 @@ async def judge_cli(deps: Deps, question: str, answers: dict[str, str], order: l
     s = deps.settings
     raw = McpAttach("raw", command=sys.executable, args=["-m", "clinic_chat.quality.raw_mcp"],
                     env={"RAW_DIR": s.raw_dir, "PYTHONPATH": str(ROOT)})
-    prompt = judge_input(question, answers, order) + "\n\n자료 확인을 마치면 채점 결과를 지정된 JSON 꼴로만 내라."
+    prompt = judge_input(question, answer) + "\n자료 확인을 마치면 채점 결과를 지정된 JSON 꼴로만 내라."
     c = Clock(now=deps.now)
     c.start()
     r = await cli.run(judge_spec(s, "judge"), system=prompts.load("judge"), prompt=prompt, timer=CaseTimer(c),
                       on_text=lambda t: None, mcp=raw, schema=JUDGE_SCHEMA)
     if r["error"] or not isinstance(r.get("structured"), dict):
         raise RuntimeError(r["error"] or "채점 구조화 출력 없음")
-    return {"per_case": per_case_from(r["structured"], order, deps.raw_store), "rounds": r["timing"].get("llm_round_trips"),
-            "tool_calls": len(r["trace"]["tool_calls"]), "judge_model": s.judge_model, "provider": "claude-cli",
-            "usage": (r["tokens"] or {}).get("total", {}), "cost_usd": r["cost"].get("usd_estimate"),
-            "billed": "subscription", "calls": 1, "cli": r["trace"]["cli"]}
+    return {**verdicts(r["structured"], deps.raw_store), "mode": MODE, "provider": "claude-cli",
+            "judge_model": s.judge_model, "rounds": r["timing"].get("llm_round_trips"),
+            "tool_calls": len(r["trace"]["tool_calls"]), "usage": (r["tokens"] or {}).get("total", {}),
+            "cost_usd": r["cost"].get("usd_estimate"), "billed": "subscription", "calls": 1,
+            "ms": r["timing"].get("total_ms")}
 
 
-async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[str]) -> dict:
+async def judge_one(deps: Deps, question: str, answer: str) -> dict:
+    """열 답 하나 채점(절대) — 결과 꼴은 sdk · CLI 같음."""
     if deps.raw_store is None:
         raise RuntimeError("RAW_DIR 필요")
     if deps.settings.judge_provider == "claude-cli":
-        return await judge_cli(deps, question, answers, order)
+        return await judge_one_cli(deps, question, answer)
     if deps.anthropic is None:
         raise RuntimeError(NO_KEY)
-    if deps.raw_store is None:
-        raise RuntimeError("RAW_DIR 필요")
     s = deps.settings
-    system = prompts.load("judge")
-    messages: list[dict] = [{"role": "user", "content": judge_input(question, answers, order)}]
+    messages: list[dict] = [{"role": "user", "content": judge_input(question, answer)}]
     # 캐시: 시스템(+도구) 표시 · 루프는 마지막 블록 자동 표시(바퀴마다 앞 대화를 캐시 읽기로)
-    base = {"model": s.judge_model, "max_tokens": 16000, "system": cached_system(system), "tools": RAW_TOOL_DEFS,
-            "cache_control": CACHE}
+    base = {"model": s.judge_model, "max_tokens": 16000, "system": cached_system(prompts.load("judge")),
+            "tools": RAW_TOOL_DEFS, "cache_control": CACHE}
     usages: list[dict] = []
-    tool_calls = 0
-    rounds = 0
+    tool_calls = rounds = 0
     while rounds < s.case_tool_loop_max:
         rounds += 1
         msg = await deps.anthropic.messages.create(**base, messages=messages, tool_choice={"type": "auto"},
                                                    output_config={"effort": JUDGE_EFFORT})
         usages.append(usage_dict(msg.usage))
         uses = [b for b in msg.content if b.type == "tool_use"]
-        if msg.stop_reason != "tool_use" or not uses:
-            messages.append({"role": "assistant", "content": [block_to_param(b) for b in msg.content]})
-            break
         messages.append({"role": "assistant", "content": [block_to_param(b) for b in msg.content]})
+        if msg.stop_reason != "tool_use" or not uses:
+            break
         outs = await asyncio.gather(*(_tool(deps.raw_store, b.name, dict(b.input or {})) for b in uses))
         tool_calls += len(uses)
         messages.append({"role": "user", "content": [
@@ -176,9 +152,6 @@ async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[
         output_config={"effort": JUDGE_EFFORT, "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}})
     usages.append(usage_dict(final.usage))
     data = json.loads(final_text(final))
-
-    per_case = per_case_from(data, order, deps.raw_store)
-    usage = sum_usage(usages)
-    return {"per_case": per_case, "rounds": rounds, "tool_calls": tool_calls, "judge_model": s.judge_model,
-            "usage": usage, "cost_usd": round(sum(cost_usd(s.judge_model, u) or 0 for u in usages), 6),
-            "calls": len(usages)}
+    return {**verdicts(data, deps.raw_store), "mode": MODE, "provider": "sdk", "judge_model": s.judge_model,
+            "rounds": rounds, "tool_calls": tool_calls, "usage": sum_usage(usages),
+            "cost_usd": round(sum(cost_usd(s.judge_model, u) or 0 for u in usages), 6), "calls": len(usages)}

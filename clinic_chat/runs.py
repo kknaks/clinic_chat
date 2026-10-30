@@ -62,9 +62,16 @@ class RunStore:
         self._append(QUALITY_FILE, entry)
 
     def latest_quality(self) -> dict[str, dict]:
+        """run_id → {case: 가장 나중 채점} — 열마다 채점 줄(case 칸) · 옛 한꺼번에 채점 줄(cases 칸) 둘 다."""
         out: dict[str, dict] = {}
         for q in self._read(QUALITY_FILE):
-            out[q["run_id"]] = q
+            per = out.setdefault(q["run_id"], {})
+            if q.get("case"):
+                per[q["case"]] = q
+            else:
+                for c, v in (q.get("cases") or {}).items():
+                    per[c] = {**v, "case": c, "at": q.get("at"), "cost_usd": None,
+                              "_run_cost": q.get("cost_usd"), "judge_order": q.get("judge_order")}
         return out
 
     def get_raw(self, run_id: str) -> dict | None:
@@ -104,22 +111,29 @@ class RunStore:
                         "provider": r.get("provider") or "sdk", "model": v.get("answer_model"),
                         "effort": v.get("answer_effort"), "batch_id": r.get("batch_id"),
                         "gold": gh[:8] if gh else None, "cases": cases, "rerun_of": r.get("rerun_of"),
-                        "cost": r.get("cost"), "graded": bool(r.get("judge_order"))})
+                        "cost": r.get("cost"), "graded": bool(r.get("graded_cases") or r.get("judge_order"))})
         return out
 
 
-def merge_quality(rec: dict, q: dict | None) -> dict:
-    if not q:
+def merge_quality(rec: dict, per_case: dict | None) -> dict:
+    """기록 줄 + 열마다 나중 채점(quality.jsonl)을 겹친 보기 — 기록 줄은 고치지 않는다."""
+    if not per_case:
         return rec
     rec = {**rec, "cases": {c: dict(v) for c, v in (rec.get("cases") or {}).items()}}
-    for c, v in (q.get("cases") or {}).items():
+    q_cost, run_costs, ats = 0.0, set(), []
+    for c, v in per_case.items():
         if c in rec["cases"]:
             rec["cases"][c].update({k: v[k] for k in ("word_check", "judge") if k in v})
-    rec["judge_order"] = q.get("judge_order") or rec.get("judge_order")
-    rec["judge_seed"] = q.get("judge_seed", rec.get("judge_seed"))
+        if v.get("cost_usd") is not None:
+            q_cost += v["cost_usd"]
+        elif v.get("_run_cost") is not None:
+            run_costs.add(v["_run_cost"])
+        ats.append(v.get("at") or "")
+    q_cost = round(q_cost + sum(run_costs), 6)
     cost = dict(rec.get("cost") or {})
-    cost["quality_usd"] = q.get("cost_usd")
-    cost["total_usd"] = round((cost.get("answers_usd") or 0.0) + (q.get("cost_usd") or 0.0), 6)
+    cost["quality_usd"] = q_cost
+    cost["total_usd"] = round((cost.get("answers_usd") or 0.0) + q_cost, 6)
     rec["cost"] = cost
-    rec["quality_at"] = q.get("at")
+    rec["graded_cases"] = sorted(per_case)
+    rec["quality_at"] = max(ats) if ats else None
     return rec
