@@ -1,12 +1,12 @@
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
-  --warn-bg: #fff4d6; --warn: #7a5300; --ok: #1f7a3a; --bad: #b3261e; --invalid: #9a9a9a;
+  --ok: #1f7a3a; --bad: #b3261e; --invalid: #9a9a9a;
   --claude: #5b6cff; --tool: #f0a020; --hub: #2aa198; --jev: #c2410c;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #161618; --panel: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #333338;
-    --warn-bg: #3a2f10; --warn: #f5d27a; --ok: #6fd18c; --bad: #ff7a70; --invalid: #77777d;
+    --ok: #6fd18c; --bad: #ff7a70; --invalid: #77777d;
   }
 }
 * { box-sizing: border-box; }
@@ -14,7 +14,6 @@ body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
   font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif; }
 h2 { font-size: 15px; margin: 24px 0 8px; }
 .muted { color: var(--muted); }
-.warn { background: var(--warn-bg); color: var(--warn); padding: 8px 12px; border-radius: 6px; margin: 0 0 10px; }
 form#ask { display: flex; gap: 8px; }
 #q { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: var(--text); font-size: 15px; }

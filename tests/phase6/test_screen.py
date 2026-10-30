@@ -164,4 +164,6 @@ def test_page_layout_contract(client):
     assert "height: 60vh" in css and "overflow-y: auto" in css
     assert '$("q").value = "";' in js and "resetView();" in js
     assert 'class: "below"' in js and "S.atBottom(" in js
-    assert 'id="current"' in client.get("/").text
+    page = client.get("/").text
+    assert 'id="current"' in page
+    assert 'class="warn"' not in page  # 경고 줄은 화면에서 뺌(10-30 사용자) — 규칙은 README · SPEC 에
