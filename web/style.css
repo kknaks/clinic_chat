@@ -33,8 +33,9 @@ button:disabled { opacity: .5; cursor: default; }
 .s-claude { background: var(--claude); } .s-tool { background: var(--tool); }
 .s-hub { background: var(--hub); } .s-jev { background: var(--jev); }
 .legend { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-.answer { white-space: pre-wrap; word-break: break-word; min-height: 3em; border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line); padding: 8px 0; margin: 6px 0; }
+.answer { white-space: pre-wrap; word-break: break-word; height: 60vh; overflow-y: auto; overscroll-behavior: contain;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 4px 8px 0; margin: 6px 0; }
+.current { margin: 12px 0 0; font-weight: 600; }
 details { margin: 6px 0; }
 summary { cursor: pointer; color: var(--muted); }
 pre.mini { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: var(--bg);

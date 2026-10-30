@@ -97,7 +97,12 @@
 
   function notFound(c) { return c.word_check && typeof c.word_check.not_found === "number" ? c.word_check.not_found : null; }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound };
+  // 답 영역 스크롤 — 바닥 근처(px 여유)면 스트리밍을 따라감 · 위로 올리면 멈춤
+  function atBottom(scrollTop, clientHeight, scrollHeight, slack) {
+    return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
+  }
+
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);

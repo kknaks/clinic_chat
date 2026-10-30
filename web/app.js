@@ -7,6 +7,14 @@
   let cur = S.initial();
   let lastRunId = null;
   let es = null;
+  // 화면 보기 상태 — 다시 그려도 유지(열마다 따라가기 · 스크롤 위치 · 펼친 칸)
+  let follow = {};
+  let opened = new Set();
+  function resetView() {
+    follow = Object.fromEntries(S.CASES.map((c) => [c, true]));
+    opened = new Set();
+  }
+  resetView();
   const $ = (id) => document.getElementById(id);
 
   function el(tag, attrs, ...kids) {
@@ -44,26 +52,26 @@
           `${k}: ${v.value ?? "–"} · conf ${v.confidence}${v.low_confidence ? " ⚠ 낮음" : ""}${v.reduced ? " · ①로 줄임" : ""}`));
       }
       return [
-        el("details", {}, el("summary", {}, `Jev 의도 · 슬롯 (${j.model || "–"} · 입력 토큰 ${(j.usage || {}).input_tokens ?? "–"})`),
+        el("details", { "data-key": "case3:jev" }, el("summary", {}, `Jev 의도 · 슬롯 (${j.model || "–"} · 입력 토큰 ${(j.usage || {}).input_tokens ?? "–"})`),
           el("ul", {}, rows)),
-        el("details", {}, el("summary", {}, `허브 경로 ${h.path || "–"} → ${h.tool || "(도구 없음)"} · 노드 ${(h.node_ids || []).length}`),
+        el("details", { "data-key": "case3:hub" }, el("summary", {}, `허브 경로 ${h.path || "–"} → ${h.tool || "(도구 없음)"} · 노드 ${(h.node_ids || []).length}`),
           el("pre", { class: "mini" }, JSON.stringify({ input: h.input, missing: h.missing, resolve: h.resolve, node_ids: h.node_ids }, null, 1))),
       ];
     }
     const calls = t.tool_calls || [];
     const label = name === "case1" ? "원장 도구" : "도구 호출";
     const tok = Object.values(c.tokens || {}).reduce((a, x) => a + (x.input_tokens || 0) + (x.output_tokens || 0), 0);
-    return [el("details", {}, el("summary", {}, `${label} ${calls.length} · 토큰 ${tok}`),
+    return [el("details", { "data-key": `${name}:tools` }, el("summary", {}, `${label} ${calls.length} · 토큰 ${tok}`),
       el("ul", {}, calls.map((x) => el("li", { class: x.is_error ? "bad" : "" },
         el("code", {}, `${x.tool} ${JSON.stringify(x.input)}`), ` · ${x.output_bytes} B · ${ms(x.ms)}`,
         name === "case2" && x.node_ids && x.node_ids.length ? el("div", { class: "muted" }, x.node_ids.join(", ")) : null))))];
   }
 
-  function q1View(c) {
+  function q1View(name, c) {
     const w = c.word_check;
     if (!w) return el("div", { class: "muted" }, "① 대기");
     if (w.error) return el("div", { class: "bad" }, `① 오류: ${w.error}`);
-    return el("details", {}, el("summary", {}, el("span", { class: w.not_found ? "bad" : "ok" }, `① 없는 이름 ${w.not_found}`),
+    return el("details", { "data-key": `${name}:q1` }, el("summary", {}, el("span", { class: w.not_found ? "bad" : "ok" }, `① 없는 이름 ${w.not_found}`),
       ` / ${w.names.length}`),
       el("ul", { class: "q1" }, w.names.map((n) => el("li", { class: n.found ? "ok" : "bad" },
         `${n.found ? "✓" : "✕"} ${n.name}${n.via ? ` (${n.via})` : ""}`))));
@@ -99,7 +107,13 @@
 
   function render() {
     const cols = $("cols");
+    const scrolls = {};
+    for (const a of cols.querySelectorAll(".answer")) scrolls[a.dataset.case] = a.scrollTop;
+    for (const d of cols.querySelectorAll("details[data-key]")) {
+      if (d.open) opened.add(d.dataset.key); else opened.delete(d.dataset.key);
+    }
     cols.replaceChildren();
+    $("current").textContent = cur.question ? `질문: ${cur.question}` : "";
     const scale = S.scale(cur);
     for (const name of S.CASES) {
       const c = cur.cases[name];
@@ -114,8 +128,15 @@
         el("div", { class: "timing" }, `⏱ 첫 글자 ${ms(t.ttft_ms)} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`),
         stageBar(c, scale),
         el("div", { class: "legend" }, name === "case3" ? "▏hub ▓ jev ▏hub ▓ claude" : "▓ claude ▓ 도구"),
-        el("div", { class: "answer" }, c.text || (c.error && c.error !== S.NO_KEY ? c.error : "")),
-        ...traceView(name, c), q1View(c), q2View(c), cur.run_id ? humanView(name) : null));
+        el("div", { class: "answer", "data-case": name }, c.text || (c.error && c.error !== S.NO_KEY ? c.error : "")),
+        el("div", { class: "below" }, ...traceView(name, c), q1View(name, c), q2View(c),
+          cur.run_id ? humanView(name) : null)));
+    }
+    for (const d of cols.querySelectorAll("details[data-key]")) d.open = opened.has(d.dataset.key);
+    for (const a of cols.querySelectorAll(".answer")) {
+      const c = a.dataset.case;
+      a.scrollTop = follow[c] ? a.scrollHeight : (scrolls[c] || 0);
+      a.addEventListener("scroll", () => { follow[c] = S.atBottom(a.scrollTop, a.clientHeight, a.scrollHeight); });
     }
     $("rerun").disabled = !(cur.done && cur.run_id);
   }
@@ -140,6 +161,10 @@
     if (es) es.close();
     $("send").disabled = true;
     $("rerun-out").textContent = "";
+    $("q").value = "";  // 보낸 뒤 비움(질문은 기록 표 · 열 위 줄에 남음)
+    resetView();
+    cur = S.initial(null, question, disabled);  // 이전 결과를 바로 비움
+    render();
     const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question }) });
     const { run_id } = await r.json();
     lastRunId = run_id;
@@ -157,6 +182,7 @@
     const { run_ids, question } = await r.json();
     const done = [];
     for (const [i, id] of run_ids.entries()) {
+      resetView();
       $("rerun-out").textContent = `다시 ${i + 1}/${run_ids.length} 도는 중…`;
       done.push(await subscribe(id, (st) => { st.question = question; cur = st; render(); }));
     }
@@ -188,8 +214,8 @@
     if (!r.ok) return;
     const { record } = await r.json();
     if (es) es.close();
+    resetView();
     cur = S.fromRecord(record);
-    $("q").value = record.question;
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }

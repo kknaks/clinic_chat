@@ -132,3 +132,36 @@ def test_state_medians_and_from_record():
     assert m["case1"] == {"n": 3, "ttft_ms": 2, "total_ms": 20}
     assert s["cases"]["case1"]["text"] == "a" and s["cases"]["case1"]["word_check"]["not_found"] == 2
     assert s["cases"]["case2"]["judge"] is None
+
+
+@pytest.mark.skipif(NODE is None, reason="node 없음")
+def test_follow_scroll_and_new_question_clears():
+    """화면 피드백(10-30): 답 영역 따라가기는 바닥 근처일 때만 · 새 질문이면 세 열을 비운 상태에서 시작."""
+    script = (
+        "const S=require(process.argv[1]);"
+        "const old=S.initial('r0','옛 질문');S.reduce(old,'text',{case:'case1',delta:'옛 답'});"
+        "S.reduce(old,'case_done',{case:'case1',timing:{total_ms:9,stages:[]}});"
+        "S.reduce(old,'word_check',{case:'case1',not_found:1,names:[]});"
+        "const nu=S.initial(null,'새 질문');"
+        "console.log(JSON.stringify({b1:S.atBottom(600,400,1000),b2:S.atBottom(590,400,1000),"
+        "up:S.atBottom(100,400,1000),nu:nu,old_text:old.cases.case1.text}))"
+    )
+    out = json.loads(subprocess.run([NODE, "-e", script, str(ROOT / "web" / "state.js")], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out["b1"] is True and out["b2"] is True and out["up"] is False
+    assert out["old_text"] == "옛 답"
+    for c in ("case1", "case2", "case3"):
+        cs = out["nu"]["cases"][c]
+        assert cs["text"] == "" and cs["timing"] is None and cs["word_check"] is None and cs["judge"] is None
+        assert cs["stages"] == [] and cs["trace"] is None
+    assert out["nu"]["question"] == "새 질문"
+
+
+def test_page_layout_contract(client):
+    """답 영역 고정 높이 · 안에서 스크롤 · 보낸 뒤 입력창 비움 · 펼침 · 채점은 답 아래."""
+    css = client.get("/static/style.css").text
+    js = client.get("/static/app.js").text
+    assert "height: 60vh" in css and "overflow-y: auto" in css
+    assert '$("q").value = "";' in js and "resetView();" in js
+    assert 'class: "below"' in js and "S.atBottom(" in js
+    assert 'id="current"' in client.get("/").text
