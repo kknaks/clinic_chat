@@ -21,12 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from clinic_chat import runner
+from clinic_chat import batch, runner
 from clinic_chat.clients import anthropic_client, jev_client
 from clinic_chat.clients.hub_mcp import HubMCP
 from clinic_chat.clients.hub_rest import HubRest
 from clinic_chat.config import ROOT, Settings, get_settings
 from clinic_chat.deps import NO_KEY, Deps
+from clinic_chat.llm import PROVIDERS, auth
+from clinic_chat.llm.specs import describe
 from clinic_chat.runs import RunStore, app_commit, now_iso
 
 WEB = ROOT / "web"
@@ -40,6 +42,7 @@ class RunState:
     events: list[tuple[str, dict]] = field(default_factory=list)
     done: bool = False
     changed: asyncio.Event = field(default_factory=asyncio.Event)
+    task: Any = None
 
     def push(self, event: str, data: dict) -> None:
         self.events.append((event, data))
@@ -51,6 +54,12 @@ class RunState:
 
 class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    provider: str | None = None  # sdk · claude-cli · codex-cli(없으면 DEFAULT_PROVIDER)
+
+
+class BatchIn(BaseModel):
+    providers: list[str]
+    questions: list[int] | None = None
 
 
 class CheckIn(BaseModel):
@@ -144,24 +153,26 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
 
     app = FastAPI(title="clinic_chat hub-evals", lifespan=lifespan)
 
-    async def start_run(question: str, extra: dict | None = None, run_id: str | None = None) -> RunState:
+    async def start_run(question: str, extra: dict | None = None, run_id: str | None = None,
+                        provider: str | None = None) -> RunState:
         rs = RunState(run_id or runner.new_run_id(), question)
         state["runs"][rs.run_id] = rs
-
-        async def go():
-            try:
-                async with state["lock"]:  # 질문은 한 번에 하나(속도 측정이 서로 섞이지 않게)
-                    rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id)
-                rec.update(extra or {})
-                state["store"].append_run(rec)
-            except Exception as e:  # noqa: BLE001 — 화면에 오류 이벤트로
-                rs.push("error", {"message": f"{type(e).__name__}: {e}"[:500]})
-            finally:
-                if not rs.done:
-                    rs.push("run_done", {"run_id": rs.run_id})
-
-        asyncio.create_task(go())
+        rs.task = asyncio.create_task(run_and_store(rs, question, extra, provider))
         return rs
+
+    async def run_and_store(rs: RunState, question: str, extra: dict | None, provider: str | None) -> dict | None:
+        rec = None
+        try:
+            async with state["lock"]:  # 질문은 한 번에 하나(속도 측정이 서로 섞이지 않게)
+                rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id, provider=provider)
+            rec.update(extra or {})
+            state["store"].append_run(rec)
+        except Exception as e:  # noqa: BLE001 — 화면에 오류 이벤트로
+            rs.push("error", {"message": f"{type(e).__name__}: {e}"[:500]})
+        finally:
+            if not rs.done:
+                rs.push("run_done", {"run_id": rs.run_id})
+        return rec
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -173,7 +184,9 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
 
     @app.post("/api/ask")
     async def ask(body: AskIn) -> dict:
-        rs = await start_run(body.question.strip())
+        if body.provider and body.provider not in PROVIDERS:
+            raise HTTPException(422, f"provider 는 {' · '.join(PROVIDERS)}")
+        rs = await start_run(body.question.strip(), provider=body.provider)
         return {"run_id": rs.run_id}
 
     @app.get("/api/runs/{run_id}/events")
@@ -242,12 +255,89 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
     async def rerun(run_id: str) -> dict:
         rec = state["store"].get(run_id)
         q = rec["question"] if rec else (state["runs"][run_id].question if run_id in state["runs"] else None)
+        provider = (rec or {}).get("provider")
         if q is None:
             raise HTTPException(404, "기록 없음")
         ids = [runner.new_run_id() for _ in range(RERUN_TIMES)]
         for rid in ids:  # 차례로(lock) — 같은 질문 3회 · 화면이 중간값
-            await start_run(q, {"rerun_of": run_id}, run_id=rid)
+            await start_run(q, {"rerun_of": run_id}, run_id=rid, provider=provider)
         return {"run_ids": ids, "question": q}
+
+    @app.get("/api/providers")
+    async def providers() -> dict:
+        """화면 provider 고르기 — 모델 · effort · 쓸 수 있나(sdk = 키 · CLI = 구독 인증)."""
+        d = state["deps"]
+        out = []
+        for p in PROVIDERS:
+            info = describe(d.settings, p)
+            if p == "sdk":
+                info.update(available=d.anthropic is not None, reason=None if d.anthropic else NO_KEY)
+            else:
+                a = await auth.check(p, runner.desc_bin(d.settings, p))
+                info.update(available=a.ok, reason=None if a.ok else a.detail, auth_kind=a.kind, cli_version=a.version)
+            out.append(info)
+        judge = {"provider": d.settings.judge_provider, "model": d.settings.judge_model}
+        return {"providers": out, "default": d.settings.default_provider, "judge": judge}
+
+    # ───── 일괄 실행(만들되 실행은 사용자 · 코디가) ─────
+    def bstore() -> batch.BatchStore:
+        return batch.BatchStore(state["deps"].settings.runs_path)
+
+    @app.get("/api/questions")
+    async def questions() -> dict:
+        try:
+            return {"questions": batch.load_questions(state["deps"].settings)}
+        except batch.BatchConfigError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @app.get("/api/batches")
+    async def batches() -> dict:
+        return {"batches": bstore().list(), "config_missing": batch.config_problems(state["deps"].settings)}
+
+    @app.post("/api/batches")
+    async def batch_plan(body: BatchIn) -> dict:
+        try:
+            plan = batch.make_plan(batch.load_questions(state["deps"].settings), body.providers, body.questions)
+        except batch.BatchConfigError as e:
+            raise HTTPException(409, str(e)) from e
+        bstore().save(plan)
+        return batch.summary(plan)
+
+    @app.get("/api/batches/{batch_id}")
+    async def batch_get(batch_id: str) -> dict:
+        try:
+            plan = bstore().load(batch_id)
+        except FileNotFoundError as e:
+            raise HTTPException(404, "배치 없음") from e
+        return {**batch.summary(plan), "items": plan["items"], "log": plan.get("log", [])[-20:]}
+
+    @app.post("/api/batches/{batch_id}/start")
+    async def batch_start(batch_id: str) -> dict:
+        s = state["deps"].settings
+        bad = batch.config_problems(s)
+        if bad:
+            raise HTTPException(409, "일괄 실행 설정을 먼저 정하세요: " + " · ".join(bad))
+        if state.get("batch_task") and not state["batch_task"].done():
+            raise HTTPException(409, "다른 배치가 도는 중")
+        plan = bstore().load(batch_id)
+        state["batch_stop"] = False
+
+        async def execute(q: str, provider: str, extra: dict) -> dict:
+            rs = await start_run(q, extra, provider=provider)
+            rec = await rs.task
+            if rec is None:
+                raise RuntimeError("판 실행 실패")
+            return rec
+
+        state["batch_task"] = asyncio.create_task(batch.run_batch(
+            plan, settings=s, bstore=bstore(), execute=execute, run_store=state["store"],
+            should_stop=lambda: state.get("batch_stop", False)))
+        return {"started": batch_id}
+
+    @app.post("/api/batches/{batch_id}/stop")
+    async def batch_stop(batch_id: str) -> dict:
+        state["batch_stop"] = True  # 지금 판이 끝나면 멈춤(이어 가기 가능)
+        return {"stopping": batch_id}
 
     app.mount("/static", StaticFiles(directory=WEB), name="static")
     return app

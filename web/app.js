@@ -124,10 +124,12 @@
     }
     cols.replaceChildren();
     const k = cur.cost || {};
+    const sub = (k.billed || []).includes("subscription") ? "추정(구독 — 청구 아님) " : "예상 비용 ";
     const costLine = typeof k.answers_usd === "number"
-      ? `  ·  예상 비용 답 ${S.fmtUsd(k.answers_usd)}` + (typeof k.quality_usd === "number" ? ` + 채점 ${S.fmtUsd(k.quality_usd)} = ${S.fmtUsd(k.total_usd)}` : "")
+      ? `  ·  ${sub}답 ${S.fmtUsd(k.answers_usd)}` + (typeof k.quality_usd === "number" ? ` + 채점 ${S.fmtUsd(k.quality_usd)} = ${S.fmtUsd(k.total_usd)}` : "")
       : "";
-    $("current").textContent = cur.question ? `질문: ${cur.question}${costLine}` : "";
+    const prov = cur.provider ? `  ·  ${S.providerLabel(cur.provider)}` : "";
+    $("current").textContent = cur.question ? `질문: ${cur.question}${prov}${costLine}` : "";
     const scale = S.scale(cur);
     for (const name of S.CASES) {
       const c = cur.cases[name];
@@ -139,8 +141,12 @@
       const t = c.timing || {};
       cols.append(el("section", { class: "col", "data-case": name },
         el("h3", {}, TITLE[name], ...badges),
-        el("div", { class: "timing" }, `⏱ 첫 글자 ${ms(t.ttft_ms)} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`,
-          el("span", { class: "usd", title: "이 열 예상 비용(Sonnet · Jev · 캐시 포함)" }, ` · ${S.fmtUsd((c.cost || {}).usd)}`)),
+        cur.provider ? el("div", { class: "prov muted" }, S.providerLabel(cur.provider)) : null,
+        el("div", { class: "timing" },
+          (typeof t.cli_boot_ms === "number" ? `⏱ 기동 ${ms(t.cli_boot_ms)} / ` : "⏱ ") +
+          `첫 글자 ${ms(t.ttft_ms)}${t.ttft_kind === "message" ? "(메시지)" : ""} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`,
+          el("span", { class: "usd", title: (c.cost || {}).billed === "subscription" ? "CLI 추정 — 구독이라 청구 아님" : "이 열 예상 비용(Sonnet · Jev · 캐시 포함)" },
+            ` · ${S.fmtUsd((c.cost || {}).usd)}${(c.cost || {}).billed === "subscription" ? " 추정" : ""}`)),
         stageBar(c, scale),
         legend(c),
         el("div", { class: "answer", "data-case": name }, c.text || (c.error && c.error !== S.NO_KEY ? c.error : "")),
@@ -183,7 +189,8 @@
     resetView();
     cur = S.initial(null, question, disabled);  // 이전 결과를 바로 비움
     render();
-    const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question }) });
+    const provider = $("provider").value || null;
+    const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question, provider }) });
     const { run_id } = await r.json();
     lastRunId = run_id;
     cur = S.initial(run_id, question, disabled);
@@ -238,7 +245,9 @@
       const jp = S.CASES.map((c) => (cs[c] || {}).judge_pass ?? "–").join(" / ");
       const hu = S.CASES.map((c) => ({ 맞음: "✓", 틀림: "✗" })[(cs[c] || {}).human] || "–").join(" ");
       const tr = el("tr", {}, el("td", {}, (x.asked_at || "").replace("T", " ").slice(0, 19)),
-        el("td", { class: "qcell" }, x.question, x.rerun_of ? el("span", { class: "muted" }, " (다시)") : null),
+        el("td", { class: "qcell" }, x.question, x.rerun_of ? el("span", { class: "muted" }, " (다시)") : null,
+          x.batch_id ? el("span", { class: "muted" }, ` (일괄 ${x.batch_id})`) : null),
+        el("td", { title: [x.model, x.effort].filter(Boolean).join(" · ") }, x.provider || "sdk"),
         ...S.CASES.map((c) => el("td", {}, (cs[c] || {}).error ? "오류" : ms((cs[c] || {}).total_ms))),
         el("td", {}, nf), el("td", {}, jp), el("td", {}, hu),
         el("td", { title: "답 합계(+채점)" }, S.fmtUsd((x.cost || {}).total_usd ?? (x.cost || {}).answers_usd)),
@@ -265,6 +274,62 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function loadProviders() {
+    try {
+      const d = await (await fetch("/api/providers")).json();
+      const sel = $("provider");
+      sel.replaceChildren(...d.providers.map((p) => {
+        const o = el("option", { value: p.provider, title: p.reason || "" },
+          `${S.providerLabel(p)}${p.provider === "sdk" ? " · 유료" : " · 구독"}${p.available ? "" : ` (${p.reason || "못 씀"})`}`);
+        o.disabled = !p.available;
+        return o;
+      }));
+      const def = d.providers.find((p) => p.provider === d.default && p.available) || d.providers.find((p) => p.available);
+      if (def) sel.value = def.provider;
+      $("judge-line").textContent = `채점(①②): ${d.judge.provider} · ${d.judge.model} — CLI 판은 자동 · sdk 판은 버튼`;
+    } catch (e) { /* 상태 줄에 이미 표시 */ }
+  }
+
+  // 일괄 실행 패널 — 계획 · 시작 · 멈춤 · 진행(실행은 사용자 · 코디)
+  let batchId = null, batchTimer = null;
+  async function loadBatchPanel() {
+    const d = await (await fetch("/api/batches")).json();
+    $("batch-config").textContent = d.config_missing.length ? `설정 필요: ${d.config_missing.join(" · ")} — 비면 시작하지 않음` : "설정 됨";
+    if (d.batches[0]) { batchId = d.batches[0].batch_id; showBatch(); }
+  }
+  async function showBatch() {
+    if (!batchId) return;
+    const r = await fetch(`/api/batches/${batchId}`);
+    if (!r.ok) return;
+    const b = await r.json();
+    const p = b.progress || {};
+    $("batch-status").textContent = `${b.batch_id} · ${b.state} · ${p.done}/${p.total} 끝 · 실패 ${p.failed}` +
+      (b.now ? ` · 지금 #${b.now.n} ${b.now.provider}` : "") +
+      (Object.keys(b.paused || {}).length ? ` · 한도 멈춤 ${JSON.stringify(b.paused)}` : "");
+    clearTimeout(batchTimer);
+    if (["running", "sleeping"].includes(b.state)) batchTimer = setTimeout(() => { showBatch(); loadRuns(); }, 5000);
+  }
+  async function batchPlan() {
+    const providers = [...document.querySelectorAll("input[name=bp]:checked")].map((x) => x.value);
+    const qs = $("batch-q").value.split(",").map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
+    const r = await fetch("/api/batches", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providers, questions: qs.length ? qs : null }) });
+    const d = await r.json();
+    if (!r.ok) { $("batch-status").textContent = d.detail; return; }
+    batchId = d.batch_id; showBatch();
+  }
+  async function batchStart() {
+    if (!batchId) return;
+    const r = await fetch(`/api/batches/${batchId}/start`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) { $("batch-status").textContent = d.detail; return; }
+    showBatch();
+  }
+  async function batchStop() {
+    if (batchId) await fetch(`/api/batches/${batchId}/stop`, { method: "POST" });
+    showBatch();
+  }
+
   async function loadStatus() {
     try {
       const st = await (await fetch("/api/status")).json();
@@ -281,7 +346,10 @@
   $("ask").addEventListener("submit", (e) => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); });
   $("rerun").addEventListener("click", rerun);
   $("grade").addEventListener("click", () => grade(cur.run_id));
-  loadStatus().then(loadRuns).then(() => {
+  $("batch-plan").addEventListener("click", batchPlan);
+  $("batch-start").addEventListener("click", batchStart);
+  $("batch-stop").addEventListener("click", batchStop);
+  loadStatus().then(loadProviders).then(loadRuns).then(loadBatchPanel).then(() => {
     const q = new URLSearchParams(location.search).get("q");  // ?q= 로 열면 바로 보냄
     if (q) { $("q").value = q; ask(q); }
   });

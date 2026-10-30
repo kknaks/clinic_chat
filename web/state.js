@@ -15,7 +15,7 @@
       if (disabled && disabled[c]) cases[c].error = disabled[c];
     }
     return { run_id: runId || null, question: question || "", cases, judge_order: [], judge_error: null,
-             done: false, errors: [], cost: null };
+             done: false, errors: [], cost: null, provider: null };
   }
 
   function reduce(s, type, d) {
@@ -37,6 +37,7 @@
         c.cost = d.cost || null;
         break;
       case "cost": s.cost = d; break;
+      case "provider": s.provider = d; break;
       case "quality_cost": s.cost = { ...(s.cost || {}), quality_usd: d.cost_usd }; break;
       case "word_check": { const { case: _c, ...rest } = d; c.word_check = rest; break; }
       case "judge":
@@ -67,6 +68,9 @@
     }
     s.judge_order = rec.judge_order || [];
     s.cost = rec.cost || null;
+    const v = rec.versions || {};
+    s.provider = { provider: rec.provider || "sdk", model: v.answer_model, effort: v.answer_effort,
+                   auth: v.auth_kind ? { kind: v.auth_kind } : null };
     s.done = true;
     s.versions = rec.versions;
     return s;
@@ -104,7 +108,8 @@
 
   // 단계 색 종류 — 막대 · 범례 같은 색
   function stageKind(name) {
-    if (name.startsWith("claude")) return "claude";
+    if (name.startsWith("claude") || name.startsWith("codex")) return "claude";
+    if (name === "cli_boot") return "boot";
     if (name.startsWith("tool:")) return "tool";
     if (name === "jev") return "jev";
     return "hub";
@@ -125,6 +130,12 @@
     });
   }
 
+  // 열 머리 provider 줄
+  function providerLabel(p) {
+    if (!p) return "";
+    return [p.provider, p.model, p.effort ? `effort ${p.effort}` : null].filter(Boolean).join(" · ");
+  }
+
   // 비용 표시 — 1센트 미만은 소수 4자리
   function fmtUsd(x) {
     if (typeof x !== "number" || !isFinite(x)) return "–";
@@ -136,7 +147,7 @@
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd };
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd, providerLabel };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);

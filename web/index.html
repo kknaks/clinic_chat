@@ -10,9 +10,11 @@
   <header>
     <form id="ask">
       <input id="q" type="text" maxlength="2000" placeholder="상담 질문 하나(환자 정보 없이)" autocomplete="off" required>
+      <select id="provider" title="세 케이스 모두 이 provider 로 돈다(Jev 는 그대로 API)"></select>
       <button type="submit" id="send">보내기</button>
     </form>
     <p id="status" class="muted"></p>
+    <p id="judge-line" class="muted"></p>
   </header>
 
   <p id="current" class="current"></p>
@@ -24,11 +26,25 @@
     <span id="rerun-out" class="muted"></span>
   </section>
 
+  <details class="batch">
+    <summary>일괄 실행(질문 리스트 × provider · 순차)</summary>
+    <div class="batch-row">
+      <label><input type="checkbox" name="bp" value="claude-cli" checked> claude-cli</label>
+      <label><input type="checkbox" name="bp" value="codex-cli" checked> codex-cli</label>
+      <input id="batch-q" type="text" placeholder="질문 번호(예 1,3,4 · 비면 전체)">
+      <button type="button" id="batch-plan">계획 만들기</button>
+      <button type="button" id="batch-start">시작</button>
+      <button type="button" id="batch-stop">멈춤</button>
+    </div>
+    <p id="batch-config" class="muted"></p>
+    <p id="batch-status" class="muted"></p>
+  </details>
+
   <section>
     <h2>질문 기록</h2>
     <div class="table-wrap">
       <table id="runs">
-        <thead><tr><th>시각</th><th>질문</th><th>case1 ms</th><th>case2 ms</th><th>case3 ms</th>
+        <thead><tr><th>시각</th><th>질문</th><th>provider</th><th>case1 ms</th><th>case2 ms</th><th>case3 ms</th>
           <th>없는 이름</th><th>② 통과</th><th>사람 확인</th><th>예상 $</th><th>채점</th><th>판</th></tr></thead>
         <tbody></tbody>
       </table>

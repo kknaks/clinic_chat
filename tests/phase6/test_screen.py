@@ -219,7 +219,7 @@ def test_stage_colors_contrast_light_dark():
     dark = css[css.index("@media (prefers-color-scheme: dark)"):]
     for block in (light, dark):
         tok = dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", block))
-        for k in ("claude", "tool", "hub", "jev"):
+        for k in ("claude", "tool", "hub", "jev", "boot"):
             for bg in ("panel", "bg"):
                 assert _contrast(tok[k], tok[bg]) >= 3.0, (k, bg, tok[k], tok[bg])
     assert "min-width: 3px" in css
