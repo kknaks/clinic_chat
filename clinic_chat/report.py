@@ -24,8 +24,9 @@ ITEMS = {"accuracy": "정확성", "safety": "안전", "candidates": "후보", "u
 UNKNOWN = re.compile(r"정보 ?없음|정보가 없|자료에 없|확인되지 않|확인할 수 없|모르|알 수 없|안내하기 어렵|찾지 못", re.IGNORECASE)
 # 실패 사유 분류(순서대로 먼저 맞는 것) — Opus 실패 주장(claim) · 항목 · 답 · 흔적으로
 CAUSES = [
-    ("「정보 없음」인데 원장엔 있음", lambda f, ans, tr: bool(UNKNOWN.search(f["claim"] + " " + ans[:400]))
-     and f.get("status") == "valid"),
+    # Opus 주장이 「답이 정보 없음 · 자료에 없다고 했다」를 짚을 때만(답 안의 상투 문구로는 안 셈)
+    ("「정보 없음」인데 원장엔 있음", lambda f, ans, tr: bool(re.search(
+        r"정보 ?없음|정보가 없|자료에 없|없다고|없습니다라고|확인되지 않|모른다", f["claim"])) and f.get("status") == "valid"),
     ("빠진 안전 정보", lambda f, ans, tr: f["item"] == "safety"),
     ("이름 못 찾음", lambda f, ans, tr: bool(tr.get("missing")) or bool(re.search(r"찾지 못|인식하지|이름", f["claim"]))),
     ("엉뚱한 시술", lambda f, ans, tr: bool(re.search(r"엉뚱|다른 시술|관련 없|무관|잘못된 시술|해당하지 않는 시술", f["claim"]))),
@@ -76,6 +77,11 @@ def build(runs: list[dict], plans: list[dict]) -> str:
         w(f"- 배치 {p['batch_id']} · {p['state']} · {p['progress']}")
     w("- 참고 답(reference_answer)은 기록에만 · 채점 기준은 원장(Opus 원장 도구 3) · 아래 사유 분류는 결정론 키워드 규칙(확인 필요)\n")
 
+    w("## 0. 요약(자동 셈)\n")
+    for line in summary_lines(runs):
+        w(f"- {line}")
+    w("")
+
     # 1. 통과율
     w("## 1. 케이스별 항목별 통과율\n")
     w("통과율 = 통과 / (통과 + 실패) · 「해당 없음」 제외 · 괄호 = 통과/판정 수\n")
@@ -121,6 +127,11 @@ def build(runs: list[dict], plans: list[dict]) -> str:
             continue
         nos = sorted({str(r.get("question_no")) for r, _, _ in rows})
         w(f"### {name} — {len(rows)}건 · 문항 {len(nos)}\n")
+        by_c = Counter(c for _, c, _ in rows)
+        by_item = Counter(ITEMS.get(f["item"], f["item"]) for _, _, f in rows)
+        by_file = Counter(((f.get("evidence") or {}).get("file") or str((f.get("evidence") or {}).get("path", "")).split(".")[0]
+                           or "–") for _, _, f in rows)
+        w(f"- 열 {dict(by_c)} · 항목 {dict(by_item)} · 근거 원장 파일(골드에 빠진 영역 단서) {dict(by_file.most_common(8))}\n")
         w("| 번호 | 질문 | 열 | 항목 | Opus 실패 주장 | 근거 인용(원장) |")
         w("|---|---|---|---|---|---|")
         for r, c, f in rows:
@@ -213,6 +224,42 @@ def error_kind(e: str) -> str:
     if "한도" in (e or "") or "limit" in (e or "").lower():
         return "구독 한도"
     return re.sub(r"\d+", "N", (e or "")[:60])
+
+
+def rate(runs: list[dict], c: str, it: str) -> tuple[int, int]:
+    vs = [((r["cases"].get(c) or {}).get("judge") or {}).get("items", {}).get(it) for r in runs]
+    return vs.count("통과"), vs.count("통과") + vs.count("실패")
+
+
+def summary_lines(runs: list[dict]) -> list[str]:
+    def pct(c, it):
+        p, n = rate(runs, c, it)
+        return f"{round(100 * p / n)}%" if n else "–"
+
+    out = [f"정확성 통과율 case1 {pct('case1', 'accuracy')} · case2 {pct('case2', 'accuracy')} · case3 {pct('case3', 'accuracy')}"
+           f" / 안전 {pct('case1', 'safety')} · {pct('case2', 'safety')} · {pct('case3', 'safety')}"
+           f" / 질문에 답함 {pct('case1', 'on_topic')} · {pct('case2', 'on_topic')} · {pct('case3', 'on_topic')}"]
+    groups: Counter = Counter()
+    files: Counter = Counter()
+    nos: dict[str, set] = defaultdict(set)
+    for r in runs:
+        for c in ("case2", "case3"):
+            cr = r["cases"].get(c) or {}
+            for f in (cr.get("judge") or {}).get("failures") or []:
+                g = cause_of(f, cr.get("answer") or "", (cr.get("trace") or {}).get("hub") or {})
+                groups[g] += 1
+                nos[g].add(r.get("question_no"))
+                if g == CAUSES[0][0]:
+                    files[(f.get("evidence") or {}).get("file") or "–"] += 1
+    top = groups.most_common(3)
+    out.append("골드 실패 사유 상위: " + " · ".join(f"{g} {n}건(문항 {len(nos[g])})" for g, n in top))
+    out.append("「정보 없음」인데 원장엔 있음 — 근거 원장 파일 상위: " + " · ".join(f"{k} {v}" for k, v in files.most_common(5)))
+    t = {c: med([((r["cases"].get(c) or {}).get("timing") or {}).get("ttft_ms") for r in runs]) for c in CASES}
+    out.append(f"첫 글자 중앙값 case1 {fmt_ms(t['case1'])} · case2 {fmt_ms(t['case2'])} · case3 {fmt_ms(t['case3'])}")
+    errs = Counter(error_kind((r["cases"].get(c) or {}).get("error")) for r in runs for c in CASES
+                   if (r["cases"].get(c) or {}).get("error"))
+    out.append(f"오류 열 {sum(errs.values())} — " + (" · ".join(f"{k} {v}" for k, v in errs.items()) or "없음"))
+    return out
 
 
 def _cell(s, n):
