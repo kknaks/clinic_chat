@@ -199,11 +199,7 @@ def build(runs: list[dict], plans: list[dict]) -> str:
     return "\n".join(L) + "\n"
 
 
-FOLLOWUP = {
-    "case3 I-09 계열 id → check_conditions(허브 400)":
-        "앱 case3 I-09 경로에서 계열 id 면 check_conditions 대신 그 계열 단위 시술로 펼치거나 procedure_card(sections=checks)로 — "
-        "고친 뒤 이 문항들의 case3 만 다시 돌림(실행 중엔 안 고침 · 결정론이라 재시도로 안 풀림)",
-}
+FOLLOWUP: dict[str, str] = {}  # 사용자 결정(10-30): 이번 판은 모아 두기만 — 수정 · 재실행 제안은 쓰지 않음
 
 
 def error_kind(e: str) -> str:

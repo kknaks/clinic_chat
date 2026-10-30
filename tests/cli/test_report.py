@@ -36,4 +36,4 @@ def test_error_kinds_grouped_with_followup():
             for i in (8, 9)]
     md = report.build(runs, [])
     assert "case3 I-09 계열 id → check_conditions(허브 400)** — 2건 · 문항 Q008(case3), Q009(case3)" in md
-    assert "다음(제안):" in md
+    assert "다음(제안):" not in md  # 모아 두기만(사용자 결정)
