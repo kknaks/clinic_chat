@@ -44,10 +44,9 @@ class HubMCP:
     async def session(self) -> AsyncIterator[HubSession]:
         hc = self.http_client_factory() if self.http_client_factory else None
         try:
-            async with streamable_http_client(self.url, http_client=hc) as (r, w):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    yield HubSession(s)
+            async with streamable_http_client(self.url, http_client=hc) as (r, w), ClientSession(r, w) as s:
+                await s.initialize()
+                yield HubSession(s)
         finally:
             if hc is not None:
                 await hc.aclose()
@@ -69,7 +68,7 @@ class HubSession:
         t = time.perf_counter()
         try:
             res = await self._s.call_tool(name, arguments)
-        except Exception as e:  # 전송 오류도 is_error 결과로(루프는 계속)
+        except Exception as e:  # noqa: BLE001 — 전송 오류도 is_error 결과로(루프는 계속)
             return ToolResult(text=f"MCP 오류: {e}", is_error=True, ms=(time.perf_counter() - t) * 1000)
         ms = (time.perf_counter() - t) * 1000
         parts = [c.text for c in res.content if getattr(c, "type", None) == "text"]

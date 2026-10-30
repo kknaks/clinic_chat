@@ -71,7 +71,7 @@ async def run_tool_loop(
         params = answer_params(model, system, messages, tools, {"type": "none"} if capped else None)
         round_first: list[float] = []
 
-        def _txt(t: str) -> None:
+        def _txt(t: str, round_first: list[float] = round_first) -> None:
             ms = timer.mark_text()
             if not round_first:
                 round_first.append(ms)

@@ -125,9 +125,7 @@ class RawStore:
         file, segs = parse_path(path)
         v = self._file(file).doc
         for s in segs:
-            if isinstance(s, int) and isinstance(v, list) and 0 <= s < len(v):
-                v = v[s]
-            elif isinstance(s, str) and isinstance(v, dict) and s in v:
+            if isinstance(s, int) and isinstance(v, list) and 0 <= s < len(v) or isinstance(s, str) and isinstance(v, dict) and s in v:
                 v = v[s]
             else:
                 raise RawToolError(f"없는 경로: {path}")

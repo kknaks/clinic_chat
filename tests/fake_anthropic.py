@@ -7,8 +7,8 @@ policy(params, n) → Turn 으로 바퀴마다 응답을 정한다. 받은 요�
 from __future__ import annotations
 
 import asyncio
-import json
 import itertools
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -88,7 +88,7 @@ class FakeAnthropic:
         self.realtime = realtime
         if isinstance(policy, list):
             seq = list(policy)
-            policy = lambda p, n: seq[min(n, len(seq) - 1)]  # noqa: E731
+            policy = lambda p, n: seq[min(n, len(seq) - 1)]
         self.policy = policy
         self.clock = clock
         self.calls: list[dict] = []
@@ -113,9 +113,9 @@ class FakeAnthropic:
 
 def _has_tool_result(params: dict) -> bool:
     for m in params.get("messages", []):
-        if m["role"] == "user" and isinstance(m["content"], list):
-            if any(b.get("type") == "tool_result" for b in m["content"]):
-                return True
+        if m["role"] == "user" and isinstance(m["content"], list) and \
+                any(b.get("type") == "tool_result" for b in m["content"]):
+            return True
     return False
 
 

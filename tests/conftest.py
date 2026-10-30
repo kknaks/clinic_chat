@@ -14,10 +14,10 @@ from tests.fake_hub import GOLD_MCP_URL, RAW_MCP_URL, REST_URL, FakeHub
 
 def make_settings(tmp_path, **kw) -> Settings:
     """시험은 레포 .env 를 읽지 않는다(_env_file=None) · 키는 모의."""
-    base = dict(_env_file=None, anthropic_api_key="fixture-key", typesafe_api_key="fixture-key",
-                raw_dir=str(tmp_path / "rawfx"), semantic_json=str(tmp_path / "semfx" / "sem.json"),
-                runs_dir=str(tmp_path / "runs"), hub_gold_mcp_url=GOLD_MCP_URL, hub_raw_mcp_url=RAW_MCP_URL,
-                hub_rest_url=REST_URL)
+    base = {"_env_file": None, "anthropic_api_key": "fixture-key", "typesafe_api_key": "fixture-key",
+            "raw_dir": str(tmp_path / "rawfx"), "semantic_json": str(tmp_path / "semfx" / "sem.json"),
+            "runs_dir": str(tmp_path / "runs"), "hub_gold_mcp_url": GOLD_MCP_URL, "hub_raw_mcp_url": RAW_MCP_URL,
+            "hub_rest_url": REST_URL}
     base.update(kw)
     return Settings(**base)
 

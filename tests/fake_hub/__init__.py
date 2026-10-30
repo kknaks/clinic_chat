@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
@@ -107,11 +107,11 @@ class FakeHub:
             return {"build": gold.BUILD, "raw": {"files": 21}}
 
         @app.get(g + "/vocab")
-        def vocab(kinds: list[str] | None = Query(None)):
+        def vocab(kinds: Annotated[list[str] | None, Query()] = None):
             return run("vocab", kinds=kinds)
 
         @app.get(g + "/resolve")
-        def resolve(text: str, kinds: list[str] | None = Query(None), limit_per_span: int = 20):
+        def resolve(text: str, kinds: Annotated[list[str] | None, Query()] = None, limit_per_span: int = 20):
             return run("resolve", text=text, kinds=kinds, limit_per_span=limit_per_span)
 
         @app.post(g + "/recommend")
@@ -119,11 +119,11 @@ class FakeHub:
             return run("recommend", **(await req.json()))
 
         @app.get(g + "/procedures/{pid}")
-        def card(pid: str, product: str | None = None, sections: list[str] | None = Query(None), full: bool = False):
+        def card(pid: str, product: str | None = None, sections: Annotated[list[str] | None, Query()] = None, full: bool = False):
             return run("procedure_card", id=pid, product=product, sections=sections, full=full)
 
         @app.get(g + "/procedures/{pid}/checks")
-        def checks(pid: str, conditions: list[str] | None = Query(None)):
+        def checks(pid: str, conditions: Annotated[list[str] | None, Query()] = None):
             return run("check_conditions", id=pid, conditions=conditions)
 
         @app.post(g + "/pairs")

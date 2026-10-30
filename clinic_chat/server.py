@@ -69,7 +69,7 @@ def build_deps(settings: Settings) -> Deps:
     if settings.raw_dir:
         try:
             deps.raw_store = RawStore(settings.raw_dir)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             deps.startup["raw_dir_error"] = str(e)
     if settings.semantic_json:
         try:
@@ -78,7 +78,7 @@ def build_deps(settings: Settings) -> Deps:
 
             deps.normalizer = make_normalizer(load_rules(settings.semantic_json))
             deps.semantic = _json.loads(Path(settings.semantic_json).read_text(encoding="utf-8"))["dictionary"]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             deps.startup["semantic_error"] = str(e)
     return deps
 
@@ -94,25 +94,25 @@ async def startup_check(deps: Deps) -> dict:
     try:
         h = await deps.hub_rest.health()
         info["hub_health"] = {"build": (h.get("build") or {}).get("id"), "raw": h.get("raw")}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
         info["hub_health"] = f"연결 안 됨: {type(e).__name__}"
     for name, m in (("gold_mcp", deps.gold_mcp), ("raw_mcp", deps.raw_mcp)):
         try:
             async with m.session() as sess:
                 info[name] = len(await sess.list_tools())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             info[name] = f"연결 안 됨: {type(e).__name__}"
     try:
         deps.vocab = await deps.hub_rest.vocab()
         v = deps.vocab.get("vocab", deps.vocab)
         info["vocab"] = {k: len(x) for k, x in v.items() if isinstance(x, list)}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
         info["vocab"] = f"캐시 실패: {type(e).__name__}"
     if deps.anthropic is not None and hasattr(deps.anthropic, "models"):
         try:
             ids = {m.id async for m in deps.anthropic.models.list(limit=100)}
             info["models"] = {m: (m in ids) for m in {s.answer_model, s.judge_model, s.extract_model}}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             info["models"] = f"확인 실패: {type(e).__name__}"
     info["raw_store"] = deps.raw_store.dir_manifest_sha16 if deps.raw_store else "없음(RAW_DIR)"
     info["semantic"] = "있음" if deps.normalizer else "없음(SEMANTIC_JSON)"
@@ -148,7 +148,7 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
                     rec = await runner.execute(state["deps"], question, rs.push, run_id=rs.run_id)
                 rec.update(extra or {})
                 state["store"].append_run(rec)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — 화면에 오류 이벤트로
                 rs.push("error", {"message": f"{type(e).__name__}: {e}"[:500]})
             finally:
                 if not rs.done:

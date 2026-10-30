@@ -46,7 +46,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
     async def one(c: str) -> dict:
         try:
             r = await runners[c]()
-        except Exception as e:  # 그 열만 오류
+        except Exception as e:  # noqa: BLE001 — 그 열만 오류
             t = timers[c]
             t.finish()
             r = {"answer": "", "stop_reason": None, "loop_capped": False, "refusal": False,
@@ -100,7 +100,7 @@ async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_
             continue
         try:
             r["word_check"] = await word_check.check_answer(deps, r["answer"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — ① 실패는 그 열 표시만
             r["word_check"] = {"error": f"{type(e).__name__}: {e}"[:300]}
         emit("word_check", {"case": c, **r["word_check"]})
     order = judge.blind_order([c for c in CASES if cases[c].get("answer") and not cases[c].get("error")], judge_seed)
@@ -108,7 +108,7 @@ async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_
         return []
     try:
         jr = await judge.judge(deps, question, {c: cases[c]["answer"] for c in order}, order)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — ② 실패는 표시만
         jr = {"error": f"{type(e).__name__}: {e}"[:300], "per_case": {}}
     for c in order:
         cases[c]["judge"] = jr.get("per_case", {}).get(c, {"error": jr.get("error")})

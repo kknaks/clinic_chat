@@ -71,7 +71,7 @@ def check_evidence(store: Any, ev: dict | None) -> bool:
         return False
     path = ev["path"]
     file = ev.get("file") or ""
-    if file and not (path == file or path.startswith(file + ".") or path.startswith(file + "[")):
+    if file and not (path == file or path.startswith((file + ".", file + "["))):
         path = file + ("" if path.startswith("[") else ".") + path
     try:
         v = store.resolve(path)

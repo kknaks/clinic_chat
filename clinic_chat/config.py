@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     def summary_line(self) -> str:
         """기동 확인 줄 — 키는 있음 · 없음만(값 출력 금지)."""
-        yn = lambda b: "있음" if b else "없음"  # noqa: E731
+        yn = lambda b: "있음" if b else "없음"
         return (
             f".env {yn(self.env_file_loaded())} · ANTHROPIC_API_KEY {yn(self.has_anthropic_key)} · "
             f"TYPESAFE_API_KEY {yn(self.has_typesafe_key)} · RAW_DIR {yn(bool(self.raw_dir))} · "

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from functools import lru_cache
+from functools import cache
 
 from clinic_chat.config import ROOT
 
@@ -11,7 +11,7 @@ PROMPT_DIR = ROOT / "prompts"
 NAMES = ("common", "case1", "case2", "case3", "judge", "extract")
 
 
-@lru_cache(maxsize=None)
+@cache
 def load(name: str) -> str:
     return (PROMPT_DIR / f"{name}.md").read_text(encoding="utf-8")
 

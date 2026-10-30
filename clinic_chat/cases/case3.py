@@ -264,7 +264,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
         timer.ttft_answer_ms = first[0] if first else None
         res["stop_reason"] = final.stop_reason
         res["refusal"] = final.stop_reason == "refusal"
-    except Exception as e:  # 허브 · Sonnet 오류 — 그 열만 오류
+    except Exception as e:  # noqa: BLE001 — 허브 · Sonnet 오류 — 그 열만 오류
         res["error"] = f"{type(e).__name__}: {e}"[:500]
     finally:
         timer.finish()
