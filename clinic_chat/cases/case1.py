@@ -9,6 +9,8 @@ from clinic_chat.cases.loop import new_case_result, run_tool_loop
 from clinic_chat.deps import NO_KEY, Deps
 from clinic_chat.timing import CaseTimer
 
+RAW_LIST_DEFAULT_DEPTH = 1
+
 
 async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None]) -> dict:
     if deps.anthropic is None:
@@ -23,10 +25,17 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
 
     async with deps.raw_mcp.session() as s:
         tools = await s.list_tools()
+
+        async def call(name: str, args: dict):
+            if name == "raw_list" and "depth" not in args:  # 앱 기본 depth 1(21 파일 구조 전부가 커서) · 더 깊게는 직접 depth
+                args = {**args, "depth": RAW_LIST_DEFAULT_DEPTH}
+            return await s.call(name, args)
+
         res = await run_tool_loop(
             client=deps.anthropic, model=deps.settings.answer_model, system=prompts.system_for("case1"),
-            question=question, tools=tools, call_tool=s.call, timer=timer, on_text=on_text,
+            question=question, tools=tools, call_tool=call, timer=timer, on_text=on_text,
             loop_max=deps.settings.case_tool_loop_max, on_tool_result=seen,
+            tool_result_max_bytes=deps.settings.tool_result_max_bytes,
         )
     res["trace"]["context"] = res["trace"]["tool_calls"]
     res["trace"]["raw_manifest_sha16"] = meta.get("raw_manifest_sha16")

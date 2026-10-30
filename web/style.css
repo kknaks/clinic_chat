@@ -51,6 +51,8 @@ ul { padding-left: 0; margin: 4px 0; }
 .human input { flex: 1; min-width: 80px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px;
   background: var(--panel); color: var(--text); }
 .human .sel { outline: 2px solid var(--claude); }
+button.mini { padding: 2px 8px; font-size: 12px; }
+.usd { font-variant-numeric: tabular-nums; }
 .bar { margin-top: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; background: var(--panel); font-variant-numeric: tabular-nums; }

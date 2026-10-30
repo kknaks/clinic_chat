@@ -18,10 +18,11 @@ from typing import Any
 from typesafe_sdk import Choice, Noul, TypeSafeError
 
 from clinic_chat import prompts
-from clinic_chat.cases.loop import new_case_result, node_ids
+from clinic_chat.cases.loop import case_cost, new_case_result, node_ids
 from clinic_chat.clients.anthropic_client import answer_params, stream_once, usage_dict
 from clinic_chat.clients.jev_client import CHOICE_MAX, choice_stats
 from clinic_chat.deps import NO_KEY, Deps
+from clinic_chat.pricing import cost_usd
 from clinic_chat.timing import CaseTimer
 
 VOCAB_SLOTS = ("concern", "site", "purpose", "check_condition", "technique", "family", "menu")
@@ -30,8 +31,16 @@ NONE = "해당 없음"
 NOUL_MIN = 0.5  # R-6 · 짝 Noul
 SLOT_LABEL = {"concern": "고민", "site": "부위", "purpose": "목적", "check_condition": "확인 조건", "technique": "기법",
               "family": "시술 계열", "menu": "메뉴(추천 패키지 라벨)", "procedure": "시술 · 제품"}
-CARD_SECTIONS = {"I-02": ["overview", "method", "ops"], "I-03": ["aftercare", "timeline", "emergency"],
-                 "I-04": ["safety"], "I-05": ["recovery"], "I-10": ["dose", "products"]}
+CARD_INTENTS = ("I-02", "I-03", "I-04", "I-05", "I-10")  # 시술 카드(T3) 의도 — 어느 칸을 받을지는 Jev 가 고름
+# 「필요한 정보」 — Jev 가 질문마다 고르는 카드 칸(SPEC-005 §4-3 section 이름 · 안전 요약은 허브가 늘 줌)
+INFO_SECTIONS = {
+    "overview": "시술 개요(무엇인지)", "method": "시술 방법 · 원리", "recovery": "회복 · 다운타임 · 효과 지속",
+    "aftercare": "시술 후 관리 · 주의(사우나 · 운동 등)", "timeline": "시술 후 경과 날짜별", "emergency": "바로 병원에 와야 하는 증상",
+    "disclosure": "필수 고지 사항", "safety.side_effects": "부작용", "safety.complications": "합병증 · 드문 위험",
+    "safety.pih": "색소 침착(PIH) 위험", "checks": "해도 되는지 확인할 조건(임신 · 질환 · 복용약 등)",
+    "site_caution": "부위별 주의", "dose": "용량 · 회차 · 간격", "products": "쓰는 제품 · 브랜드", "evidence": "근거 · 연구",
+    "ops": "소요 시간 · 마취", "market": "시장 정보",
+}
 # 의도 Choice 설명의 예시 질문 — 허브 vocab 의도에 예시가 없을 때(gold-research §3 표의 예시 발화)
 INTENT_EXAMPLES = {
     "I-01": ["이마 주름이 신경 쓰여요", "턱선이 처졌어요"], "I-02": ["소프웨이브는 어떻게 하는 거예요?"],
@@ -99,6 +108,8 @@ def build_jev_questions(vocab: dict, cands: list[dict], seed: int) -> tuple[dict
         qs[f"slot:{slot}"] = Choice(instructions=f"질문이 말하는 {SLOT_LABEL[slot]}은(는)?", criteria=_shuffled(rng, crit))
         qs[f"said:{slot}"] = Noul(instructions=f"질문이 {SLOT_LABEL[slot]} 중 하나라도 말하나?")
         meta[slot]["order"] = list(qs[f"slot:{slot}"].criteria)
+    for sec, desc in INFO_SECTIONS.items():  # 필요한 정보(같은 요청 · 병렬)
+        qs[f"info:{sec}"] = Noul(instructions=f"이 질문에 답하려면 「{desc}」 정보가 필요한가?")
     for c in cands:  # 여러 고민(R-6)
         if c.get("kind") == "concern":
             qs[f"concern:{c['id']}"] = Noul(instructions=f"질문이 「{c.get('name', c['id'])}」 고민을 말하나?")
@@ -124,6 +135,8 @@ def read_jev(resp: Any, meta: dict, conf_min: float) -> dict:
     for slot, m in meta.items():  # 선택지가 없어 묻지 않은 슬롯도 기록
         if slot != "intent" and slot not in out["slots"]:
             out["slots"][slot] = {"value": None, "skipped": True, **{k: x for k, x in m.items() if k != "order"}}
+    out["info"] = {n.split(":", 1)[1]: round(a.noul, 4) for n, a in resp.nouls.items() if n.startswith("info:")}
+    out["sections"] = [sec for sec in INFO_SECTIONS if out["info"].get(sec, 0) >= NOUL_MIN]
     for name, a in resp.nouls.items():
         if name.startswith("concern:"):
             out["noul"][name.split(":", 1)[1]] = round(a.noul, 4)
@@ -167,9 +180,8 @@ def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], ques
     if intent == "I-01":
         return {"intent": intent, "tool": "recommend", "input": {"concerns": concerns, "site": site}} if concerns \
             else need("concern")
-    if intent in CARD_SECTIONS:
-        return {"intent": intent, "tool": "procedure_card", "input": {"id": proc, "sections": CARD_SECTIONS[intent]}} \
-            if proc else need("procedure")
+    if intent in CARD_INTENTS:  # 칸(sections)은 run() 이 Jev 「필요한 정보」로 붙임 — 없으면 기본 짧은 카드
+        return {"intent": intent, "tool": "procedure_card", "input": {"id": proc}} if proc else need("procedure")
     if intent == "I-06":
         ps = list(dict.fromkeys(units + ([proc] if proc and proc.startswith("unit_procedure:") else [])))[:4]
         return {"intent": intent, "tool": "compare", "input": {"procedures": ps}} if len(ps) >= 2 \
@@ -194,7 +206,8 @@ def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], ques
         cond = _val(jev, "check_condition")
         if cond:
             return {"intent": intent, "tool": "check_conditions", "input": {"id": proc, "conditions": [cond]}}
-        return {"intent": intent, "tool": "procedure_card", "input": {"id": proc, "sections": ["overview", "ops"]}}
+        secs = jev.get("sections") or ["overview", "ops"]  # 확인 조건 노드 없음 → 카드(SPEC-005 §6-1)
+        return {"intent": intent, "tool": "procedure_card", "input": {"id": proc, "sections": secs}}
     if intent == "I-11":
         label = _val(jev, "menu") or (menus[0]["id"] if menus else None)
         if label:
@@ -240,6 +253,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             with timer.stage("jev") as st:
                 resp = await deps.jev.system_one(state=question, questions=qs)
                 st["tokens"] = {"input_tokens": resp.usage.input_tokens}
+                st["cost_usd"] = cost_usd(deps.settings.typesafe_default_model, st["tokens"])
         except TypeSafeError as e:
             res["error"] = _jev_error(e)
             return res
@@ -251,6 +265,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
 
         intent = (jev.get("intent") or {}).get("choice")
         path = plan_path(intent, jev, cands, menus, question)
+        if path["tool"] in deps.section_tools and jev["sections"] and "sections" not in (path["input"] or {}):
+            path["input"] = {**path["input"], "sections": jev["sections"]}  # Jev 가 고른 칸만
         hub_result = None
         with timer.stage("hub_path"):
             if path["tool"]:
@@ -281,6 +297,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
         with timer.stage("claude") as st:
             final = await stream_once(deps.anthropic, params, _txt)
             st["tokens"] = usage_dict(final.usage)
+            st["cost_usd"] = cost_usd(deps.settings.answer_model, st["tokens"])
         timer.llm_round_trips += 1
         tokens["claude"] = st["tokens"]
         timer.ttft_answer_ms = first[0] if first else None
@@ -291,4 +308,5 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
     finally:
         timer.finish()
         res["timing"] = timer.as_dict()
+        res["cost"] = case_cost(timer.stages)
     return res

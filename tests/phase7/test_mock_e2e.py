@@ -17,7 +17,7 @@ def test_mock_e2e_one_question(tmp_path):
     deps, hub = mock_server.build(str(runs), realtime=False)
     with TestClient(create_app(deps, before_start=hub.start)) as c:
         rid, _ = ask(c, "울쎄라 소프웨이브 뭐가 달라요?")
-        rec = c.get(f"/api/runs/{rid}").json()["record"]
+        rec = c.post(f"/api/runs/{rid}/quality").json()["record"]  # 「채점」 버튼
         for name in ("case1", "case2", "case3"):
             r = rec["cases"][name]
             assert r["error"] is None and r["answer"] and r["timing"]["total_ms"] > 0
@@ -34,10 +34,12 @@ def test_mock_e2e_one_question(tmp_path):
     common = prompts.load("common").rstrip()
     by_case = {}
     for p in sonnet:
-        by_case.setdefault(p["system"].split("## 자료")[1][:12], []).append(p)
+        sys_text = p["system"][0]["text"]
+        assert p["system"][0]["cache_control"] == {"type": "ephemeral"}  # 시스템(+도구) 캐시 — 세 케이스 같음
+        by_case.setdefault(sys_text.split("## 자료")[1][:12], []).append(p)
         assert p["model"] == rec["versions"]["answer_model"] == "claude-sonnet-5-5"
         assert p["thinking"] == {"type": "between_tools"} and p["output_config"] == {"effort": "high"}
-        assert p["system"].startswith(common)
+        assert sys_text.startswith(common)
     assert len(by_case) == 3
     assert rec["settings"]["thinking"] == "between_tools" and rec["settings"]["effort"] == "high"
     assert all(rec["cases"][x]["timing"]["t0"] == 0.0 for x in rec["cases"])

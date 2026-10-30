@@ -15,6 +15,7 @@ from typing import Any
 
 from clinic_chat.clients.anthropic_client import answer_params, block_to_param, stream_once, usage_dict
 from clinic_chat.clients.hub_mcp import ToolResult
+from clinic_chat.pricing import cost_usd
 from clinic_chat.timing import CaseTimer
 
 NODE_KINDS = ("concern", "site", "purpose", "check_condition", "technique", "family", "unit_procedure",
@@ -40,6 +41,16 @@ def node_ids(data: Any) -> list[str]:
     return list(seen)
 
 
+def cap_text(text: str, max_bytes: int) -> tuple[str, bool]:
+    """도구 결과가 크면 앞부분만 + 잘림 표시(바퀴마다 다시 보내는 입력 크기 상한 — SPEC-005 §5-12 크기 한도 20,000)."""
+    b = text.encode("utf-8")
+    if len(b) <= max_bytes:
+        return text, False
+    head = b[:max_bytes].decode("utf-8", errors="ignore")
+    return (head + f"\n…[잘림: 결과 {len(b):,}바이트 중 앞 {max_bytes:,}바이트만 — 원장은 raw_get 의 path · offset · "
+                   f"max_bytes 로 나눠 읽고, 골드는 sections 로 필요한 칸만 다시 요청]"), True
+
+
 def new_case_result() -> dict:
     return {"answer": "", "stop_reason": None, "loop_capped": False, "error": None, "refusal": False,
             "timing": {}, "tokens": {}, "trace": {}}
@@ -58,6 +69,7 @@ async def run_tool_loop(
     loop_max: int,
     collect_node_ids: bool = False,
     on_tool_result: Callable[[str, ToolResult], None] | None = None,
+    tool_result_max_bytes: int = 20_000,
 ) -> dict:
     res = new_case_result()
     messages: list[dict] = [{"role": "user", "content": question}]
@@ -68,7 +80,7 @@ async def run_tool_loop(
     while True:
         n += 1
         capped = n > loop_max
-        params = answer_params(model, system, messages, tools, {"type": "none"} if capped else None)
+        params = answer_params(model, system, messages, tools, {"type": "none"} if capped else None, loop_cache=True)
         round_first: list[float] = []
 
         def _txt(t: str, round_first: list[float] = round_first) -> None:
@@ -82,6 +94,7 @@ async def run_tool_loop(
         with timer.stage(name) as st:
             final = await stream_once(client, params, _txt)
             st["tokens"] = usage_dict(final.usage)
+            st["cost_usd"] = cost_usd(model, st["tokens"])
         timer.llm_round_trips += 1
         tokens[name] = st["tokens"]
         timer.ttft_answer_ms = round_first[0] if round_first else None
@@ -112,17 +125,26 @@ async def run_tool_loop(
                     "ms": round(r.ms, 1), "is_error": r.is_error}
             if collect_node_ids:
                 call["node_ids"] = node_ids(r.data) if r.data is not None else []
+            text, cut = cap_text(r.text or "(빈 결과)", tool_result_max_bytes)
+            if cut:
+                call["truncated_to"] = tool_result_max_bytes
             tool_calls.append(call)
             if on_tool_result:
                 on_tool_result(b.name, r)
-            results.append({"type": "tool_result", "tool_use_id": b.id, "content": r.text or "(빈 결과)",
-                            "is_error": r.is_error})
+            results.append({"type": "tool_result", "tool_use_id": b.id, "content": text, "is_error": r.is_error})
         messages.append({"role": "user", "content": results})
     timer.finish()
     res["timing"] = timer.as_dict()
     res["tokens"] = tokens
     res["trace"] = {"tool_calls": tool_calls}
+    res["cost"] = case_cost(timer.stages)
     return res
+
+
+def case_cost(stages: list[dict]) -> dict:
+    """열 비용 — 단계마다 cost_usd 합(Sonnet · Jev)."""
+    by = {s["name"]: s["cost_usd"] for s in stages if s.get("cost_usd") is not None}
+    return {"usd": round(sum(by.values()), 6), "by_stage": by}
 
 
 def dumps(v: Any) -> str:

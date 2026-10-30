@@ -49,9 +49,16 @@ def test_sse_contract_and_records(client):
     assert st["gold_mcp"] == 9 and st["raw_mcp"] == 3 and st["cases"] == {"case1": None, "case2": None, "case3": None}
     rid, evs = ask(client)
     kinds = [e for e, _ in evs]
-    assert kinds[-1] == "run_done" and kinds.count("case_done") == 3 and kinds.count("word_check") == 3
-    assert kinds.count("judge") == 1 and "stage" in kinds and "text" in kinds and "trace" in kinds
-    assert kinds.index("judge") > max(i for i, k in enumerate(kinds) if k == "case_done")  # 셋 다 끝난 뒤 ① → ②
+    assert kinds[-1] == "run_done" and kinds.count("case_done") == 3 and "cost" in kinds
+    assert "word_check" not in kinds and "judge" not in kinds  # 자동 채점 끔(기본) — 「채점」 버튼으로
+    assert "stage" in kinds and "text" in kinds and "trace" in kinds
+    opus_before = [p for p in client.deps.anthropic.calls if p["model"].startswith("claude-opus")]
+    assert opus_before == []
+    graded = client.post(f"/api/runs/{rid}/quality").json()["record"]
+    assert graded["judge_order"] and all("not_found" in graded["cases"][c]["word_check"] for c in graded["cases"])
+    assert graded["cost"]["quality_usd"] > 0 and graded["cost"]["total_usd"] > graded["cost"]["answers_usd"]
+    raw = (client.deps.settings.runs_path / "runs.jsonl").read_text(encoding="utf-8")
+    assert json.loads(raw.splitlines()[-1])["judge_order"] == []  # 기록 줄은 그대로 · 채점은 quality.jsonl
     for e, d in evs:
         if e in ("stage", "text", "trace", "case_done", "word_check"):
             assert d["case"] in ("case1", "case2", "case3")
@@ -105,10 +112,10 @@ def test_state_replay_from_mock_events(client):
         assert cs["text"] == rc["answer"] and cs["done"] is True
         assert cs["timing"]["total_ms"] == rc["timing"]["total_ms"]
         assert [x["name"] for x in cs["stages"]] == [x["name"] for x in rc["timing"]["stages"]]
-        assert cs["word_check"]["not_found"] == rc["word_check"]["not_found"]
-        assert cs["judge"]["pass_count"] == rc["judge"]["pass_count"]
+        assert cs["word_check"] is None and cs["judge"] is None  # 자동 채점 끔
+        assert cs["cost"]["usd"] == rec["cost"]["cases"][c]
     assert s["scale"] >= max(rec["cases"][c]["timing"]["total_ms"] for c in rec["cases"])
-    assert s["judge_order"] == rec["judge_order"]
+    assert s["cost"]["answers_usd"] == rec["cost"]["answers_usd"]
 
 
 @pytest.mark.skipif(NODE is None, reason="node 없음")

@@ -15,6 +15,7 @@ from clinic_chat import prompts
 from clinic_chat.cases import case1, case2, case3
 from clinic_chat.clients.anthropic_client import ANSWER_EFFORT, ANSWER_THINKING
 from clinic_chat.deps import Deps
+from clinic_chat.pricing import PRICING_AS_OF
 from clinic_chat.runs import now_iso
 from clinic_chat.timing import CaseTimer, Clock
 
@@ -26,8 +27,10 @@ def new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None = None, quality: bool = True,
+async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None = None, quality: bool | None = None,
                   jev_seed: int | None = None, judge_seed: int | None = None) -> dict:
+    """quality=None 이면 설정 AUTO_QUALITY(기본 끔 — 화면 「채점」 버튼으로 따로)."""
+    quality = deps.settings.auto_quality if quality is None else quality
     run_id = run_id or new_run_id()
     jev_seed = random.randrange(2**31) if jev_seed is None else jev_seed
     judge_seed = random.randrange(2**31) if judge_seed is None else judge_seed
@@ -58,9 +61,10 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         if r.get("error"):
             emit("error", {"case": c, "message": r["error"]})
         emit("trace", {"case": c, **r.get("trace", {})})
+        r.setdefault("cost", {"usd": 0.0, "by_stage": {}})
         emit("case_done", {"case": c, "timing": r["timing"], "tokens": r.get("tokens", {}), "error": r.get("error"),
                            "stop_reason": r.get("stop_reason"), "loop_capped": r.get("loop_capped"),
-                           "refusal": r.get("refusal")})
+                           "refusal": r.get("refusal"), "cost": r["cost"]})
         return r
 
     results = await asyncio.gather(*(one(c) for c in CASES))
@@ -70,8 +74,10 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         r.setdefault("judge", {})
 
     judge_order: list[str] = []
+    quality_cost = None
     if quality:
-        judge_order = await run_quality(deps, question, cases, emit, judge_seed)
+        q = await run_quality(deps, question, cases, emit, judge_seed)
+        judge_order, quality_cost = q["judge_order"], q["cost_usd"]
 
     s = deps.settings
     gold_hash = cases["case2"]["trace"].get("gold_build_hash") or cases["case3"]["trace"].get("gold_build_hash")
@@ -86,12 +92,22 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         "settings": {"thinking": ANSWER_THINKING["type"], "effort": ANSWER_EFFORT, "tool_loop_max": s.case_tool_loop_max,
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
         "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed,
+        "cost": run_cost(cases, quality_cost),
     }
+    emit("cost", record["cost"])
     return record  # run_done 은 서버가 기록을 쓴 뒤 보냄
 
 
-async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int) -> list[str]:
-    """① → ② (셋 다 끝난 뒤 · README §5)."""
+def run_cost(cases: dict, quality_usd: float | None) -> dict:
+    """질문당 예상 $ — 열마다(Sonnet · Jev) · 답 합계 · 채점(①②) · 전체. 단가표 날짜를 같이 남김."""
+    by = {c: round((cases[c].get("cost") or {}).get("usd") or 0.0, 6) for c in CASES}
+    answers = round(sum(by.values()), 6)
+    return {"cases": by, "answers_usd": answers, "quality_usd": quality_usd,
+            "total_usd": round(answers + (quality_usd or 0.0), 6), "pricing_as_of": PRICING_AS_OF}
+
+
+async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int) -> dict:
+    """① → ② (셋 다 끝난 뒤 · README §5). → {judge_order, cost_usd, usage}. 기록 칸 word_check · judge 를 채운다."""
     from clinic_chat.quality import judge, word_check
 
     for c in CASES:
@@ -103,14 +119,18 @@ async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_
         except Exception as e:  # noqa: BLE001 — ① 실패는 그 열 표시만
             r["word_check"] = {"error": f"{type(e).__name__}: {e}"[:300]}
         emit("word_check", {"case": c, **r["word_check"]})
+    q_costs = [(cases[c].get("word_check") or {}).get("cost_usd") or 0.0 for c in CASES]
     order = judge.blind_order([c for c in CASES if cases[c].get("answer") and not cases[c].get("error")], judge_seed)
     if not order:
-        return []
+        return {"judge_order": [], "cost_usd": round(sum(q_costs), 6)}
     try:
         jr = await judge.judge(deps, question, {c: cases[c]["answer"] for c in order}, order)
     except Exception as e:  # noqa: BLE001 — ② 실패는 표시만
         jr = {"error": f"{type(e).__name__}: {e}"[:300], "per_case": {}}
     for c in order:
         cases[c]["judge"] = jr.get("per_case", {}).get(c, {"error": jr.get("error")})
-    emit("judge", {"cases": {c: cases[c]["judge"] for c in order}, "order": order, "error": jr.get("error")})
-    return order
+    emit("judge", {"cases": {c: cases[c]["judge"] for c in order}, "order": order, "error": jr.get("error"),
+                   "cost_usd": jr.get("cost_usd"), "usage": jr.get("usage")})
+    total = round(sum(q_costs) + (jr.get("cost_usd") or 0.0), 6)
+    emit("quality_cost", {"cost_usd": total})
+    return {"judge_order": order, "cost_usd": total, "judge_usage": jr.get("usage"), "judge_cost_usd": jr.get("cost_usd")}

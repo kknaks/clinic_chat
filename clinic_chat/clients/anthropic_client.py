@@ -21,11 +21,22 @@ def make_client(settings: Settings) -> AsyncAnthropic | None:
     return AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value(), max_retries=2)
 
 
-def answer_params(model: str, system: str, messages: list, tools: list | None, tool_choice: dict | None = None) -> dict:
+CACHE = {"type": "ephemeral"}  # 5분 TTL
+
+
+def cached_system(system: str) -> list[dict]:
+    """시스템 프롬프트 끝에 캐시 표시 — 도구 설명(tools)이 system 앞에 그려지므로 둘을 같이 캐시한다."""
+    return [{"type": "text", "text": system, "cache_control": CACHE}]
+
+
+def answer_params(model: str, system: str, messages: list, tools: list | None, tool_choice: dict | None = None,
+                  *, loop_cache: bool = False) -> dict:
+    """세 케이스 같은 Sonnet 설정. 캐시: 시스템(+도구) 표시는 세 케이스 같음 · loop_cache=True(도구 루프)는
+    마지막 블록 자동 표시를 더해 바퀴마다 앞 대화를 다시 읽기(캐시 읽기)로 받는다."""
     p: dict[str, Any] = {
         "model": model,
         "max_tokens": ANSWER_MAX_TOKENS,
-        "system": system,
+        "system": cached_system(system),
         "messages": messages,
         "thinking": ANSWER_THINKING,
         "output_config": {"effort": ANSWER_EFFORT},
@@ -33,6 +44,8 @@ def answer_params(model: str, system: str, messages: list, tools: list | None, t
     if tools:
         p["tools"] = tools
         p["tool_choice"] = tool_choice or {"type": "auto"}
+    if loop_cache:
+        p["cache_control"] = CACHE
     return p
 
 

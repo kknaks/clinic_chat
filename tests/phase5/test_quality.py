@@ -159,3 +159,15 @@ async def test_local_raw_tools_same_as_raw_mcp(deps_factory, hub):
             remote = (await s.call(name, args)).data
             local = deps.raw_store.call(name, args)
             assert remote == local
+
+
+async def test_quality_usage_and_cost_recorded(deps_factory):
+    fa = FakeAnthropic(quality_policy)
+    deps = deps_factory(anthropic=fa)
+    wc = await word_check.check_answer(deps, "소프웨이브 권합니다")
+    assert wc["usage"]["input_tokens"] == 100 and wc["cost_usd"] > 0
+    jr = await judge.judge(deps, "q", ANSWERS, judge.blind_order(list(ANSWERS), 1))
+    assert jr["calls"] == len(fa.calls) - 1 and jr["usage"]["input_tokens"] == 100 * jr["calls"]
+    assert jr["cost_usd"] > 0
+    for p in fa.calls[1:]:
+        assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and p["cache_control"] == {"type": "ephemeral"}

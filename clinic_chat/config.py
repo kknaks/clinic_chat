@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     clinic_chat_port: int = 18210
     case_tool_loop_max: int = 12
     jev_confidence_min: float = 0.3
+    tool_result_max_bytes: int = 20_000  # case1 · 2 도구 결과를 Sonnet 에 넘길 때 상한(넘으면 잘림 표시)
+    auto_quality: bool = False  # ① · ② 를 질문마다 자동으로 돌릴지(기본 끔 — 화면 「채점」 버튼)
 
     @property
     def has_anthropic_key(self) -> bool:

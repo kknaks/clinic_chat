@@ -27,6 +27,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             client=deps.anthropic, model=deps.settings.answer_model, system=prompts.system_for("case2"),
             question=question, tools=tools, call_tool=s.call, timer=timer, on_text=on_text,
             loop_max=deps.settings.case_tool_loop_max, collect_node_ids=True, on_tool_result=seen,
+            tool_result_max_bytes=deps.settings.tool_result_max_bytes,
         )
     res["trace"]["gold_build_hash"] = meta.get("gold_build_hash")
     return res

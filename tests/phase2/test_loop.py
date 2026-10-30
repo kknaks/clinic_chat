@@ -126,3 +126,29 @@ async def test_no_key(deps_factory):
     assert r["error"] == NO_KEY
     r, _ = await run2(deps_factory(anthropic=None))
     assert r["error"] == NO_KEY
+
+
+# 비용 줄이기(10-30) — 도구 결과 상한 · raw_list 기본 depth · 캐시 표시
+async def test_tool_result_capped_and_marked(deps_factory):
+    fa = FakeAnthropic([Turn(tools=[("raw_get", {"path": "extracted.M9"})]), Turn(text=["답"])])
+    r, _ = await run1(deps_factory(anthropic=fa, tool_result_max_bytes=200))
+    sent = fa.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "…[잘림:" in sent and len(sent.split("\n…[잘림:")[0].encode()) <= 200
+    assert r["trace"]["tool_calls"][0]["truncated_to"] == 200
+
+
+async def test_raw_list_default_depth_1(deps_factory, hub):
+    fa = FakeAnthropic([Turn(tools=[("raw_list", {}), ("raw_list", {"file": "taxonomy", "depth": 3})]),
+                        Turn(text=["답"])])
+    await run1(deps_factory(anthropic=fa))
+    depths = [a["depth"] for via, t, a in hub.calls if t == "raw_list"]
+    assert sorted(depths) == [1, 3]  # 안 주면 1 · 주면 그대로
+
+
+async def test_cache_markers_loop(deps_factory):
+    fa = FakeAnthropic([Turn(tools=[("vocab", {})]), Turn(text=["답"])])
+    r, _ = await run2(deps_factory(anthropic=fa))
+    for p in fa.calls:
+        assert p["system"][-1]["cache_control"] == {"type": "ephemeral"}  # 시스템 + 도구 설명
+        assert p["cache_control"] == {"type": "ephemeral"}  # 도구 루프 앞부분(마지막 블록 자동)
+    assert r["cost"]["usd"] > 0 and set(r["cost"]["by_stage"]) == {"claude#1", "claude#2"}

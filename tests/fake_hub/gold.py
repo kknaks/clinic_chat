@@ -40,8 +40,9 @@ INTENTS = [
 MENUS = ["처짐/탄력"]
 TREATS = {"concern:P2": ["unit_procedure:U5-001"], "concern:P2-3": ["unit_procedure:U5-001"],
           "concern:P3": ["unit_procedure:U5-102", "unit_procedure:U5-140"]}
-SECTIONS = ["overview", "method", "recovery", "aftercare", "timeline", "emergency", "disclosure", "safety", "checks",
-            "site_caution", "dose", "products", "evidence", "ops", "market"]
+SECTIONS = ["overview", "method", "recovery", "aftercare", "timeline", "emergency", "disclosure", "safety.side_effects",
+            "safety.complications", "safety.pih", "checks", "site_caution", "dose", "products", "evidence", "ops",
+            "market", "all"]  # SPEC-005 §4-3 이름(10-30 허브 짧은 카드 판)
 
 
 class GoldError(ValueError):
@@ -128,10 +129,18 @@ def resolve(text: str, kinds: list[str] | None = None, limit_per_span: int = 20)
 
 
 # T2
+def _check_sections(sections: list[str] | None) -> None:
+    for s in sections or []:
+        if s not in SECTIONS:
+            raise GoldError(f"없는 section: {s}")
+
+
 def recommend(concerns: list[str], site: str | None = None, cc: str | None = None,
-              include_conditional: bool = False, include_not_recommended: bool = False) -> dict:
+              include_conditional: bool = False, include_not_recommended: bool = False,
+              sections: list[str] | None = None) -> dict:
     if not concerns:
         raise GoldError("concerns 는 1개 이상")
+    _check_sections(sections)
     for c in concerns:
         _need(c, "concern")
     if site:
@@ -141,7 +150,7 @@ def recommend(concerns: list[str], site: str | None = None, cc: str | None = Non
                                   for c in concerns if u in TREATS.get(c, [])]} for u in units]
     facts = [_fact(u, "overview") for u in units]
     req = {"concerns": concerns, "site": site, "cc": cc, "include_conditional": include_conditional,
-           "include_not_recommended": include_not_recommended}
+           "include_not_recommended": include_not_recommended, "sections": sections}
     body = {"areas": [{"site": site or "site:얼굴", "name": NODES.get(site, {}).get("name", "얼굴"),
                        "layer": "부위", "concerns": concerns, "card_ids": units}],
             "cards": cards, "family_only": [], "excluded_counts": {"conditional": 0, "not_recommended": 0}}
@@ -151,10 +160,8 @@ def recommend(concerns: list[str], site: str | None = None, cc: str | None = Non
 # T3
 def procedure_card(id: str, product: str | None = None, sections: list[str] | None = None, full: bool = False) -> dict:
     n = _need(id, "unit_procedure", "product", "family")
-    for s in sections or []:
-        if s not in SECTIONS:
-            raise GoldError(f"없는 section: {s}")
-    secs = SECTIONS if full else (sections or [])
+    _check_sections(sections)
+    secs = [s for s in SECTIONS if s != "all"] if full or "all" in (sections or []) else (sections or [])
     facts = [_fact(id, s) for s in secs] or [_fact(id, "overview")]
     card = _card(id) if n["kind"] == "unit_procedure" else {"id": id, "name": n["name"], "kind": n["kind"]}
     card["sections"] = {s: [f"{id}#{s}#fixture[0]"] for s in secs}
@@ -201,14 +208,15 @@ def check_conditions(id: str, conditions: list[str] | None = None) -> dict:
 
 
 # T6
-def compare(procedures: list[str]) -> dict:
+def compare(procedures: list[str], sections: list[str] | None = None) -> dict:
     if not 2 <= len(procedures) <= 4:
         raise GoldError("procedures 는 2~4개")
+    _check_sections(sections)
     for p in procedures:
         _need(p, "unit_procedure")
     rows = [{"field": "family", "values": {p: NODES[p].get("family") for p in procedures}}]
     body = {"rows": rows, "source_comparisons": [], "alternatives": [], "safety": [_safety(p) for p in procedures]}
-    return _wrap({"procedures": procedures}, body, [_fact(p, "overview") for p in procedures])
+    return _wrap({"procedures": procedures, "sections": sections}, body, [_fact(p, "overview") for p in procedures])
 
 
 # T7

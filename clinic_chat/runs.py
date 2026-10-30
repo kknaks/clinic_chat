@@ -11,6 +11,7 @@ from clinic_chat.config import ROOT
 
 RUNS_FILE = "runs.jsonl"
 CHECKS_FILE = "human_checks.jsonl"
+QUALITY_FILE = "quality.jsonl"  # 「채점」 버튼 결과(①②) — 기록 줄은 고치지 않고 따로 덧붙임
 
 
 def now_iso() -> str:
@@ -57,11 +58,25 @@ class RunStore:
         self._append(CHECKS_FILE, row)
         return row
 
-    def get(self, run_id: str) -> dict | None:
+    def add_quality(self, entry: dict) -> None:
+        self._append(QUALITY_FILE, entry)
+
+    def latest_quality(self) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for q in self._read(QUALITY_FILE):
+            out[q["run_id"]] = q
+        return out
+
+    def get_raw(self, run_id: str) -> dict | None:
         for r in reversed(self._read(RUNS_FILE)):
             if r.get("run_id") == run_id:
                 return r
         return None
+
+    def get(self, run_id: str) -> dict | None:
+        """기록 줄 + 나중 채점(quality.jsonl 마지막 것)을 겹친 보기."""
+        r = self.get_raw(run_id)
+        return merge_quality(r, self.latest_quality().get(run_id)) if r else None
 
     def checks(self) -> list[dict]:
         return self._read(CHECKS_FILE)
@@ -72,15 +87,36 @@ class RunStore:
         for c in self.checks():
             checks[(c["run_id"], c["case"])] = c["verdict"]
         out = []
+        qual = self.latest_quality()
         for r in reversed(self._read(RUNS_FILE)[-limit:]):
+            r = merge_quality(r, qual.get(r["run_id"]))
             cases = {}
             for name, c in (r.get("cases") or {}).items():
                 wc = c.get("word_check") or {}
                 jd = c.get("judge") or {}
                 cases[name] = {"total_ms": (c.get("timing") or {}).get("total_ms"), "error": c.get("error"),
                                "not_found": wc.get("not_found"), "judge_pass": jd.get("pass_count"),
-                               "human": checks.get((r["run_id"], name))}
+                               "human": checks.get((r["run_id"], name)),
+                               "cost_usd": ((r.get("cost") or {}).get("cases") or {}).get(name)}
             gh = (r.get("versions") or {}).get("gold_build_hash")
             out.append({"run_id": r["run_id"], "asked_at": r.get("asked_at"), "question": r.get("question"),
-                        "gold": gh[:8] if gh else None, "cases": cases, "rerun_of": r.get("rerun_of")})
+                        "gold": gh[:8] if gh else None, "cases": cases, "rerun_of": r.get("rerun_of"),
+                        "cost": r.get("cost"), "graded": bool(r.get("judge_order"))})
         return out
+
+
+def merge_quality(rec: dict, q: dict | None) -> dict:
+    if not q:
+        return rec
+    rec = {**rec, "cases": {c: dict(v) for c, v in (rec.get("cases") or {}).items()}}
+    for c, v in (q.get("cases") or {}).items():
+        if c in rec["cases"]:
+            rec["cases"][c].update({k: v[k] for k in ("word_check", "judge") if k in v})
+    rec["judge_order"] = q.get("judge_order") or rec.get("judge_order")
+    rec["judge_seed"] = q.get("judge_seed", rec.get("judge_seed"))
+    cost = dict(rec.get("cost") or {})
+    cost["quality_usd"] = q.get("cost_usd")
+    cost["total_usd"] = round((cost.get("answers_usd") or 0.0) + (q.get("cost_usd") or 0.0), 6)
+    rec["cost"] = cost
+    rec["quality_at"] = q.get("at")
+    return rec

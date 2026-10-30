@@ -12,8 +12,9 @@ import random
 from typing import Any
 
 from clinic_chat import prompts
-from clinic_chat.clients.anthropic_client import block_to_param
+from clinic_chat.clients.anthropic_client import CACHE, block_to_param, cached_system, usage_dict
 from clinic_chat.deps import NO_KEY, Deps
+from clinic_chat.pricing import cost_usd, sum_usage
 from clinic_chat.quality.raw_tools import RAW_TOOL_DEFS, RawToolError
 from clinic_chat.quality.word_check import final_text
 
@@ -95,13 +96,17 @@ async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[
     s = deps.settings
     system = prompts.load("judge")
     messages: list[dict] = [{"role": "user", "content": judge_input(question, answers, order)}]
-    base = {"model": s.judge_model, "max_tokens": 16000, "system": system, "tools": RAW_TOOL_DEFS}
+    # 캐시: 시스템(+도구) 표시 · 루프는 마지막 블록 자동 표시(바퀴마다 앞 대화를 캐시 읽기로)
+    base = {"model": s.judge_model, "max_tokens": 16000, "system": cached_system(system), "tools": RAW_TOOL_DEFS,
+            "cache_control": CACHE}
+    usages: list[dict] = []
     tool_calls = 0
     rounds = 0
     while rounds < s.case_tool_loop_max:
         rounds += 1
         msg = await deps.anthropic.messages.create(**base, messages=messages, tool_choice={"type": "auto"},
                                                    output_config={"effort": JUDGE_EFFORT})
+        usages.append(usage_dict(msg.usage))
         uses = [b for b in msg.content if b.type == "tool_use"]
         if msg.stop_reason != "tool_use" or not uses:
             messages.append({"role": "assistant", "content": [block_to_param(b) for b in msg.content]})
@@ -119,6 +124,7 @@ async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[
     final = await deps.anthropic.messages.create(
         **base, messages=messages, tool_choice={"type": "none"},
         output_config={"effort": JUDGE_EFFORT, "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}})
+    usages.append(usage_dict(final.usage))
     data = json.loads(final_text(final))
 
     label_case = dict(zip(LABELS, order))
@@ -137,4 +143,7 @@ async def judge(deps: Deps, question: str, answers: dict[str, str], order: list[
         per_case[c] = {"label": a["label"], "items": items, "failures": failures,
                        "pass_count": sum(1 for v in items.values() if v == "통과"),
                        "invalid_count": sum(1 for f in failures if f["status"] == "invalid")}
-    return {"per_case": per_case, "rounds": rounds, "tool_calls": tool_calls, "judge_model": s.judge_model}
+    usage = sum_usage(usages)
+    return {"per_case": per_case, "rounds": rounds, "tool_calls": tool_calls, "judge_model": s.judge_model,
+            "usage": usage, "cost_usd": round(sum(cost_usd(s.judge_model, u) or 0 for u in usages), 6),
+            "calls": len(usages)}

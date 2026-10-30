@@ -10,7 +10,9 @@ import json
 from typing import Any
 
 from clinic_chat import prompts
+from clinic_chat.clients.anthropic_client import cached_system, usage_dict
 from clinic_chat.deps import NO_KEY, Deps
+from clinic_chat.pricing import cost_usd
 
 KINDS = ["시술", "제품", "장비", "부위", "성분"]
 NAMES_SCHEMA = {
@@ -27,15 +29,16 @@ def final_text(msg: Any) -> str:
     return "".join(b.text for b in msg.content if b.type == "text")
 
 
-async def extract_names(deps: Deps, answer: str) -> list[dict]:
+async def extract_names(deps: Deps, answer: str) -> tuple[list[dict], dict]:
+    """→ (이름 목록, 토큰 usage)."""
     if deps.anthropic is None:
         raise RuntimeError(NO_KEY)
     msg = await deps.anthropic.messages.create(
-        model=deps.settings.extract_model, max_tokens=4000, system=prompts.load("extract"),
+        model=deps.settings.extract_model, max_tokens=4000, system=cached_system(prompts.load("extract")),
         messages=[{"role": "user", "content": answer}],
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": NAMES_SCHEMA}},
     )
-    return json.loads(final_text(msg))["names"]
+    return json.loads(final_text(msg))["names"], usage_dict(msg.usage)
 
 
 def _raw_index(deps: Deps) -> list[tuple[str, str, str]]:
@@ -85,8 +88,10 @@ def match_names(deps: Deps, names: list[dict]) -> dict:
 
 
 async def check_answer(deps: Deps, answer: str) -> dict:
-    names = await extract_names(deps, answer)
+    names, usage = await extract_names(deps, answer)
     res = match_names(deps, names)
+    res["usage"] = usage
+    res["cost_usd"] = cost_usd(deps.settings.extract_model, usage)
     res["extracted"] = names  # 뽑기 결과 그대로(다시 대조 가능)
     res["extract_model"] = deps.settings.extract_model
     return res

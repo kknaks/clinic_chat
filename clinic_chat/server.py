@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,7 +27,7 @@ from clinic_chat.clients.hub_mcp import HubMCP
 from clinic_chat.clients.hub_rest import HubRest
 from clinic_chat.config import ROOT, Settings, get_settings
 from clinic_chat.deps import NO_KEY, Deps
-from clinic_chat.runs import RunStore, app_commit
+from clinic_chat.runs import RunStore, app_commit, now_iso
 
 WEB = ROOT / "web"
 RERUN_TIMES = 3
@@ -99,7 +100,12 @@ async def startup_check(deps: Deps) -> dict:
     for name, m in (("gold_mcp", deps.gold_mcp), ("raw_mcp", deps.raw_mcp)):
         try:
             async with m.session() as sess:
-                info[name] = len(await sess.list_tools())
+                tools = await sess.list_tools()
+                info[name] = len(tools)
+                if name == "gold_mcp":
+                    deps.section_tools = {t["name"] for t in tools
+                                          if "sections" in (t["input_schema"].get("properties") or {})}
+                    info["section_tools"] = sorted(deps.section_tools)
         except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             info[name] = f"연결 안 됨: {type(e).__name__}"
     try:
@@ -121,7 +127,7 @@ async def startup_check(deps: Deps) -> dict:
 
 def create_app(deps: Deps | None = None, *, check: bool = True, before_start: Any = None) -> FastAPI:
     """deps 를 주면 그것을 씀(시험 · 모의 판). before_start = 기동 전에 같은 이벤트 루프에서 부를 async 함수."""
-    state: dict[str, Any] = {"deps": deps, "runs": {}, "lock": asyncio.Lock()}
+    state: dict[str, Any] = {"deps": deps, "runs": {}, "lock": asyncio.Lock(), "grading": set()}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -210,6 +216,27 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
             return state["store"].add_human_check(run_id, body.case, body.verdict, body.note, body.item)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
+
+    @app.post("/api/runs/{run_id}/quality")
+    async def quality(run_id: str) -> dict:
+        """「채점」 버튼 — ① 이름 뽑기 · ② Opus 채점을 이 기록의 답으로 돌려 quality.jsonl 에 덧붙임(기록 줄은 그대로)."""
+        rec = state["store"].get_raw(run_id)
+        if rec is None:
+            raise HTTPException(404, "기록 없음")
+        if run_id in state["grading"]:
+            raise HTTPException(409, "채점 중")
+        state["grading"].add(run_id)
+        try:
+            cases = {c: {"answer": v.get("answer"), "error": v.get("error")} for c, v in rec["cases"].items()}
+            seed = random.randrange(2**31)
+            q = await runner.run_quality(state["deps"], rec["question"], cases, lambda e, d: None, seed)
+            entry = {"run_id": run_id, "at": now_iso(), "judge_order": q["judge_order"], "judge_seed": seed,
+                     "cost_usd": q["cost_usd"], "judge_usage": q.get("judge_usage"),
+                     "cases": {c: {k: v[k] for k in ("word_check", "judge") if k in v} for c, v in cases.items()}}
+            state["store"].add_quality(entry)
+        finally:
+            state["grading"].discard(run_id)
+        return {"record": state["store"].get(run_id)}
 
     @app.post("/api/runs/{run_id}/rerun")
     async def rerun(run_id: str) -> dict:

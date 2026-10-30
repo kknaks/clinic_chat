@@ -4,7 +4,7 @@
   const NO_KEY = "키 없음";
 
   function emptyCase() {
-    return { text: "", stages: [], timing: null, tokens: {}, trace: null, error: null, word_check: null,
+    return { text: "", stages: [], timing: null, tokens: {}, trace: null, error: null, word_check: null, cost: null,
              judge: null, done: false, stop_reason: null, loop_capped: false, refusal: false };
   }
 
@@ -15,7 +15,7 @@
       if (disabled && disabled[c]) cases[c].error = disabled[c];
     }
     return { run_id: runId || null, question: question || "", cases, judge_order: [], judge_error: null,
-             done: false, errors: [] };
+             done: false, errors: [], cost: null };
   }
 
   function reduce(s, type, d) {
@@ -34,7 +34,10 @@
         if (d.timing && d.timing.stages) c.stages = d.timing.stages;
         if (d.error) c.error = d.error;
         c.stop_reason = d.stop_reason || null; c.loop_capped = !!d.loop_capped; c.refusal = !!d.refusal;
+        c.cost = d.cost || null;
         break;
+      case "cost": s.cost = d; break;
+      case "quality_cost": s.cost = { ...(s.cost || {}), quality_usd: d.cost_usd }; break;
       case "word_check": { const { case: _c, ...rest } = d; c.word_check = rest; break; }
       case "judge":
         s.judge_order = d.order || [];
@@ -56,12 +59,14 @@
       Object.assign(s.cases[c], {
         text: r.answer || "", stages: (r.timing || {}).stages || [], timing: r.timing || null, tokens: r.tokens || {},
         trace: r.trace || null, error: r.error || null, done: true, stop_reason: r.stop_reason || null,
+        cost: r.cost || null,
         loop_capped: !!r.loop_capped, refusal: !!r.refusal,
         word_check: r.word_check && Object.keys(r.word_check).length ? r.word_check : null,
         judge: r.judge && Object.keys(r.judge).length ? r.judge : null,
       });
     }
     s.judge_order = rec.judge_order || [];
+    s.cost = rec.cost || null;
     s.done = true;
     s.versions = rec.versions;
     return s;
@@ -120,12 +125,18 @@
     });
   }
 
+  // 비용 표시 — 1센트 미만은 소수 4자리
+  function fmtUsd(x) {
+    if (typeof x !== "number" || !isFinite(x)) return "–";
+    return x < 0.01 ? `$${x.toFixed(4)}` : `$${x.toFixed(3)}`;
+  }
+
   // 답 영역 스크롤 — 바닥 근처(px 여유)면 스트리밍을 따라감 · 위로 올리면 멈춤
   function atBottom(scrollTop, clientHeight, scrollHeight, slack) {
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems };
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);

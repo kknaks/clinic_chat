@@ -7,6 +7,7 @@
   let cur = S.initial();
   let lastRunId = null;
   let es = null;
+  const grading = new Set();
   // 화면 보기 상태 — 다시 그려도 유지(열마다 따라가기 · 스크롤 위치 · 펼친 칸)
   let follow = {};
   let opened = new Set();
@@ -122,7 +123,11 @@
       if (d.open) opened.add(d.dataset.key); else opened.delete(d.dataset.key);
     }
     cols.replaceChildren();
-    $("current").textContent = cur.question ? `질문: ${cur.question}` : "";
+    const k = cur.cost || {};
+    const costLine = typeof k.answers_usd === "number"
+      ? `  ·  예상 비용 답 ${S.fmtUsd(k.answers_usd)}` + (typeof k.quality_usd === "number" ? ` + 채점 ${S.fmtUsd(k.quality_usd)} = ${S.fmtUsd(k.total_usd)}` : "")
+      : "";
+    $("current").textContent = cur.question ? `질문: ${cur.question}${costLine}` : "";
     const scale = S.scale(cur);
     for (const name of S.CASES) {
       const c = cur.cases[name];
@@ -134,7 +139,8 @@
       const t = c.timing || {};
       cols.append(el("section", { class: "col", "data-case": name },
         el("h3", {}, TITLE[name], ...badges),
-        el("div", { class: "timing" }, `⏱ 첫 글자 ${ms(t.ttft_ms)} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`),
+        el("div", { class: "timing" }, `⏱ 첫 글자 ${ms(t.ttft_ms)} / 전체 ${ms(t.total_ms)} · 왕복 ${t.llm_round_trips ?? "–"}`,
+          el("span", { class: "usd", title: "이 열 예상 비용(Sonnet · Jev · 캐시 포함)" }, ` · ${S.fmtUsd((c.cost || {}).usd)}`)),
         stageBar(c, scale),
         legend(c),
         el("div", { class: "answer", "data-case": name }, c.text || (c.error && c.error !== S.NO_KEY ? c.error : "")),
@@ -148,13 +154,16 @@
       a.addEventListener("scroll", () => { follow[c] = S.atBottom(a.scrollTop, a.clientHeight, a.scrollHeight); });
     }
     $("rerun").disabled = !(cur.done && cur.run_id);
+    const graded = (cur.judge_order || []).length > 0;
+    $("grade").disabled = !(cur.done && cur.run_id) || graded || grading.has(cur.run_id);
+    $("grade").textContent = graded ? "채점 끝(①②)" : grading.has(cur.run_id) ? "채점 중…" : "채점 ①②";
   }
 
   function subscribe(runId, onState) {
     return new Promise((resolve) => {
       const st = S.initial(runId, "", disabled);
       const src = new EventSource(`/api/runs/${runId}/events`);
-      for (const type of ["stage", "text", "trace", "case_done", "word_check", "judge", "error", "run_done"]) {
+      for (const type of ["stage", "text", "trace", "case_done", "word_check", "judge", "cost", "quality_cost", "error", "run_done"]) {
         src.addEventListener(type, (ev) => {
           S.reduce(st, type, JSON.parse(ev.data));
           if (onState) onState(st);
@@ -200,6 +209,25 @@
     loadRuns();
   }
 
+  // 「채점」 — ① 이름 뽑기 · ② Opus 채점(자동 아님 · Opus 비용)
+  async function grade(runId) {
+    if (!runId || grading.has(runId)) return;
+    grading.add(runId);
+    if (cur.run_id === runId) render();
+    loadRuns();
+    try {
+      const r = await fetch(`/api/runs/${runId}/quality`, { method: "POST" });
+      if (r.ok) {
+        const { record } = await r.json();
+        if (cur.run_id === runId) { cur = S.fromRecord(record); }
+      }
+    } finally {
+      grading.delete(runId);
+      if (cur.run_id === runId) render();
+      loadRuns();
+    }
+  }
+
   async function loadRuns() {
     const r = await fetch("/api/runs?limit=100");
     const { runs } = await r.json();
@@ -212,7 +240,15 @@
       const tr = el("tr", {}, el("td", {}, (x.asked_at || "").replace("T", " ").slice(0, 19)),
         el("td", { class: "qcell" }, x.question, x.rerun_of ? el("span", { class: "muted" }, " (다시)") : null),
         ...S.CASES.map((c) => el("td", {}, (cs[c] || {}).error ? "오류" : ms((cs[c] || {}).total_ms))),
-        el("td", {}, nf), el("td", {}, jp), el("td", {}, hu), el("td", {}, x.gold || "–"));
+        el("td", {}, nf), el("td", {}, jp), el("td", {}, hu),
+        el("td", { title: "답 합계(+채점)" }, S.fmtUsd((x.cost || {}).total_usd ?? (x.cost || {}).answers_usd)),
+        el("td", {}, x.graded ? "끝" : (() => {
+          const b = el("button", { type: "button", class: "mini" }, grading.has(x.run_id) ? "채점 중…" : "채점");
+          b.disabled = grading.has(x.run_id);
+          b.addEventListener("click", (e) => { e.stopPropagation(); grade(x.run_id); });
+          return b;
+        })()),
+        el("td", {}, x.gold || "–"));
       tr.addEventListener("click", () => showRecord(x.run_id));
       return tr;
     }));
@@ -244,6 +280,7 @@
 
   $("ask").addEventListener("submit", (e) => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); });
   $("rerun").addEventListener("click", rerun);
+  $("grade").addEventListener("click", () => grade(cur.run_id));
   loadStatus().then(loadRuns).then(() => {
     const q = new URLSearchParams(location.search).get("q");  // ?q= 로 열면 바로 보냄
     if (q) { $("q").value = q; ask(q); }

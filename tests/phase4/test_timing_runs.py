@@ -70,7 +70,11 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert len(starts) == 1  # t0 하나
     assert all(rec["cases"][c]["timing"]["t0"] == 0.0 for c in runner.CASES)
     assert all(rec["cases"][c]["error"] is None for c in runner.CASES), {c: rec["cases"][c]["error"] for c in runner.CASES}
-    assert set(rec) == {"run_id", "asked_at", "question", "versions", "settings", "cases", "judge_order", "judge_seed"}
+    assert set(rec) == {"run_id", "asked_at", "question", "versions", "settings", "cases", "judge_order", "judge_seed",
+                        "cost"}
+    cost = rec["cost"]
+    assert set(cost["cases"]) == set(runner.CASES) and cost["quality_usd"] is None
+    assert cost["answers_usd"] == round(sum(cost["cases"].values()), 6) > 0 and cost["pricing_as_of"]
     v = rec["versions"]
     assert v["answer_model"] == "claude-sonnet-5-5" and v["jev_model"] == "jev-1.14.0"
     assert set(v["prompts"]) == {"common", "case1", "case2", "case3", "judge", "extract"}
@@ -106,3 +110,29 @@ async def test_one_column_error_others_continue(deps_factory, tmp_path, hub, mon
     assert rec["cases"]["case1"]["error"] is None and rec["cases"]["case1"]["answer"]
     assert rec["cases"]["case2"]["error"] is None and rec["cases"]["case2"]["trace"]["tool_calls"][0]["is_error"]
     assert ("error", {"case": "case3", "message": rec["cases"]["case3"]["error"]}) in events
+
+
+def test_pricing_table():
+    from clinic_chat.pricing import cost_usd
+
+    u = {"input_tokens": 1_000_000, "output_tokens": 100_000, "cache_creation_input_tokens": 200_000,
+         "cache_read_input_tokens": 500_000}
+    # Sonnet 5.5: 2 + 1.0 + 0.5 + 0.1
+    assert cost_usd("claude-sonnet-5-5", u) == 3.6
+    # Opus 5.5: 4 + 2.0 + 1.0 + 0.1
+    assert cost_usd("claude-opus-5-5", u) == 7.1
+    assert cost_usd("jev-1.14.0", {"input_tokens": 1_000_000}) == 0.042
+    assert cost_usd("unknown-model", u) is None
+
+
+async def test_case3_cost_and_system_cache_only(deps_factory):
+    fa = FakeAnthropic([Turn(text=["답"])])
+    deps = deps_factory(anthropic=fa)
+    deps.jev = FakeJev(intent="I-01").client(deps.settings)
+    deps.vocab = await deps.hub_rest.vocab()
+    c = Clock()
+    c.start()
+    r = await case3.run(deps, "이마 주름", CaseTimer(c), lambda t: None)
+    p = fa.calls[0]
+    assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in p  # 1회 호출 — 질문 뒤 표시 안 함
+    assert set(r["cost"]["by_stage"]) == {"jev", "claude"} and r["cost"]["usd"] > 0

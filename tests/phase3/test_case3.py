@@ -36,11 +36,12 @@ def gold_calls(hub):
 CASES = [
     ("I-01", "이마 주름 신경 쓰여요", "recommend", {"concerns": ["concern:P2"], "site": "site:이마"}),
     ("I-02", "소프웨이브 어떻게 하는 거예요?", "procedure_card",
-     {"id": "unit_procedure:U5-140", "sections": ["overview", "method", "ops"]}),
+     {"id": "unit_procedure:U5-140", "sections": ["method"]}),
     ("I-03", "소프웨이브 끝나고 사우나 가도 돼요?", "procedure_card",
-     {"id": "unit_procedure:U5-140", "sections": ["aftercare", "timeline", "emergency"]}),
-    ("I-04", "소프웨이브 부작용 있어요?", "procedure_card", {"id": "unit_procedure:U5-140", "sections": ["safety"]}),
-    ("I-05", "소프웨이브 하고 바로 출근해도 돼요?", "procedure_card",
+     {"id": "unit_procedure:U5-140", "sections": ["aftercare"]}),
+    ("I-04", "소프웨이브 부작용 있어요?", "procedure_card",
+     {"id": "unit_procedure:U5-140", "sections": ["safety.side_effects", "safety.complications"]}),
+    ("I-05", "소프웨이브 하고 바로 출근 가능해요?", "procedure_card",
      {"id": "unit_procedure:U5-140", "sections": ["recovery"]}),
     ("I-06", "울쎄라 소프웨이브 뭐가 달라요?", "compare",
      {"procedures": ["unit_procedure:U5-102", "unit_procedure:U5-140"]}),
@@ -51,7 +52,7 @@ CASES = [
       "prior": {"procedure": "unit_procedure:U5-102", "elapsed_days": 42}}),
     ("I-09", "임신 준비 중인데 소프웨이브 해도 돼요?", "check_conditions",
      {"id": "unit_procedure:U5-140", "conditions": ["check_condition:C-PREG"]}),
-    ("I-10", "소프웨이브 몇 회 해요?", "procedure_card", {"id": "unit_procedure:U5-140", "sections": ["dose", "products"]}),
+    ("I-10", "소프웨이브 몇 번 해요?", "procedure_card", {"id": "unit_procedure:U5-140", "sections": ["dose"]}),
     ("I-11", "처짐/탄력 패키지 뭐 있어요?", "combos", {"menu": "처짐/탄력"}),
 ]
 
@@ -74,7 +75,43 @@ async def test_intent_path(deps_factory, hub, intent, q, tool, inp):
 async def test_i09_without_condition_falls_back_to_card(deps_factory, hub):
     r, _, _ = await run(deps_factory, "소프웨이브 통증 민감한데 괜찮아요?", FakeJev(intent="I-09"))
     assert r["trace"]["hub"]["tool"] == "procedure_card"
-    assert r["trace"]["hub"]["input"]["sections"] == ["overview", "ops"]
+    assert r["trace"]["hub"]["input"]["sections"] == ["ops"]  # Jev 가 고른 칸(통증 → ops)
+
+
+async def test_i09_without_condition_and_no_info_uses_spec_default(deps_factory, hub):
+    r, _, _ = await run(deps_factory, "소프웨이브 저한테 괜찮을까요", FakeJev(intent="I-09"))
+    assert r["trace"]["hub"]["input"]["sections"] == ["overview", "ops"]  # SPEC-005 §6-1 기본
+
+
+# 「필요한 정보」 — Jev 가 고른 칸만 허브에(브리프 질문 꼴 예시)
+INFO_CASES = [
+    ("I-01", "이마 주름이 신경 쓰여요", "recommend", None),  # 추천 → 기본만
+    ("I-09", "임신 중인데 소프웨이브 해도 돼요?", "check_conditions", ["checks"]),
+    ("I-04", "소프웨이브 부작용 있어요?", "procedure_card", ["safety.side_effects", "safety.complications"]),
+    ("I-05", "소프웨이브 회복 기간이랑 관리는 어떻게 해요?", "procedure_card", ["method", "recovery", "aftercare"]),
+]
+
+
+@pytest.mark.parametrize("intent,q,tool,secs", INFO_CASES, ids=[c[0] + "-" + c[1][:6] for c in INFO_CASES])
+async def test_jev_picks_needed_sections(deps_factory, hub, intent, q, tool, secs):
+    jev = FakeJev(intent=intent)
+    fa = FakeAnthropic([Turn(text=["답"])])
+    deps = deps_factory(anthropic=fa)
+    deps.jev = jev.client(deps.settings)
+    deps.vocab = await deps.hub_rest.vocab()
+    deps.section_tools = {"procedure_card", "recommend", "compare"}
+    r = await case3.run(deps, q, CaseTimer(Clock()), lambda t: None)
+    asked = jev.requests[0]["questions"]
+    assert {k for k in asked if k.startswith("info:")} == {f"info:{s}" for s in case3.INFO_SECTIONS}  # 같은 한 요청
+    assert len(jev.requests) == 1
+    j = r["trace"]["jev"]
+    assert j["sections"] == (secs or [])
+    if intent == "I-09":
+        assert "checks" in j["sections"] and r["trace"]["hub"]["tool"] == tool
+        return
+    assert r["trace"]["hub"]["tool"] == tool
+    sent = next(a for via, t, a in hub.calls if via == "gold-rest" and t == tool)
+    assert sent.get("sections") == secs  # 기본만이면 sections 없음
 
 
 async def test_i12_price_no_hub_call(deps_factory, hub):
