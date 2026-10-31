@@ -109,7 +109,9 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         judge_order, quality_cost = q["judge_order"], q["cost_usd"]
 
     s = deps.settings
-    gold_hash = cases["case2"]["trace"].get("gold_build_hash") or cases["case3"]["trace"].get("gold_build_hash")
+    # 골드 빌드 = 이번 질문의 허브 응답 머리(case2 · case3) · 없으면(CLI case2 · case3 오류) 기동 때 health build_hash
+    gold_hash = cases["case2"]["trace"].get("gold_build_hash") or cases["case3"]["trace"].get("gold_build_hash") \
+        or deps.startup.get("gold_build_hash")
     cli_any = next((cases[c]["trace"].get("cli") for c in CASES if cases[c].get("trace", {}).get("cli")), None) or {}
     record = {
         "run_id": run_id, "asked_at": asked_at, "question": question, "provider": provider,

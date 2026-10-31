@@ -106,7 +106,9 @@ async def startup_check(deps: Deps) -> dict:
     info["default_provider"] = s.default_provider
     try:
         h = await deps.hub_rest.health()
-        info["hub_health"] = {"build": (h.get("build") or {}).get("id"), "raw": h.get("raw")}
+        info["hub_health"] = {"build": (h.get("build") or {}).get("id"), "build_hash": (h.get("build") or {}).get("build_hash"),
+                              "raw": h.get("raw")}
+        deps.startup["gold_build_hash"] = (h.get("build") or {}).get("build_hash")
     except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
         info["hub_health"] = f"연결 안 됨: {type(e).__name__}"
     for name, m in (("gold_mcp", deps.gold_mcp), ("raw_mcp", deps.raw_mcp)):
@@ -118,6 +120,9 @@ async def startup_check(deps: Deps) -> dict:
                     deps.section_tools = {t["name"] for t in tools
                                           if "sections" in (t["input_schema"].get("properties") or {})}
                     info["section_tools"] = sorted(deps.section_tools)
+                    deps.intent_tools = {t["name"] for t in tools
+                                         if "intent" in (t["input_schema"].get("properties") or {})}
+                    info["intent_tools"] = sorted(deps.intent_tools)
         except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             info[name] = f"연결 안 됨: {type(e).__name__}"
     try:
@@ -255,7 +260,7 @@ def create_app(deps: Deps | None = None, *, check: bool = True, before_start: An
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50) -> dict:
-        rows = state["store"].list(limit=max(1, min(limit, 500)))
+        rows = state["store"].list(limit=max(1, min(limit, 100_000)))
         for r in rows:
             r["grading"] = grading_any(r["run_id"])  # 백그라운드 채점 중(화면 기록 표)
         return {"runs": rows}

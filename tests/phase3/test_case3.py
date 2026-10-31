@@ -302,3 +302,26 @@ async def test_case3_cap_same_as_other_cases(deps_factory, hub):
     r, fa, _ = await run(deps_factory, "소프웨이브 어떻게 하는 거예요?", FakeJev(intent="I-02"), tool_result_max_bytes=200)
     assert r["trace"]["hub"]["input_cap_bytes"] == 200 and r["trace"]["hub"]["truncated_to"] == 200
     assert "…[잘림:" in fa.calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("intent,q,tool", [("I-01", "이마 주름 신경 쓰여요", "recommend"),
+                                           ("I-02", "소프웨이브 어떻게 하는 거예요?", "procedure_card"),
+                                           ("I-09", "임신 중인데 소프웨이브 해도 돼요?", "check_conditions")])
+async def test_intent_passed_to_hub_v31(deps_factory, hub, intent, q, tool):
+    """허브 SPEC-005 v3.1 — 경로 호출에 Jev 의도 id 를 intent 로(스키마에 intent 가 있는 도구만)."""
+    jev = FakeJev(intent=intent)
+    fa = FakeAnthropic([Turn(text=["답"])])
+    deps = deps_factory(anthropic=fa)
+    deps.jev = jev.client(deps.settings)
+    deps.vocab = await deps.hub_rest.vocab()
+    deps.intent_tools = {"recommend", "procedure_card", "pair_check", "check_conditions", "compare", "combos"}
+    r = await case3.run(deps, q, CaseTimer(Clock()), lambda t: None)
+    sent = next(a for via, t, a in hub.calls if via == "gold-rest" and t == tool)
+    assert sent["intent"] == intent and r["trace"]["hub"]["input"]["intent"] == intent
+    resolve = next(a for via, t, a in hub.calls if via == "gold-rest" and t == "resolve")
+    assert not resolve.get("intent")  # ① 사전 검색은 Jev 앞이라 의도 없음
+
+
+async def test_intent_not_sent_when_hub_lacks_it(deps_factory, hub):
+    r, _, _ = await run(deps_factory, "소프웨이브 어떻게 하는 거예요?", FakeJev(intent="I-02"))
+    assert "intent" not in r["trace"]["hub"]["input"]  # 옛 허브(스키마에 intent 없음)엔 안 보냄

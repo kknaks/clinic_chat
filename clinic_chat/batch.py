@@ -128,7 +128,8 @@ class BatchStore:
         return out
 
 
-def make_plan(questions: list[dict], providers: list[str], pick: list | None = None, skip: set | None = None) -> dict:
+def make_plan(questions: list[dict], providers: list[str], pick: list | None = None, skip: set | None = None,
+              label: str | None = None) -> dict:
     """skip = 이미 끝난 번호(재개 때 건너뜀)."""
     for p in providers:
         if p not in PROVIDERS:
@@ -137,7 +138,7 @@ def make_plan(questions: list[dict], providers: list[str], pick: list | None = N
     items = [{"key": f"{q['n']}:{p}", "n": q["n"], "question": q["text"], "provider": p, "status": "todo",
               "attempts": 0, "run_id": None, "error": None, "meta": q.get("meta") or {}} for q in qs for p in providers]
     plan = {"batch_id": f"b{time.strftime('%Y%m%d%H%M')}-{uuid.uuid4().hex[:6]}", "created_at": now_iso(),
-            "providers": providers, "questions": [q["n"] for q in qs], "state": "planned", "items": items,
+            "label": label, "providers": providers, "questions": [q["n"] for q in qs], "state": "planned", "items": items,
             "paused": {}, "log": []}
     progress(plan)
     return plan
@@ -210,7 +211,8 @@ async def run_batch(plan: dict, *, settings: Settings, bstore: BatchStore, execu
         bstore.save(plan)
         try:
             rec = await execute(it["question"], it["provider"],
-                                {"batch_id": plan["batch_id"], "batch_item": it["key"], **(it.get("meta") or {})})
+                                {"batch_id": plan["batch_id"], "batch_item": it["key"], "batch_label": plan.get("label"),
+                                 **(it.get("meta") or {})})
             kind, info = outcome(rec)
             it["run_id"] = rec.get("run_id")
         except Exception as e:  # noqa: BLE001 — 판 하나 실패는 재시도 판정으로
@@ -252,6 +254,8 @@ async def _main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--providers", default="claude-cli")
     ap.add_argument("--questions", default="", help="예 Q001-Q003 · 비면 전체")
+    ap.add_argument("--questions-file", help="번호 목록 파일(한 줄에 하나 · 예 rerun-questions.txt)")
+    ap.add_argument("--label", help="일괄 라벨(기록 batch_label · 예 rerun-v3)")
     ap.add_argument("--resume")
     ap.add_argument("--skip-done", action="store_true", help="runs.jsonl 에 이미 있는 번호는 건너뜀")
     ap.add_argument("--plan-only", action="store_true")
@@ -265,10 +269,16 @@ async def _main() -> None:
         if a.skip_done:  # 끝난 번호 = 답 기록 + 열마다 채점이 있는 것
             skip = {r.get("question_no") for r in rstore._read("runs.jsonl") if r.get("question_no")
                     and any((c or {}).get("judge") for c in (r.get("cases") or {}).values())}
-        plan = make_plan(load_questions(s), [p.strip() for p in a.providers.split(",") if p.strip()],
-                         parse_pick(a.questions), skip)
+        pick = parse_pick(a.questions)
+        if a.questions_file:
+            pick = [x.strip() for x in Path(a.questions_file).read_text(encoding="utf-8").splitlines() if x.strip()]
+        if a.skip_done and a.label:  # 같은 라벨에서 끝난 번호만 건너뜀(다른 판 기록은 그대로 둠)
+            skip = {r.get("question_no") for r in rstore._read("runs.jsonl") if r.get("batch_label") == a.label
+                    and any((c or {}).get("judge") for c in (r.get("cases") or {}).values())}
+        plan = make_plan(load_questions(s), [p.strip() for p in a.providers.split(",") if p.strip()], pick, skip,
+                         label=a.label)
         bstore.save(plan)
-    print(f"[batch] {plan['batch_id']} · {plan['progress']}", flush=True)
+    print(f"[batch] {plan['batch_id']} · 라벨 {plan.get('label')} · {plan['progress']}", flush=True)
     if a.plan_only:
         return
     deps = build_deps(s)
@@ -277,8 +287,8 @@ async def _main() -> None:
 
     cli.MAX_CONCURRENT = max(1, s.cli_max_concurrent)
     st = await startup_check(deps)
-    print(f"[batch] 기동 · 허브 {st.get('hub_health')} · 골드 MCP {st.get('gold_mcp')} · 원장 MCP {st.get('raw_mcp')}",
-          flush=True)
+    print(f"[batch] 기동 · 허브 {st.get('hub_health')} · 골드 MCP {st.get('gold_mcp')} · 원장 MCP {st.get('raw_mcp')} · "
+          f"intent 도구 {st.get('intent_tools')}", flush=True)
     if not isinstance(st.get("gold_mcp"), int) or not isinstance(st.get("raw_mcp"), int):
         raise SystemExit("[batch] 허브(18005) 연결 안 됨 — 멈춤")
 

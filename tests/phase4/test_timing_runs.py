@@ -139,3 +139,15 @@ async def test_case3_cost_and_system_cache_only(deps_factory):
     p = fa.calls[0]
     assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in p  # 1회 호출 — 질문 뒤 표시 안 함
     assert set(r["cost"]["by_stage"]) == {"jev", "claude"} and r["cost"]["usd"] > 0
+
+
+async def test_gold_hash_falls_back_to_health(deps_factory, tmp_path, hub, monkeypatch):
+    deps = deps_factory(anthropic=FakeAnthropic(answer_policy))
+    deps.jev = None  # case3 키 없음 → 허브 응답 머리 없음
+    deps.startup["gold_build_hash"] = "d3a1abd52f70afe9"
+    rec = await runner.execute(deps, "q", lambda e, d: None, quality=False, provider="sdk")
+    assert rec["versions"]["gold_build_hash"] in ("fixture0build0h1", "d3a1abd52f70afe9")
+    deps2 = deps_factory(anthropic=None)
+    deps2.startup["gold_build_hash"] = "d3a1abd52f70afe9"
+    rec2 = await runner.execute(deps2, "q", lambda e, d: None, quality=False, provider="sdk")
+    assert rec2["versions"]["gold_build_hash"] == "d3a1abd52f70afe9"

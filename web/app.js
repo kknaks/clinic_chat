@@ -277,13 +277,16 @@
   async function loadRuns() {
     let runs = [];
     try {
-      const r = await fetch("/api/runs?limit=100");
+      const r = await fetch("/api/runs?limit=100000");  // 전부(10-31 사용자) · 번호 검색은 화면에서
       if (!r.ok) return;
       runs = (await r.json()).runs || [];
     } catch (e) { return; }
     clearTimeout(runsTimer);
     if (runs.some((x) => x.grading)) runsTimer = setTimeout(loadRuns, 4000);  // 백그라운드 채점이 끝나면 채움
     const tb = document.querySelector("#runs tbody");
+    const qf = ($("runs-q").value || "").trim().toUpperCase();
+    if (qf) runs = runs.filter((x) => (x.question_no || "").toUpperCase().includes(qf) || (x.question || "").includes($("runs-q").value.trim()));
+    $("runs-count").textContent = `${runs.length}줄`;
     tb.replaceChildren(...runs.map((x) => {
       const cs = x.cases || {};
       const nf = S.CASES.map((c) => (cs[c] || {}).not_found ?? "–").join(" / ");
@@ -391,6 +394,7 @@
 
   $("ask").addEventListener("submit", (e) => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); });
   $("rerun").addEventListener("click", rerun);
+  $("runs-q").addEventListener("input", () => loadRuns());
   $("grade").addEventListener("click", () => grade(cur.run_id));
   $("batch-plan").addEventListener("click", batchPlan);
   $("batch-start").addEventListener("click", batchStart);

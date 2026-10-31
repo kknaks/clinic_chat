@@ -112,8 +112,8 @@ class FakeHub:
             return {"build": gold.BUILD, "raw": {"files": 21}}
 
         @app.get(g + "/vocab")
-        def vocab(kinds: str | None = None, sections: str | None = None):
-            return run("vocab", kinds=_csv(kinds), sections=_csv(sections))
+        def vocab(kinds: str | None = None, sections: str | None = None, intent: str | None = None):
+            return run("vocab", kinds=_csv(kinds), sections=_csv(sections), intent=intent)
 
         @app.get(g + "/resolve")
         def resolve(text: str, kinds: str | None = None, limit_per_span: int = 20, sections: str | None = None):
@@ -124,12 +124,13 @@ class FakeHub:
             return run("recommend", **(await req.json()))
 
         @app.get(g + "/procedures/{pid}")
-        def card(pid: str, product: str | None = None, sections: str | None = None, full: bool = False):
-            return run("procedure_card", id=pid, product=product, sections=_csv(sections), full=full)
+        def card(pid: str, product: str | None = None, sections: str | None = None, full: bool = False,
+                 intent: str | None = None):
+            return run("procedure_card", id=pid, product=product, sections=_csv(sections), full=full, intent=intent)
 
         @app.get(g + "/procedures/{pid}/checks")
-        def checks(pid: str, conditions: str | None = None, sections: str | None = None):
-            return run("check_conditions", id=pid, conditions=_csv(conditions), sections=_csv(sections))
+        def checks(pid: str, conditions: str | None = None, sections: str | None = None, intent: str | None = None):
+            return run("check_conditions", id=pid, conditions=_csv(conditions), sections=_csv(sections), intent=intent)
 
         @app.post(g + "/pairs")
         async def pairs(req: Request):
@@ -141,9 +142,9 @@ class FakeHub:
 
         @app.get(g + "/combos")
         def combos(concern: str | None = None, purpose: str | None = None, procedure: str | None = None,
-                   menu: str | None = None, sections: str | None = None):
+                   menu: str | None = None, sections: str | None = None, intent: str | None = None):
             return run("combos", concern=concern, purpose=purpose, procedure=procedure, menu=menu,
-                       sections=_csv(sections))
+                       sections=_csv(sections), intent=intent)
 
         @app.get(g + "/nodes/{nid}/neighbors")
         def nb(nid: str, depth: int = 1, limit: int = 50, sections: str | None = None):

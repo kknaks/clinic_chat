@@ -31,3 +31,5 @@ class Deps:
     app_commit: str | None = None
     # sections 입력을 받는 골드 도구 — 기동 때 허브 골드 MCP 스키마에서 셈(case3 이 Jev 「필요한 정보」를 붙이는 곳)
     section_tools: set[str] = field(default_factory=lambda: {"procedure_card"})
+    # intent 입력을 받는 골드 도구(허브 SPEC-005 v3.1) — 기동 때 MCP 스키마에서 셈 · case3 가 Jev 의도 id 를 넘김
+    intent_tools: set[str] = field(default_factory=set)

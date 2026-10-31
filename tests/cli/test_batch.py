@@ -164,3 +164,21 @@ async def test_meta_reaches_record_and_progress_report(tmp_path):
     assert [x["question_no"] for x in seen] == ["Q001", "Q002", "Q010"]
     assert seen[0]["reference_answer"] == "참고 답 1" and seen[0]["topic"] == "고민 → 추천 시술"
     assert reports and {"progress", "now"} <= set(reports[0])  # 30분(1800초)마다 한 줄
+
+
+def test_label_and_questions_file(tmp_path):
+    plan = batch.make_plan(batch.parse_questions(MD), ["claude-cli"], [1], label="rerun-v3")
+    assert plan["label"] == "rerun-v3"
+
+
+async def test_label_reaches_record(tmp_path):
+    s = settings(tmp_path)
+    seen = []
+
+    async def ex(q, p, extra):
+        seen.append(extra)
+        return rec("x")
+
+    plan = batch.make_plan(batch.parse_questions(MD), ["claude-cli"], [1], label="rerun-v3")
+    await batch.run_batch(plan, settings=s, bstore=batch.BatchStore(tmp_path), execute=ex)
+    assert seen[0]["batch_label"] == "rerun-v3"

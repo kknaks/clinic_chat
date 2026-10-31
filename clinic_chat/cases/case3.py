@@ -356,6 +356,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
         if intent in TWO_PROC:
             procs = await two_procs(deps, question, intent, jev, cands, seed, timer, trace, tokens)
         path = plan_path(intent, jev, cands, menus, question, procs)
+        if path["tool"] in deps.intent_tools and intent:  # 허브 v3.1: 의도별 섹션 묶음 · 동봉(허브 기본 + Jev sections 합집합)
+            path["input"] = {**path["input"], "intent": intent}
         if path["tool"] in deps.section_tools and jev["sections"] and "sections" not in (path["input"] or {}):
             path["input"] = {**path["input"], "sections": jev["sections"]}  # Jev 가 고른 칸만
         hub_result = None
