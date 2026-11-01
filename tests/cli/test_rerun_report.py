@@ -59,3 +59,22 @@ def test_rerun_report_delivery_columns():
     assert d3["before"]["walk"] is None and d3["after"]["walk"]["steps_median"] == 2
     assert data["summary"]["case3"]["after"]["hub_bytes"] == 12000  # bytes_total + peek 합
     assert "## 2-1. intent 전달" in md and "0.0% (0/1) → 100.0% (1/1)" in md
+
+
+def test_pick_before_label_and_batch(tmp_path):
+    """전 = 라벨 배치(rerun-v3) · 후 = 라벨 + 배치 id(같은 라벨 옛 배치 뺌) · 239 환산 전 = 10-30 위에 rerun-v3."""
+    import json
+
+    from clinic_chat.runs import RunStore
+    rows = [{**rec("Q001", (OK, OK, OK), "e9d30ace08c65bb8"), "run_id": "full1"},
+            {**rec("Q002", (OK, OK, OK), "e9d30ace08c65bb8"), "run_id": "full2"},
+            {**rec("Q001", (OK, OK, OK), "d3a1abd52f70afe9", "rerun-v3"), "run_id": "v3", "batch_id": "b3"},
+            {**rec("Q001", (OK, OK, OK), "b031371c4c69cea1", "rerun-v4"), "run_id": "old", "batch_id": "bold"},
+            {**rec("Q001", (OK, OK, OK), "b031371c4c69cea1", "rerun-v4"), "run_id": "new", "batch_id": "bnew"}]
+    (tmp_path / "runs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    store = RunStore(tmp_path)
+    before, after, all_before = rerun_report.pick(store, "rerun-v4", "e9d30ace", "rerun-v3", "bnew")
+    assert before["Q001"]["run_id"] == "v3" and after["Q001"]["run_id"] == "new"
+    assert all_before["Q001"]["run_id"] == "v3" and all_before["Q002"]["run_id"] == "full2"
+    before2, _, _ = rerun_report.pick(store, "rerun-v4", "e9d30ace")
+    assert before2["Q001"]["run_id"] == "full1"

@@ -27,20 +27,26 @@ def _med(xs):
     return round(statistics.median(xs)) if xs else None
 
 
-def pick(store: RunStore, label: str, before_gold: str) -> tuple[dict, dict]:
-    """번호 → 기록(같은 번호 여럿이면 마지막). 전 = 골드 빌드 접두가 before_gold · 후 = batch_label == label."""
+def pick(store: RunStore, label: str, before_gold: str, before_label: str | None = None,
+         batch: str | None = None) -> tuple[dict, dict, dict]:
+    """번호 → 기록(같은 번호 여럿이면 마지막). 후 = batch_label == label(batch 를 주면 그 배치만) ·
+    전 = before_label 이 있으면 그 라벨 배치 · 없으면 골드 빌드 접두가 before_gold 인 라벨 없는 기록(10-30 전체 실행).
+    셋째 = 239 환산용 「전 상태 전부」(10-30 전체 위에 before_label 배치를 덮음)."""
     qual = store.latest_quality()
-    before, after = {}, {}
+    full, labeled, after = {}, {}, {}
     for r in store._read("runs.jsonl"):
         no = r.get("question_no")
         if not no:
             continue
         r = merge_quality(r, qual.get(r["run_id"]))
-        if r.get("batch_label") == label:
+        if r.get("batch_label") == label and (batch is None or r.get("batch_id") == batch):
             after[no] = r
+        elif before_label and r.get("batch_label") == before_label:
+            labeled[no] = r
         elif str((r.get("versions") or {}).get("gold_build_hash") or "").startswith(before_gold) and not r.get("batch_label"):
-            before[no] = r
-    return before, after
+            full[no] = r
+    before = labeled if before_label else full
+    return before, after, {**full, **labeled}
 
 
 def items(r: dict | None, c: str) -> dict:
@@ -80,7 +86,8 @@ def hub_bytes(r: dict, c: str) -> int | None:
     return sum(bs) if bs else None
 
 
-def build(qs: list[str], before: dict, after: dict, all_before: dict, label: str, before_gold: str) -> tuple[str, dict]:
+def build(qs: list[str], before: dict, after: dict, all_before: dict, label: str, before_gold: str,
+          before_desc: str = "10-30 전체 실행") -> tuple[str, dict]:
     L: list[str] = []
     w = L.append
     b_runs = [before[q] for q in qs if q in before]
@@ -92,7 +99,7 @@ def build(qs: list[str], before: dict, after: dict, all_before: dict, label: str
     data: dict = {"label": label, "questions": len(qs), "before_gold": bv.get("gold_build_hash"),
                   "after_gold": av.get("gold_build_hash"), "missing_before": missing_b, "missing_after": missing_a}
     w("# 재실행 전후 비교 보고서\n")
-    w(f"- 대상 {len(qs)}문항 · 전 = 10-30 전체 실행(골드 {bv.get('gold_build_hash')}) {len(b_runs)}문항 · "
+    w(f"- 대상 {len(qs)}문항 · 전 = {before_desc}(골드 {bv.get('gold_build_hash')}) {len(b_runs)}문항 · "
       f"후 = 일괄 `{label}`(골드 {av.get('gold_build_hash')}) {len(a_runs)}문항")
     w(f"- 조건: 답 {av.get('answer_provider')} {av.get('answer_model')} effort {av.get('answer_effort')} · 채점 "
       f"{av.get('judge_provider')} {av.get('judge_model')}(열마다 절대 · 가림) — 전 판과 같음")
@@ -250,12 +257,15 @@ def main() -> None:
     ap.add_argument("--questions-file", required=True)
     ap.add_argument("--label", default="rerun-v3")
     ap.add_argument("--before-gold", default="e9d30ace")
+    ap.add_argument("--before-label", help="전 = 이 라벨 배치(예 rerun-v3) · 없으면 10-30 전체 실행")
+    ap.add_argument("--batch", help="후 = 이 배치 id 만(같은 라벨 배치가 여럿일 때)")
     ap.add_argument("--out")
     a = ap.parse_args()
     s = get_settings()
     qs = [x.strip() for x in Path(a.questions_file).read_text(encoding="utf-8").splitlines() if x.strip()]
-    before, after = pick(RunStore(s.runs_path), a.label, a.before_gold)
-    md, data = build(qs, before, after, before, a.label, a.before_gold)
+    before, after, all_before = pick(RunStore(s.runs_path), a.label, a.before_gold, a.before_label, a.batch)
+    md, data = build(qs, before, after, all_before, a.label, a.before_gold,
+                     before_desc=f"일괄 `{a.before_label}`" if a.before_label else "10-30 전체 실행")
     out = Path(a.out) if a.out else s.runs_path.parent / "build-out" / "rerun-report.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
