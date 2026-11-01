@@ -113,3 +113,10 @@ def test_main_refuses_repo_out(tmp_path, monkeypatch):
     monkeypatch.setattr(V, "get_settings", lambda: make_settings(tmp_path))
     with pytest.raises(SystemExit):
         V.main(["--batch", BATCH, "--no-hub", "--out", str(ROOT / "build-out")])
+
+
+def test_forms_integral_floats_not_truncation():
+    """REST 「14.0」 · MCP 가 넘긴 「14」 — 같은 값이라 잘림 아님(rerun-v4 pair_check · compare 실측 12~96B 차)."""
+    rest = json.dumps({"days": [14.0, 14.0], "x": "가"}, ensure_ascii=False, separators=(",", ":"))
+    mcp = json.dumps({"days": [14, 14], "x": "가"}, ensure_ascii=False, separators=(",", ":"))
+    assert len(mcp.encode()) in V.forms(rest) and len(mcp.encode()) < len(rest.encode())

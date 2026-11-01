@@ -260,10 +260,22 @@ def forms(text: str) -> tuple[int, ...]:
     """같은 응답의 바이트 꼴 — 받은 글 그대로 · 압축 JSON(MCP 가 넘긴 꼴이 서버마다 다름: 골드 REST 압축 · 원장 MCP 들여쓰기)."""
     b = len(text.encode())
     try:
-        return b, len(json.dumps(json.loads(text), ensure_ascii=False).encode()), \
-            len(json.dumps(json.loads(text), ensure_ascii=False, separators=(",", ":")).encode())
+        o = json.loads(text)
     except ValueError:
         return (b,)
+    n = _int_floats(o)  # 14.0 → 14(같은 값 · MCP 쪽 직렬화가 정수로 씀 — rerun-v4 pair_check · compare 실측)
+    return b, *(len(json.dumps(x, ensure_ascii=False, separators=sep).encode())
+                for x in (o, n) for sep in ((", ", ": "), (",", ":")))
+
+
+def _int_floats(o: Any) -> Any:
+    if isinstance(o, float) and o.is_integer():
+        return int(o)
+    if isinstance(o, dict):
+        return {k: _int_floats(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_int_floats(v) for v in o]
+    return o
 
 
 def pct(a: int, b: int) -> str:
