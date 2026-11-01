@@ -38,18 +38,29 @@ async def test_ttft_excludes_thinking_and_first_text_any_round(deps_factory):
     assert r["timing"]["ttft_answer_ms"] == 60.0  # 마지막 바퀴 · thinking 델타(30) 제외
 
 
+WALK = {"start": "unit_procedure:U5-140", "pick": "section:aftercare"}  # 걸음 1: 소프웨이브 peek → aftercare 펼침
+
+
 async def test_case3_stage_times(deps_factory):
     clk = FakeClock()
     fa = FakeAnthropic([Turn(first_ms=40, chunk_ms=5, text=["a", "b"])], clock=clk)
     deps = deps_factory(anthropic=fa)
-    deps.jev = FakeJev(intent="I-01").client(deps.settings)
+    deps.jev = FakeJev(intent="I-03", choices=WALK).client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     c = Clock(now=clk.now)
     c.start()
-    r = await case3.run(deps, "이마 주름", CaseTimer(c), lambda t: None)
-    assert [s["name"] for s in r["timing"]["stages"]] == ["hub_resolve", "jev", "hub_path", "claude"]
+    r = await case3.run(deps, "소프웨이브 끝나고 사우나", CaseTimer(c), lambda t: None)
+    assert [s["name"] for s in r["timing"]["stages"]] == ["hub_resolve", "jev#0", "hub_peek#1", "jev#1", "hub_expand#1",
+                                                          "claude"]
     assert r["timing"]["ttft_ms"] == 40.0 and r["timing"]["total_ms"] == 50.0
-    assert r["tokens"]["jev"]["input_tokens"] == 321 and r["tokens"]["claude"]["output_tokens"] == 20
+    assert r["tokens"]["jev#0"]["input_tokens"] == 321 and r["tokens"]["claude"]["output_tokens"] == 20
+    # v1 되돌림 스위치(WALK_MAX_STEPS=0) — 단계 이름은 v1 그대로
+    deps0 = deps_factory(anthropic=FakeAnthropic([Turn(text=["a"])]), walk_max_steps=0)
+    deps0.jev = FakeJev(intent="I-01").client(deps0.settings)
+    deps0.vocab = deps.vocab
+    r0 = await case3.run(deps0, "이마 주름", CaseTimer(Clock()), lambda t: None)
+    assert [s["name"] for s in r0["timing"]["stages"]] == ["hub_resolve", "jev", "hub_path", "claude"]
+    assert "walk" not in r0["trace"]
 
 
 async def run_all(deps_factory, tmp_path, hub, monkeypatch, **kw):
@@ -134,14 +145,14 @@ def test_pricing_table():
 async def test_case3_cost_and_system_cache_only(deps_factory):
     fa = FakeAnthropic([Turn(text=["답"])])
     deps = deps_factory(anthropic=fa)
-    deps.jev = FakeJev(intent="I-01").client(deps.settings)
+    deps.jev = FakeJev(intent="I-03", choices=WALK).client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     c = Clock()
     c.start()
-    r = await case3.run(deps, "이마 주름", CaseTimer(c), lambda t: None)
+    r = await case3.run(deps, "소프웨이브 끝나고 사우나", CaseTimer(c), lambda t: None)
     p = fa.calls[0]
     assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in p  # 1회 호출 — 질문 뒤 표시 안 함
-    assert set(r["cost"]["by_stage"]) == {"jev", "claude"} and r["cost"]["usd"] > 0
+    assert set(r["cost"]["by_stage"]) == {"jev#0", "jev#1", "claude"} and r["cost"]["usd"] > 0
 
 
 async def test_gold_hash_falls_back_to_health(deps_factory, tmp_path, hub, monkeypatch):

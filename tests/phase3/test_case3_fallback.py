@@ -1,4 +1,4 @@
-"""Phase 3 — case3(모의 Jev + 모의 허브 REST + 모의 Anthropic)."""
+"""case3 되돌아가기 경로(v1 — `fallback_*` · WALK_MAX_STEPS=0 되돌림 스위치 · 걸음에서 되돌아갈 때) — 모의 Jev + 모의 허브 REST + 모의 Anthropic."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ async def run(deps_factory, q, jev: FakeJev, seed=0, **kw):
     deps = deps_factory(anthropic=fa, **kw)
     deps.jev = jev.client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
-    r = await case3.run(deps, q, timer(), lambda t: None, seed=seed)
+    r = await case3.fallback_run(deps, q, timer(), lambda t: None, seed=seed)
     return r, fa, deps
 
 
@@ -100,7 +100,7 @@ async def test_jev_picks_needed_sections(deps_factory, hub, intent, q, tool, sec
     deps.jev = jev.client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     deps.section_tools = {"procedure_card", "recommend", "compare"}
-    r = await case3.run(deps, q, CaseTimer(Clock()), lambda t: None)
+    r = await case3.fallback_run(deps, q, CaseTimer(Clock()), lambda t: None)
     asked = jev.requests[0]["questions"]
     assert {k for k in asked if k.startswith("info:")} == {f"info:{s}" for s in case3.INFO_SECTIONS}  # 같은 한 요청
     assert len(jev.requests) == 1
@@ -138,7 +138,7 @@ async def test_over_255_slot_reduced(deps_factory, hub, monkeypatch):
     v = await deps.hub_rest.vocab()
     v["vocab"]["family"] = [{"id": f"family:FX{i}", "name": f"계열 {i}"} for i in range(300)] + v["vocab"]["family"]
     deps.vocab = v
-    r = await case3.run(deps, "소프웨이브 어떻게 해요?", timer(), lambda t: None)
+    r = await case3.fallback_run(deps, "소프웨이브 어떻게 해요?", timer(), lambda t: None)
     sent = jev.requests[0]["questions"]
     assert all(len(q["criteria"]) <= 255 for q in sent.values() if q["type"] == "choice")
     assert r["trace"]["jev"]["slots"]["family"]["reduced"] is True
@@ -197,7 +197,7 @@ async def test_jev_failure_only_this_column(deps_factory, hub, jev, msg):
 async def test_no_key(deps_factory):
     deps = deps_factory(anthropic=FakeAnthropic([Turn(text=["x"])]))
     deps.jev = None
-    r = await case3.run(deps, "q", timer(), lambda t: None)
+    r = await case3.fallback_run(deps, "q", timer(), lambda t: None)
     assert r["error"] == "키 없음"
 
 
@@ -265,7 +265,7 @@ async def test_family_units_cached(deps_factory, hub):
     deps.jev = jev.client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     for _ in range(2):
-        await case3.run(deps, "보톡스랑 팔자 필러 같이 맞아도 돼요", CaseTimer(Clock()), lambda t: None)
+        await case3.fallback_run(deps, "보톡스랑 팔자 필러 같이 맞아도 돼요", CaseTimer(Clock()), lambda t: None)
     fam_cards = [a for via, t, a in hub.calls if t == "procedure_card" and a["id"].startswith("family:")]
     assert len(fam_cards) == len({a["id"] for a in fam_cards})  # 계열마다 한 번만
 
@@ -315,7 +315,7 @@ async def test_intent_passed_to_hub_v31(deps_factory, hub, intent, q, tool):
     deps.jev = jev.client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     deps.intent_tools = {"recommend", "procedure_card", "pair_check", "check_conditions", "compare", "combos"}
-    r = await case3.run(deps, q, CaseTimer(Clock()), lambda t: None)
+    r = await case3.fallback_run(deps, q, CaseTimer(Clock()), lambda t: None)
     sent = next(a for via, t, a in hub.calls if via == "gold-rest" and t == tool)
     assert sent["intent"] == intent and r["trace"]["hub"]["input"]["intent"] == intent
     resolve = next(a for via, t, a in hub.calls if via == "gold-rest" and t == "resolve")

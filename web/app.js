@@ -57,6 +57,15 @@
     const t = c.trace || {};
     if (name === "case3") {
       const j = t.jev || {}, h = t.hub || {};
+      const wr = S.walkRows(t.walk);
+      const walkView = wr ? [el("details", { "data-key": "case3:walk" }, el("summary", { class: wr.fallback ? "low" : "" }, wr.head),
+        el("ul", {}, wr.steps.map((s) => el("li", { class: s.error ? "bad" : s.excluded ? "low" : "" },
+          `걸음 ${s.k} · ${s.node}` + (s.picked.length ? ` · 고름 ${s.picked.join(", ")}` : "") +
+          (s.confidence != null ? ` · conf ${s.confidence}` : "") + (s.enough != null ? ` · 충분 ${s.enough}` : "") +
+          (s.peek_bytes != null ? ` · peek ${s.peek_bytes} B` : "") +
+          (s.bytes != null ? ` · expand ${s.bytes} B${s.excluded ? " (예산 넘어 뺌)" : ""} · fact ${s.facts}` : "") +
+          (s.error ? ` · 오류 ${s.error}` : "")))))] : [];
+      if (wr && !wr.fallback) return walkView;
       const rows = [];
       if (j.intent) rows.push(el("li", { class: j.intent.low_confidence ? "low" : "" },
         `의도 ${j.intent.choice} · conf ${j.intent.confidence}${j.intent.low_confidence ? " ⚠ 낮음" : ""}`));
@@ -66,6 +75,7 @@
           `${k}: ${v.value ?? "–"} · conf ${v.confidence}${v.low_confidence ? " ⚠ 낮음" : ""}${v.reduced ? " · ①로 줄임" : ""}`));
       }
       return [
+        ...walkView,
         el("details", { "data-key": "case3:jev" }, el("summary", {}, `Jev 의도 · 슬롯 (${j.model || "–"} · 입력 토큰 ${(j.usage || {}).input_tokens ?? "–"})`),
           el("ul", {}, rows)),
         el("details", { "data-key": "case3:hub" }, el("summary", {}, `허브 경로 ${h.path || "–"} → ${h.tool || "(도구 없음)"} · 노드 ${(h.node_ids || []).length}`),
@@ -75,9 +85,13 @@
     const calls = t.tool_calls || [];
     const label = name === "case1" ? "원장 도구" : "도구 호출";
     const tok = Object.values(c.tokens || {}).reduce((a, x) => a + (x.input_tokens || 0) + (x.output_tokens || 0), 0);
-    return [el("details", { "data-key": `${name}:tools` }, el("summary", {}, `${label} ${calls.length} · 토큰 ${tok}`),
+    const ir = t.intent_ratio != null ? ` · intent ${Math.round(100 * t.intent_ratio)}%` : "";
+    const cut = calls.filter((x) => x.truncated === true).length;
+    const extra = ir + (cut ? ` · 잘림 ${cut}` : "") + (t.stray_tools ? ` · 격리 밖 ${t.stray_tools}` : "");
+    return [el("details", { "data-key": `${name}:tools` }, el("summary", {}, `${label} ${calls.length} · 토큰 ${tok}${extra}`),
       el("ul", {}, calls.map((x) => el("li", { class: x.is_error ? "bad" : "" },
-        el("code", {}, `${x.tool} ${JSON.stringify(x.input)}`), ` · ${x.output_bytes} B · ${ms(x.ms)}`,
+        el("code", {}, `${x.tool} ${JSON.stringify(x.input)}`), ` · ${x.delivered_bytes ?? x.output_bytes} B · ${ms(x.ms)}`,
+        ...S.callMarks(x).map((m) => el("span", { class: m.startsWith("✂") || m.endsWith("✕") || m === "격리 밖" ? "bad" : "muted" }, ` · ${m}`)),
         name === "case2" && x.node_ids && x.node_ids.length ? el("div", { class: "muted" }, x.node_ids.join(", ")) : null))))];
   }
 

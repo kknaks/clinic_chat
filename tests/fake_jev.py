@@ -20,10 +20,16 @@ INFO_RULES = {
 
 
 class FakeJev:
-    def __init__(self, intent: Any = None, choices: dict[str, str] | None = None,
-                 flat: set[str] | None = None, status: int | None = None, timeout: bool = False) -> None:
+    def __init__(self, intent: Any = None, choices: dict[str, Any] | None = None,
+                 flat: set[str] | None = None, status: int | None = None, timeout: bool = False,
+                 nouls: dict[str, Any] | None = None, fail_after: int | None = None,
+                 noul_fn: Any = None) -> None:
         self.intent = intent
-        self.choices = choices or {}
+        self.choices = choices or {}  # 이름 → 값 · 목록이면 요청마다 차례로(걸음 k)
+        self.nouls = nouls or {}  # 이름 → 값 · 목록이면 요청마다 차례로
+        self.fail_after = fail_after  # n 번째 요청부터 오류(status 또는 500)
+        self._n: dict[str, int] = {}
+        self.noul_fn = noul_fn  # (이름, instructions) → 값 | None(기본 규칙)
         self.flat = flat or set()  # 확률을 고르게(낮은 신뢰)
         self.status = status
         self.timeout = timeout
@@ -39,7 +45,7 @@ class FakeJev:
         if name == "intent" and self.intent:
             return self.intent(state) if callable(self.intent) else self.intent
         if name in self.choices:
-            return self.choices[name]
+            return self._seq(name, self.choices[name])
         if name.endswith(("_a", "_b")):  # 첫 번째 · 두 번째로 말한 것 — 질문 안 위치 순
             hits = sorted((state.find(d.split(" · ")[0]), k) for k, d in crit.items()
                           if k != NONE and isinstance(d, str) and d.split(" · ")[0] in state)
@@ -51,13 +57,20 @@ class FakeJev:
                 return k
         return NONE if NONE in crit else next(iter(crit))
 
+    def _seq(self, name: str, v: Any) -> Any:
+        if not isinstance(v, list):
+            return v
+        i = self._n.get(name, 0)
+        self._n[name] = i + 1
+        return v[min(i, len(v) - 1)]
+
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         if self.timeout:
             raise httpx2.ReadTimeout("fixture timeout", request=request)
         body = json.loads(request.content)
         self.requests.append(body)
-        if self.status:
-            return httpx2.Response(self.status, json={"error": {"type": "fixture", "message": "fixture error"}})
+        if self.status or (self.fail_after is not None and len(self.requests) > self.fail_after):
+            return httpx2.Response(self.status or 500, json={"error": {"type": "fixture", "message": "fixture error"}})
         state = body["state"] if isinstance(body["state"], str) else json.dumps(body["state"], ensure_ascii=False)
         answers: dict[str, Any] = {}
         picked: dict[str, str] = {}
@@ -81,6 +94,12 @@ class FakeJev:
                 picked[name] = c
         for name, q in body["questions"].items():
             if q["type"] == "noul":
+                if name in self.nouls:
+                    answers[name] = {"type": "noul", "noul": self._seq("noul:" + name, self.nouls[name])}
+                    continue
+                if self.noul_fn and (v := self.noul_fn(name, q["instructions"])) is not None:
+                    answers[name] = {"type": "noul", "noul": v}
+                    continue
                 if name.startswith("info:"):
                     import re
 

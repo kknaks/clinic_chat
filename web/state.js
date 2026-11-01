@@ -128,7 +128,7 @@
     if (name.startsWith("claude") || name.startsWith("codex")) return "claude";
     if (name === "cli_boot") return "boot";
     if (name.startsWith("tool:")) return "tool";
-    if (name === "jev") return "jev";
+    if (name === "jev" || name.startsWith("jev#")) return "jev";
     return "hub";
   }
 
@@ -142,7 +142,7 @@
   function legendItems(stages) {
     return (stages || []).map((st) => {
       const end = st.end_ms == null ? null : st.end_ms;
-      const label = st.name.replace(/^tool:/, "").replace(/^hub_resolve$/, "hub").replace(/^hub_path$/, "hub")
+      const label = st.name.replace(/^tool:/, "").replace(/^hub_resolve$/, "hub").replace(/^hub_path$/, "hub").replace(/^hub_peek#/, "peek#").replace(/^hub_expand#/, "expand#")
         .replace(/^\(측정 밖\)#\d+$/, "(측정 밖)").replace(/^cli_boot$/, "기동").replace(/^cli_queue$/, "대기");
       const think = st.thinking ? (end == null ? " · 생각 중" : st.thinking_ms != null ? ` · 생각 ${fmtDur(st.thinking_ms)}` : "") : "";
       return { kind: stageKind(st.name), label: label + think, dur: end == null ? "…" : fmtDur(end - (st.start_ms || 0)) };
@@ -175,7 +175,33 @@
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd, providerLabel, sendState };
+  // case3 걸음 줄(SPEC-006 v2 §6) — 걸음 k · 노드 · 고른 것 · 신뢰도 · 바이트 · 멈춤 사유
+  function walkRows(w) {
+    if (!w) return null;
+    const steps = (w.steps || []).map((s) => {
+      const j = s.jev || {}, e = s.expand || null;
+      return {
+        k: s.k, node: s.node, picked: j.picked || [], enough: j.enough ?? null, confidence: j.confidence ?? null,
+        bytes: e ? e.bytes : null, excluded: !!(e && e.excluded), facts: e ? (e.fact_ids || []).length : 0,
+        peek_bytes: s.peek_bytes ?? null, error: s.error || null,
+      };
+    });
+    const head = `걸음 ${w.steps_n} · 멈춤 ${w.stop || "–"} · ${w.bytes_total} B${w.budget_hit ? " (예산)" : ""} · fact ${(w.fact_ids || []).length}` +
+      ` · Jev ${w.jev_calls}회` + (w.fallback ? ` · 되돌아감(${w.fallback_reason})` : "");
+    return { head, steps, fallback: !!w.fallback };
+  }
+
+  // 도구 호출 표시 — 잘림(마커) · intent(값 · 넘김 여부) · 격리 밖
+  function callMarks(x) {
+    const out = [];
+    if (x.truncated === true) out.push("✂ 잘림");
+    if (x.intent_passed === true) out.push(`intent ${(x.input || {}).intent}`);
+    else if (x.intent_passed === false) out.push((x.input || {}).intent ? `intent ${(x.input || {}).intent} ✕` : "intent 없음");
+    if (x.stray) out.push("격리 밖");
+    return out;
+  }
+
+  const api = { CASES, NO_KEY, initial, reduce, fromRecord, scale, median, medians, notFound, atBottom, stageKind, fmtDur, legendItems, fmtUsd, providerLabel, sendState, walkRows, callMarks };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ClinicState = api;
 })(typeof window !== "undefined" ? window : globalThis);

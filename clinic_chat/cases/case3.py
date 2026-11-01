@@ -1,10 +1,12 @@
-"""case3 — 앱 서버: 허브 사전(T1) → Jev(의도 · 슬롯 Choice) → 골드 도구 경로 1번 → Sonnet 1회(SPEC-006 §3-4).
+"""case3 — 앱 서버: 허브 사전(T1) → Jev 재귀 탐색(peek → Choice → expand) → Sonnet 1회(SPEC-006 v2 §3-4).
 
 ① hub_resolve: T1 resolve(질문 전체 · 질문마다)
-② jev: 의도 Choice 12 + 슬롯 Choice(vocab 종류 · 255 넘는 시술 · 제품은 ① 후보로 줄임) + 「해당 없음」 짝 Noul
-       + 여러 고민 Noul(R-6) · 선택지 순서 seed 섞기(R-7) · confidence · p_max · 1·2위 비 · low_confidence
-③ hub_path: 의도 → 도구(SPEC-005 §6-1) · 필수 슬롯 없으면 부르지 않고 「되묻기 필요」
-④ claude: Sonnet 1회 · 도구 없음 · 입력 = 질문 + ③ 결과 + 슬롯 표
+② jev#0: 의도 Choice 12 + 시작 노드 Choice(① 후보 · 비면 vocab 계열 · 고민 · 부위 · 「해당 없음」)
+③ 걸음 k = 1..WALK_MAX_STEPS: hub_peek#k → jev#k(Choice「펼칠 것」 + 짝 Noul + Noul「충분」) → hub_expand#k
+   멈춤 = enough · steps · budget(WALK_BYTE_BUDGET 넘는 expand 는 통째로 뺌) · empty
+④ claude: Sonnet 1회 · 도구 없음 · 입력 = 질문 + 걸음마다 모은 fact + 안전 요약 + claude_contract
+되돌아가기(시작 노드 없음 · 첫 peek 실패 · 모은 fact 0) = v1 경로 1회(`fallback_*` — 의도 → 골드 도구 경로 · 의도 묶음).
+WALK_MAX_STEPS=0 이면 v1 경로만(되돌림 스위치).
 """
 
 from __future__ import annotations
@@ -174,7 +176,7 @@ def _low(jev: dict, slot: str) -> bool:
     return bool(row.get("low_confidence")) and row.get("choice") not in (None, NONE)
 
 
-def plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], question: str,
+def fallback_plan_path(intent: str, jev: dict, cands: list[dict], menus: list[dict], question: str,
               procs: list[str] | None = None) -> dict:
     """의도 → 도구 경로(SPEC-005 §6-1 · SPEC-006 §3-4). 필수 슬롯 없으면 tool=None + missing.
 
@@ -314,116 +316,429 @@ def _jev_error(e: Exception) -> str:
     return f"Jev 오류{f' {code}' if code else ''}: {type(e).__name__}"
 
 
-async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0,
-              provider: str = "sdk") -> dict:
+async def fallback_path(deps: Deps, question: str, timer: CaseTimer, seed: int, trace: dict, tokens: dict,
+                        resolved: dict | None = None) -> tuple[str | None, str | None]:
+    """v1 경로 ①~③(SPEC-006 §3-4-5) — (Sonnet 에 줄 글, Jev 오류). 걸음에서 되돌아오면 ① resolve 결과를 그대로 받음."""
+    if resolved is None:
+        with timer.stage("hub_resolve"):
+            resolved = await deps.hub_rest.resolve(question)
+    cands, menus = resolve_candidates(resolved)
+    trace["hub"] = {"resolve": {"matches": len(resolved.get("matches", [])),
+                                "candidates": [c["id"] for c in cands], "menu_candidates": [m["id"] for m in menus],
+                                "unmatched": resolved.get("unmatched", [])}}
+    trace["gold_build_hash"] = (resolved.get("build") or {}).get("build_hash")
+
+    qs, meta = build_jev_questions(deps.vocab, cands, seed)
+    try:
+        with timer.stage("jev") as st:
+            resp = await deps.jev.system_one(state=question, questions=qs)
+            st["tokens"] = {"input_tokens": resp.usage.input_tokens}
+            st["cost_usd"] = cost_usd(deps.settings.typesafe_default_model, st["tokens"])
+    except TypeSafeError as e:
+        return None, _jev_error(e)
+    trace["jev_calls"] = 1
+    tokens["jev"] = st["tokens"]
+    jev = read_jev(resp, meta, deps.settings.jev_confidence_min)
+    jev["option_order_seed"] = seed
+    trace["jev"] = jev
+
+    intent = (jev.get("intent") or {}).get("choice")
+    procs = None
+    if intent in TWO_PROC:
+        procs = await two_procs(deps, question, intent, jev, cands, seed, timer, trace, tokens)
+    path = fallback_plan_path(intent, jev, cands, menus, question, procs)
+    if path["tool"] in deps.intent_tools and intent:  # 허브 v3.1: 의도별 섹션 묶음 · 동봉(허브 기본 + Jev sections 합집합)
+        path["input"] = {**path["input"], "intent": intent}
+    if path["tool"] in deps.section_tools and jev["sections"] and "sections" not in (path["input"] or {}):
+        path["input"] = {**path["input"], "sections": jev["sections"]}  # Jev 가 고른 칸만
+    hub_result = None
+    with timer.stage("hub_path"):
+        if path["tool"]:
+            hub_result = await deps.hub_rest.call(path["tool"], path["input"])
+    trace["hub"].update({"path": intent, "tool": path["tool"], "input": path["input"],
+                         "missing": path.get("missing"), "node_ids": node_ids(hub_result) if hub_result else []})
+
+    slot_table = {k: {x: v[x] for x in ("value", "choice", "confidence", "low_confidence") if x in v}
+                  for k, v in jev["slots"].items()}
+    payload = {"intent": jev.get("intent"), "slots": slot_table}
+    if path.get("missing"):
+        payload["needs_clarification"] = {"missing": path["missing"]}
+    if path.get("price_unavailable"):
+        payload["price_unavailable"] = True
+    hub_json = "(허브 호출 없음)" if hub_result is None else json.dumps(hub_result, ensure_ascii=False)
+    hub_text, cut = _cap(deps, hub_json, trace.setdefault("_provider", "sdk"))
+    trace["hub"].update({"result_bytes": len(hub_json.encode("utf-8")), "input_cap_bytes": _cap_of(deps, trace["_provider"])})
+    if cut:
+        trace["hub"]["truncated_to"] = _cap_of(deps, trace["_provider"])
+    return (f"질문: {question}\n\n[앱이 해석한 의도 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
+            f"\n\n[허브 결과]\n{hub_text}"), None
+
+
+def _cap_of(deps: Deps, provider: str) -> int | None:
+    """입력 상한은 세 케이스 같게 — sdk 판: TOOL_RESULT_MAX_BYTES(0 = 없음) / CLI 판: 넣을 자리 없음."""
+    return (deps.settings.tool_result_max_bytes or None) if provider == "sdk" else None
+
+
+def _cap(deps: Deps, text: str, provider: str) -> tuple[str, bool]:
+    cap = _cap_of(deps, provider)
+    return cap_text(text, cap) if cap else (text, False)
+
+
+async def _answer(deps: Deps, user: str, timer: CaseTimer, on_text: Callable[[str], None], provider: str,
+                  res: dict, tokens: dict, trace: dict) -> dict | None:
+    """④ Sonnet 1회(도구 없음) — CLI 판이면 CLI 결과(timer 를 CLI 가 끝냄)를 돌려줌."""
+    if provider in CLI_PROVIDERS:  # ④ 를 CLI 로(도구 없음 · MCP 안 붙임) — 앞 단계는 그대로 앱
+        cli_res = await cli.run(answer_spec(deps.settings, provider), system=prompts.system_for("case3"),
+                                prompt=user, timer=timer, on_text=on_text)
+        for k in ("answer", "stop_reason", "refusal", "error", "structured"):
+            res[k] = cli_res.get(k)
+        tokens["llm"] = cli_res["tokens"]
+        trace["cli"] = cli_res["trace"]["cli"]
+        return cli_res
+    params = answer_params(deps.settings.answer_model, prompts.system_for("case3"),
+                           [{"role": "user", "content": user}], None)
+    first: list[float] = []
+
+    def _txt(t: str) -> None:
+        ms = timer.mark_text()
+        if not first:
+            first.append(ms)
+        res["answer"] += t
+        on_text(t)
+
+    with timer.stage("claude") as st:
+        final = await stream_once(deps.anthropic, params, _txt)
+        st["tokens"] = usage_dict(final.usage)
+        st["cost_usd"] = cost_usd(deps.settings.answer_model, st["tokens"])
+    timer.llm_round_trips += 1
+    tokens["claude"] = st["tokens"]
+    timer.ttft_answer_ms = first[0] if first else None
+    res["stop_reason"] = final.stop_reason
+    res["refusal"] = final.stop_reason == "refusal"
+    return None
+
+
+def _finish(res: dict, timer: CaseTimer, cli_res: dict | None) -> None:
+    res["trace"].pop("_provider", None)
+    if cli_res is not None:  # CLI 가 timer 를 끝냄 — cli_boot · ttft_kind 칸 그대로
+        res["timing"] = cli_res["timing"]
+        cost = case_cost(timer.stages)  # Jev(API)
+        est = cli_res["cost"].get("usd_estimate")
+        cost.update({"billed": "subscription", "usd_estimate": est, "usd": round(cost["usd"] + (est or 0.0), 6)})
+        res["cost"] = cost
+    else:
+        timer.finish()
+        res["timing"] = timer.as_dict()
+        res["cost"] = case_cost(timer.stages)
+
+
+async def fallback_run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0,
+                       provider: str = "sdk") -> dict:
+    """v1 case3 그대로(걸음 없음 — WALK_MAX_STEPS=0 되돌림 스위치)."""
     res = new_case_result()
     cli_res: dict | None = None
     if deps.jev is None or (provider == "sdk" and deps.anthropic is None):
         res["error"] = NO_KEY
         return res
-    trace: dict[str, Any] = {"hub_list": "cache" if deps.vocab is not None else "load"}
+    trace: dict[str, Any] = {"hub_list": "cache" if deps.vocab is not None else "load", "_provider": provider}
     res["trace"] = trace
     tokens: dict[str, dict] = {}
     res["tokens"] = tokens
     try:
         if deps.vocab is None:
             deps.vocab = await deps.hub_rest.vocab()
-        with timer.stage("hub_resolve"):
-            resolved = await deps.hub_rest.resolve(question)
-        cands, menus = resolve_candidates(resolved)
-        trace["hub"] = {"resolve": {"matches": len(resolved.get("matches", [])),
-                                    "candidates": [c["id"] for c in cands], "menu_candidates": [m["id"] for m in menus],
-                                    "unmatched": resolved.get("unmatched", [])}}
-        trace["gold_build_hash"] = (resolved.get("build") or {}).get("build_hash")
-
-        qs, meta = build_jev_questions(deps.vocab, cands, seed)
-        try:
-            with timer.stage("jev") as st:
-                resp = await deps.jev.system_one(state=question, questions=qs)
-                st["tokens"] = {"input_tokens": resp.usage.input_tokens}
-                st["cost_usd"] = cost_usd(deps.settings.typesafe_default_model, st["tokens"])
-        except TypeSafeError as e:
-            res["error"] = _jev_error(e)
+        user, err = await fallback_path(deps, question, timer, seed, trace, tokens)
+        if err:
+            res["error"] = err
             return res
-        trace["jev_calls"] = 1
-        tokens["jev"] = st["tokens"]
-        jev = read_jev(resp, meta, deps.settings.jev_confidence_min)
-        jev["option_order_seed"] = seed
-        trace["jev"] = jev
-
-        intent = (jev.get("intent") or {}).get("choice")
-        procs = None
-        if intent in TWO_PROC:
-            procs = await two_procs(deps, question, intent, jev, cands, seed, timer, trace, tokens)
-        path = plan_path(intent, jev, cands, menus, question, procs)
-        if path["tool"] in deps.intent_tools and intent:  # 허브 v3.1: 의도별 섹션 묶음 · 동봉(허브 기본 + Jev sections 합집합)
-            path["input"] = {**path["input"], "intent": intent}
-        if path["tool"] in deps.section_tools and jev["sections"] and "sections" not in (path["input"] or {}):
-            path["input"] = {**path["input"], "sections": jev["sections"]}  # Jev 가 고른 칸만
-        hub_result = None
-        with timer.stage("hub_path"):
-            if path["tool"]:
-                hub_result = await deps.hub_rest.call(path["tool"], path["input"])
-        trace["hub"].update({"path": intent, "tool": path["tool"], "input": path["input"],
-                             "missing": path.get("missing"), "node_ids": node_ids(hub_result) if hub_result else []})
-
-        slot_table = {k: {x: v[x] for x in ("value", "choice", "confidence", "low_confidence") if x in v}
-                      for k, v in jev["slots"].items()}
-        payload = {"intent": jev.get("intent"), "slots": slot_table}
-        if path.get("missing"):
-            payload["needs_clarification"] = {"missing": path["missing"]}
-        if path.get("price_unavailable"):
-            payload["price_unavailable"] = True
-        # 입력 상한은 세 케이스 같게 — sdk 판: TOOL_RESULT_MAX_BYTES 를 셋 다 / CLI 판: case1 · 2 에 넣을 수 없어 case3 도 안 넣음
-        cap = deps.settings.tool_result_max_bytes if provider == "sdk" else None
-        hub_json = "(허브 호출 없음)" if hub_result is None else json.dumps(hub_result, ensure_ascii=False)
-        hub_text, cut = cap_text(hub_json, cap) if cap else (hub_json, False)
-        trace["hub"].update({"result_bytes": len(hub_json.encode("utf-8")), "input_cap_bytes": cap})
-        if cut:
-            trace["hub"]["truncated_to"] = cap
-        user = (f"질문: {question}\n\n[앱이 해석한 의도 · 슬롯 표]\n{json.dumps(payload, ensure_ascii=False)}"
-                f"\n\n[허브 결과]\n{hub_text}")
-        if provider in CLI_PROVIDERS:  # ④ 를 CLI 로(도구 없음 · MCP 안 붙임) — 앞 단계는 그대로 앱
-            cli_res = await cli.run(answer_spec(deps.settings, provider), system=prompts.system_for("case3"),
-                                    prompt=user, timer=timer, on_text=on_text)
-            for k in ("answer", "stop_reason", "refusal", "error", "structured"):
-                res[k] = cli_res.get(k)
-            tokens["llm"] = cli_res["tokens"]
-            trace["cli"] = cli_res["trace"]["cli"]
-            return res
-        params = answer_params(deps.settings.answer_model, prompts.system_for("case3"),
-                               [{"role": "user", "content": user}], None)
-
-        first: list[float] = []
-
-        def _txt(t: str) -> None:
-            ms = timer.mark_text()
-            if not first:
-                first.append(ms)
-            res["answer"] += t
-            on_text(t)
-
-        with timer.stage("claude") as st:
-            final = await stream_once(deps.anthropic, params, _txt)
-            st["tokens"] = usage_dict(final.usage)
-            st["cost_usd"] = cost_usd(deps.settings.answer_model, st["tokens"])
-        timer.llm_round_trips += 1
-        tokens["claude"] = st["tokens"]
-        timer.ttft_answer_ms = first[0] if first else None
-        res["stop_reason"] = final.stop_reason
-        res["refusal"] = final.stop_reason == "refusal"
+        cli_res = await _answer(deps, user, timer, on_text, provider, res, tokens, trace)
     except Exception as e:  # noqa: BLE001 — 허브 · Sonnet 오류 — 그 열만 오류
         res["error"] = f"{type(e).__name__}: {e}"[:500]
     finally:
-        if cli_res is not None:  # CLI 가 timer 를 끝냄 — cli_boot · ttft_kind 칸 그대로
-            res["timing"] = cli_res["timing"]
-            cost = case_cost(timer.stages)  # Jev(API)
-            est = cli_res["cost"].get("usd_estimate")
-            cost.update({"billed": "subscription", "usd_estimate": est,
-                         "usd": round(cost["usd"] + (est or 0.0), 6)})
-            res["cost"] = cost
+        _finish(res, timer, cli_res)
+    return res
+
+
+# ───────────── Jev 걸음(SPEC-006 v2 §3-4 · 보충 jev-walk) ─────────────
+NONE_ENOUGH = "없음(충분)"
+WALK_NEIGHBORS_MAX = 3  # 걸음당 다음 peek 이웃 수(W-3)
+START_KINDS = ("family", "concern", "site")  # ① 후보가 비면 시작 노드를 고르는 vocab 종류(Q-4)
+SEC = "section:"
+
+
+def walk_start_options(vocab: dict, cands: list[dict]) -> tuple[dict[str, str], str]:
+    """시작 노드 선택지 — ① 후보(메뉴 빼고) · 비면 vocab 계열 · 고민 · 부위. 255 넘으면 앞에서 자름(기록)."""
+    if cands:
+        items, src = cands, "resolve"
+    else:
+        v = vocab.get("vocab", vocab)
+        items, src = [{**x, "kind": k} for k in START_KINDS for x in v.get(k, [])], "vocab"
+    crit = {x["id"]: f"{_desc(x)} ({SLOT_LABEL.get(x.get('kind', ''), x.get('kind', ''))})" for x in items}
+    if len(crit) + 1 > CHOICE_MAX:
+        crit = dict(list(crit.items())[:CHOICE_MAX - 1])
+        src += "(255 자름)"
+    return crit, src
+
+
+def walk_options(peek: dict, seen: set[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """peek → 펼칠 것 선택지(섹션 이름 ∪ 이웃 id) · 이웃 → edge kind. 이미 본 노드는 뺌."""
+    opts: dict[str, str] = {}
+    kind_of: dict[str, str] = {}
+    for sec in peek.get("sections") or []:
+        nm = sec.get("name")
+        if nm and sec.get("n_facts", 1):
+            opts[SEC + nm] = f"{nm}: {INFO_SECTIONS.get(nm, nm)} (fact {sec.get('n_facts')} · {sec.get('bytes')}B)"
+            kind_of[SEC + nm] = "section"
+    for edge, grp in (peek.get("neighbors_by_kind") or {}).items():
+        for it in grp.get("items") or []:
+            i = it.get("id")
+            if i and i not in seen and i not in opts:
+                opts[i] = f"{it.get('name') or i} — {edge} · {it.get('label') or ''}".rstrip(" ·")
+                kind_of[i] = edge
+    return opts, kind_of
+
+
+def _state(question: str, node: dict, steps_out: list[dict]) -> str:
+    """Jev state — 질문 · 지금 노드 · 지금까지 모은 fact 원문."""
+    got = [f"- [{f.get('section')}] {f.get('text')}" for s in steps_out for f in s["facts"]]
+    return (f"질문: {question}\n\n지금 노드: {node.get('name')}({node.get('kind')})\n\n지금까지 모은 정보:\n"
+            + ("\n".join(got) if got else "(없음)"))
+
+
+def _choice_row(a: Any) -> dict:
+    p_max, ratio = choice_stats(dict(a.probabilities))
+    return {"choice": a.choice, "confidence": round(a.confidence, 4), "p_max": round(p_max, 4), "ratio": ratio}
+
+
+async def _jev(deps: Deps, timer: CaseTimer, name: str, state: str, qs: dict, tokens: dict, walk: dict) -> Any:
+    with timer.stage(name) as st:
+        t = timer.clock.ms()
+        resp = await deps.jev.system_one(state=state, questions=qs)
+        st["tokens"] = {"input_tokens": resp.usage.input_tokens}
+        st["cost_usd"] = cost_usd(deps.settings.typesafe_default_model, st["tokens"])
+    ms = round(timer.clock.ms() - t, 1)
+    tokens[name] = st["tokens"]
+    walk["jev_calls"] += 1
+    walk["jev_ms_total"] = round(walk["jev_ms_total"] + ms, 1)
+    return resp, ms
+
+
+async def _hub(deps: Deps, timer: CaseTimer, name: str, walk: dict, coro_fn) -> tuple[dict, int, float]:
+    with timer.stage(name):
+        t = timer.clock.ms()
+        d = await coro_fn()
+    ms = round(timer.clock.ms() - t, 1)
+    b = len(json.dumps(d, ensure_ascii=False).encode("utf-8"))
+    walk["hub_calls"] += 1
+    walk["hub_ms_total"] = round(walk["hub_ms_total"] + ms, 1)
+    return d, b, ms
+
+
+async def walk_pick(deps: Deps, timer: CaseTimer, k: int, question: str, peek: dict, opts: dict[str, str],
+                    kind_of: dict[str, str], steps_out: list[dict], seed: int, tokens: dict, walk: dict) -> dict:
+    """jev#k — Choice「펼칠 것」(+ 「없음(충분)」) · 선택지마다 짝 Noul · Noul「충분」. 255 넘으면 kind 를 먼저(2단)."""
+    rng = random.Random(seed * 1000 + k)
+    state = _state(question, peek.get("node") or {}, steps_out)
+    enough_q = Noul(instructions="지금까지 모은 정보로 이 질문에 답하기에 충분한가?")
+    two = len(opts) + 1 > CHOICE_MAX
+    row: dict[str, Any] = {"options_n": len(opts), "two_stage": two}
+    ms_total = 0.0
+    usage = 0
+    if two:  # 1단: 종류(섹션 · edge kind) Choice + 충분
+        kinds = sorted(set(kind_of.values()))
+        crit = {kd: ("섹션(이 노드의 원문 묶음)" if kd == "section" else f"이웃 — {kd}") for kd in kinds}
+        crit[NONE_ENOUGH] = "더 펼칠 것 없음 — 지금까지로 충분"
+        resp, ms = await _jev(deps, timer, f"jev#{k}", state, {"kind": Choice(
+            instructions="이 질문에 답하려고 다음에 펼칠 종류는?", criteria=_shuffled(rng, crit)), "enough": enough_q},
+            tokens, walk)
+        ms_total += ms
+        usage += resp.usage.input_tokens
+        a = resp.choices["kind"]
+        row["kind"] = _choice_row(a)
+        row["enough"] = round(resp.nouls["enough"].noul, 4)
+        if a.choice == NONE_ENOUGH or row["enough"] >= deps.settings.walk_enough_min:
+            row.update({"picked": [], "ms": round(ms_total, 1), "usage": {"input_tokens": usage}})
+            return row
+        opts = {x: d for x, d in opts.items() if kind_of[x] == a.choice}
+        opts = dict(list(opts.items())[:CHOICE_MAX - 1])
+    crit = {**opts, NONE_ENOUGH: "더 펼칠 것 없음 — 지금까지로 충분"}
+    qs: dict[str, Any] = {"pick": Choice(instructions="이 질문에 답하려고 다음에 펼칠 것은?", criteria=_shuffled(rng, crit))}
+    if not two:
+        qs["enough"] = enough_q
+    keys = list(opts)
+    for n, x in enumerate(keys):  # 짝 Noul — 여럿 고르기(R-6 과 같은 식)
+        qs[f"also:{n}"] = Noul(instructions=f"이 질문에 답하려면 「{opts[x]}」 도 펼쳐 봐야 하나?")
+    resp, ms = await _jev(deps, timer, f"jev#{k}" + ("-2" if two else ""), state, qs, tokens, walk)
+    ms_total += ms
+    usage += resp.usage.input_tokens
+    a = resp.choices["pick"]
+    row.update(_choice_row(a))
+    if not two:
+        row["enough"] = round(resp.nouls["enough"].noul, 4)
+    also = sorted(((resp.nouls[f"also:{n}"].noul, n) for n in range(len(keys))
+                   if resp.nouls.get(f"also:{n}") and resp.nouls[f"also:{n}"].noul >= NOUL_MIN), key=lambda t: (-t[0], t[1]))
+    picked = ([a.choice] if a.choice != NONE_ENOUGH else []) + [keys[n] for _, n in also]
+    picked = list(dict.fromkeys(picked))
+    nbs = [x for x in picked if not x.startswith(SEC)][:WALK_NEIGHBORS_MAX]
+    row["picked"] = [x for x in picked if x.startswith(SEC)] + nbs
+    row["ms"] = round(ms_total, 1)
+    row["usage"] = {"input_tokens": usage}
+    return row
+
+
+async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0,
+              provider: str = "sdk") -> dict:
+    """case3 = Jev 재귀 탐색(§3-4-1). WALK_MAX_STEPS=0 이면 v1 경로만(fallback_run)."""
+    s = deps.settings
+    if s.walk_max_steps <= 0:
+        return await fallback_run(deps, question, timer, on_text, seed, provider)
+    res = new_case_result()
+    cli_res: dict | None = None
+    if deps.jev is None or (provider == "sdk" and deps.anthropic is None):
+        res["error"] = NO_KEY
+        return res
+    trace: dict[str, Any] = {"hub_list": "cache" if deps.vocab is not None else "load", "_provider": provider}
+    res["trace"] = trace
+    tokens: dict[str, dict] = {}
+    res["tokens"] = tokens
+    walk: dict[str, Any] = {"start_node": None, "intent": None, "steps": [], "stop": None, "steps_n": 0,
+                            "bytes_total": 0, "budget_hit": False, "fallback": False, "fallback_reason": None,
+                            "jev_calls": 0, "jev_ms_total": 0.0, "hub_calls": 0, "hub_ms_total": 0.0, "fact_ids": []}
+    trace["walk"] = walk
+    try:
+        if deps.vocab is None:
+            deps.vocab = await deps.hub_rest.vocab()
+        with timer.stage("hub_resolve"):
+            resolved = await deps.hub_rest.resolve(question)
+        cands, menus = resolve_candidates(resolved)
+        trace["gold_build_hash"] = (resolved.get("build") or {}).get("build_hash")
+        walk["resolve"] = {"candidates": [c["id"] for c in cands], "menu_candidates": [m["id"] for m in menus],
+                           "unmatched": resolved.get("unmatched", [])}
+
+        # ② jev#0 — 의도 Choice 12 + 시작 노드 Choice
+        rng = random.Random(seed)
+        v = deps.vocab.get("vocab", deps.vocab)
+        intents = {i["id"]: f"{i['name']} · 예: {' / '.join(i.get('examples') or INTENT_EXAMPLES.get(i['id'], []))}"
+                   for i in v.get("intent", [])}
+        start_crit, start_src = walk_start_options(deps.vocab, [c for c in cands if c.get("kind") != "menu"])
+        qs: dict[str, Any] = {"intent": Choice(instructions="이 상담 질문의 의도는 무엇인가?", criteria=_shuffled(rng, intents))}
+        if start_crit:
+            qs["start"] = Choice(instructions="이 질문에 답하려면 어느 노드에서 찾기 시작해야 하나?",
+                                 criteria=_shuffled(rng, {**start_crit, NONE: "질문이 이 중 어느 것도 말하지 않음"}))
+        try:
+            resp, ms = await _jev(deps, timer, "jev#0", question, qs, tokens, walk)
+        except TypeSafeError as e:
+            res["error"] = _jev_error(e)
+            return res
+        intent_row = _choice_row(resp.choices["intent"])
+        walk["intent"] = intent_row["choice"]
+        walk["jev0"] = {"model": resp.model, "ms": ms, "usage": {"input_tokens": resp.usage.input_tokens},
+                        "intent": {**intent_row, "low_confidence": intent_row["confidence"] < s.jev_confidence_min},
+                        "start_source": start_src, "start_options_n": len(start_crit), "option_order_seed": seed}
+        if "start" in resp.choices:
+            sr = _choice_row(resp.choices["start"])
+            walk["jev0"]["start"] = {**sr, "low_confidence": sr["confidence"] < s.jev_confidence_min}
+            if sr["choice"] != NONE:
+                walk["start_node"] = sr["choice"]
+        intent = walk["intent"]
+
+        # ③ 걸음
+        steps_out: list[dict] = []  # Sonnet 입력(걸음 순서)
+        safety: dict[str, Any] = {}  # 노드마다 한 번(예산 밖 · 늘 포함)
+        contract = {"allowed_fact_ids": [], "must_show_flags": [], "priority": None, "rule": None}
+        frontier = [walk["start_node"]] if walk["start_node"] else []
+        seen: set[str] = set(frontier)
+        reason = None if frontier else "no_start"
+        for k in range(1, s.walk_max_steps + 1):
+            if reason or not frontier:
+                walk["stop"] = walk["stop"] or "empty"
+                break
+            node = frontier.pop(0)
+            step: dict[str, Any] = {"k": k, "node": node}
+            walk["steps"].append(step)
+            try:
+                peek, pb, pms = await _hub(deps, timer, f"hub_peek#{k}", walk,
+                                           lambda n=node: deps.hub_rest.peek(n, intent=intent))
+            except Exception as e:  # noqa: BLE001 — 첫 peek 실패 = 되돌아감 · 뒤 걸음이면 그 걸음만
+                step["error"] = f"{type(e).__name__}: {e}"[:300]
+                if k == 1:
+                    reason = "peek_failed"
+                    break
+                continue
+            step.update({"peek_bytes": pb, "peek_ms": pms})
+            if peek.get("safety") and node not in safety:
+                safety[node] = peek["safety"]
+            opts, kind_of = walk_options(peek, seen)
+            if not opts:
+                step["jev"] = None
+                if not frontier:
+                    walk["stop"] = "empty"
+                    break
+                continue
+            try:
+                jrow = await walk_pick(deps, timer, k, question, peek, opts, kind_of, steps_out, seed, tokens, walk)
+            except TypeSafeError as e:
+                step["error"] = _jev_error(e)
+                walk["stop"] = "error"
+                break
+            step["jev"] = jrow
+            if jrow.get("enough", 0) >= s.walk_enough_min or (not jrow["picked"] and jrow.get("choice") == NONE_ENOUGH) \
+                    or ("kind" in jrow and not jrow["picked"]):
+                walk["stop"] = "enough"
+                break
+            secs = [x[len(SEC):] for x in jrow["picked"] if x.startswith(SEC)]
+            nbs = [x for x in jrow["picked"] if not x.startswith(SEC)]
+            ex, eb, ems = await _hub(deps, timer, f"hub_expand#{k}", walk, lambda n=node, a=secs, b=nbs: deps.hub_rest.expand(
+                n, sections=a or None, neighbors=b or None, intent=intent))
+            facts = [{"id": f.get("id"), "text": f.get("text"), "section": f.get("section")}
+                     for f in ex.get("facts") or [] if isinstance(f, dict)]
+            step["expand"] = {"sections": secs, "neighbors": nbs, "bytes": eb, "ms": ems,
+                              "fact_ids": [f["id"] for f in facts]}
+            if walk["bytes_total"] + eb > s.walk_byte_budget:  # 예산 넘으면 통째로 뺌(잘라 넣지 않음)
+                step["expand"]["excluded"] = True
+                walk["budget_hit"] = True
+                walk["stop"] = "budget"
+                break
+            walk["bytes_total"] += eb
+            nb_cards = [{x: n.get(x) for x in ("id", "kind", "name", "edge", "value", "sections_n") if n.get(x) is not None}
+                        for n in ex.get("neighbors") or [] if isinstance(n, dict)]
+            for n in ex.get("neighbors") or []:
+                if isinstance(n, dict) and n.get("safety") and n.get("id") not in safety:
+                    safety[n["id"]] = n["safety"]
+            steps_out.append({"step": k, "node": node, "picked": jrow["picked"], "facts": facts,
+                              **({"neighbors": nb_cards} if nb_cards else {})})
+            cc = ex.get("claude_contract") or {}
+            contract["must_show_flags"] = sorted(set(contract["must_show_flags"]) | set(cc.get("must_show_flags") or []))
+            contract["priority"] = contract["priority"] or cc.get("priority")
+            contract["rule"] = contract["rule"] or cc.get("rule")
+            for x in nbs:
+                if x not in seen:
+                    seen.add(x)
+                    frontier.append(x)
         else:
-            timer.finish()
-            res["timing"] = timer.as_dict()
-            res["cost"] = case_cost(timer.stages)
+            walk["stop"] = walk["stop"] or "steps"
+        walk["steps_n"] = len(walk["steps"])
+        walk["fact_ids"] = [f["id"] for st in steps_out for f in st["facts"]]
+        if not reason and not walk["fact_ids"]:
+            reason = "no_facts"
+        if reason:  # 되돌아가기 — v1 경로 1회(의도 기본 묶음 · §3-4-3)
+            walk.update({"fallback": True, "fallback_reason": reason})
+            user, err = await fallback_path(deps, question, timer, seed, trace, tokens, resolved=resolved)
+            if err:
+                res["error"] = err
+                return res
+        else:
+            contract["allowed_fact_ids"] = list(dict.fromkeys(walk["fact_ids"]))
+            payload = {"intent": walk["jev0"]["intent"], "steps": steps_out, "safety": safety,
+                       "claude_contract": contract}
+            text, cut = _cap(deps, json.dumps(payload, ensure_ascii=False), provider)
+            if cut:
+                walk["truncated_to"] = _cap_of(deps, provider)
+            user = f"질문: {question}\n\n[허브 결과 — Jev 걸음으로 모은 것]\n{text}"
+        cli_res = await _answer(deps, user, timer, on_text, provider, res, tokens, trace)
+    except Exception as e:  # noqa: BLE001 — 허브 · Sonnet 오류 — 그 열만 오류
+        res["error"] = f"{type(e).__name__}: {e}"[:500]
+    finally:
+        walk["steps_n"] = len(walk["steps"])
+        _finish(res, timer, cli_res)
     return res
