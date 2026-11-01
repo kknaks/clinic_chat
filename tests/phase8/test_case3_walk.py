@@ -111,7 +111,8 @@ async def test_budget_excludes_whole_expand(deps_factory, hub):
     w = r["trace"]["walk"]
     assert (w["stop"], w["budget_hit"], w["fallback"], w["bytes_total"]) == ("budget", True, False, b1)
     s2 = w["steps"][1]
-    assert s2["expand"]["excluded"] is True and s2["expand"]["bytes"] > 1  # 불렀지만 통째로 뺌
+    assert s2["expand"]["excluded"] == ["overview"] and s2["expand"]["calls"][0]["bytes"] > 1  # 불렀지만 통째로 뺌
+    assert s2["expand"]["bytes"] == 0 and s2["expand"]["fact_ids"] == []
     assert w["fact_ids"] == w["steps"][0]["expand"]["fact_ids"]
     assert all(f["section"] == "aftercare" for st in sonnet_input(fa)["steps"] for f in st["facts"])
 
@@ -225,3 +226,24 @@ def test_screen_walk_rows_and_marks():
     assert rows["steps"][1]["excluded"] is True and rows["steps"][0]["facts"] == 2
     assert marks == [["✂ 잘림", "intent none ✕"], ["intent I-02"], ["격리 밖"]]
     assert kind == "jev" and label == "peek#1"
+
+
+async def test_sections_expand_one_by_one_until_budget(deps_factory, hub):
+    """섹션은 하나씩 expand(Choice 1위 → 짝 Noul 높은 순) · 이웃 slim 은 첫 호출에 · 처음 넘는 섹션은 빼고 budget 멈춤."""
+    jev = FakeJev(intent="I-03", choices={"start": U140, "pick": "section:aftercare"}, noul_fn=also("method", "울쎄라"))
+    r0, _, _ = await run(deps_factory, Q, jev)
+    calls = r0["trace"]["walk"]["steps"][0]["expand"]["calls"]
+    assert [c["sections"] for c in calls] == [["aftercare"], ["method"]] and calls[0]["neighbors"] == [U102]
+    assert calls[1]["neighbors"] == []
+    b1 = calls[0]["bytes"]
+    hub.calls.clear()
+    jev = FakeJev(intent="I-03", choices={"start": U140, "pick": "section:aftercare"}, noul_fn=also("method", "울쎄라"))
+    r, fa, _ = await run(deps_factory, Q, jev, walk_byte_budget=b1 + 1)
+    w = r["trace"]["walk"]
+    ex = w["steps"][0]["expand"]
+    assert (w["stop"], w["budget_hit"], w["fallback"], w["steps_n"]) == ("budget", True, False, 1)
+    assert ex["sections"] == ["aftercare"] and ex["excluded"] == ["method"] and ex["bytes"] == b1 == w["bytes_total"]
+    assert [c.get("excluded", False) for c in ex["calls"]] == [False, True]
+    assert {f["section"] for st in sonnet_input(fa)["steps"] for f in st["facts"]} == {"aftercare"}
+    stages = [s["name"] for s in r["timing"]["stages"]]
+    assert "hub_expand#1" in stages and "hub_expand#1-2" in stages

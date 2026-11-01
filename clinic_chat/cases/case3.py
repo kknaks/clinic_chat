@@ -688,33 +688,56 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                 break
             secs = [x[len(SEC):] for x in jrow["picked"] if x.startswith(SEC)]
             nbs = [x for x in jrow["picked"] if not x.startswith(SEC)]
-            ex, eb, ems = await _hub(deps, timer, f"hub_expand#{k}", walk, lambda n=node, a=secs, b=nbs: deps.hub_rest.expand(
-                n, sections=a or None, neighbors=b or None, intent=intent))
-            facts = [{"id": f.get("id"), "text": f.get("text"), "section": f.get("section")}
-                     for f in ex.get("facts") or [] if isinstance(f, dict)]
-            step["expand"] = {"sections": secs, "neighbors": nbs, "bytes": eb, "ms": ems,
-                              "fact_ids": [f["id"] for f in facts]}
-            if walk["bytes_total"] + eb > s.walk_byte_budget:  # 예산 넘으면 통째로 뺌(잘라 넣지 않음)
-                step["expand"]["excluded"] = True
+            # 섹션 하나씩 expand(고른 순서 = Choice 1위 → 짝 Noul 높은 순 · 이웃 slim 은 첫 호출에) — 남은 예산에 맞으면 담고
+            # 처음 넘는 것은 통째로 빼고 budget 멈춤(코디 11-01 · peek sections[].bytes 는 실제 expand 바이트가 아니라 못 씀)
+            plan = [([x], nbs if j == 0 else []) for j, x in enumerate(secs)] or [([], nbs)]
+            calls: list[dict] = []
+            facts: list[dict] = []
+            nb_cards: list[dict] = []
+            over = False
+            for j, (a_secs, a_nbs) in enumerate(plan):
+                ex, eb, ems = await _hub(deps, timer, f"hub_expand#{k}" + (f"-{j + 1}" if j else ""), walk,
+                                         lambda n=node, x=a_secs, y=a_nbs: deps.hub_rest.expand(
+                                             n, sections=x or None, neighbors=y or None, intent=intent))
+                got = [{"id": f.get("id"), "text": f.get("text"), "section": f.get("section")}
+                       for f in ex.get("facts") or [] if isinstance(f, dict)]
+                call = {"sections": a_secs, "neighbors": a_nbs, "bytes": eb, "ms": ems, "fact_ids": [f["id"] for f in got]}
+                calls.append(call)
+                if walk["bytes_total"] + eb > s.walk_byte_budget:  # 예산 넘으면 통째로 뺌(잘라 넣지 않음)
+                    call["excluded"] = True
+                    over = True
+                    break
+                walk["bytes_total"] += eb
+                facts += got
+                for n in ex.get("neighbors") or []:
+                    if not isinstance(n, dict):
+                        continue
+                    nb_cards.append({x: n.get(x) for x in ("id", "kind", "name", "edge", "value", "sections_n")
+                                     if n.get(x) is not None})
+                    if n.get("safety") and n.get("id") not in safety:
+                        safety[n["id"]] = n["safety"]
+                cc = ex.get("claude_contract") or {}
+                contract["must_show_flags"] = sorted(set(contract["must_show_flags"]) | set(cc.get("must_show_flags") or []))
+                contract["priority"] = contract["priority"] or cc.get("priority")
+                contract["rule"] = contract["rule"] or cc.get("rule")
+            kept = [c for c in calls if not c.get("excluded")]
+            step["expand"] = {"sections": [x for c in kept for x in c["sections"]],
+                              "neighbors": [x for c in kept for x in c["neighbors"]],
+                              "bytes": sum(c["bytes"] for c in kept), "ms": round(sum(c["ms"] for c in calls), 1),
+                              "fact_ids": [f["id"] for f in facts], "calls": calls,
+                              **({"excluded": [x for c in calls if c.get("excluded") for x in c["sections"] + c["neighbors"]]}
+                                 if over else {})}
+            if kept:
+                steps_out.append({"step": k, "node": node, "picked": jrow["picked"], "facts": facts,
+                                  **({"neighbors": nb_cards} if nb_cards else {})})
+                for x in kept[0]["neighbors"]:
+                    if x not in seen:
+                        seen.add(x)
+                        frontier.append(x)
+            if over:
                 walk["budget_hit"] = True
                 walk["stop"] = "budget"
                 break
-            walk["bytes_total"] += eb
-            nb_cards = [{x: n.get(x) for x in ("id", "kind", "name", "edge", "value", "sections_n") if n.get(x) is not None}
-                        for n in ex.get("neighbors") or [] if isinstance(n, dict)]
-            for n in ex.get("neighbors") or []:
-                if isinstance(n, dict) and n.get("safety") and n.get("id") not in safety:
-                    safety[n["id"]] = n["safety"]
-            steps_out.append({"step": k, "node": node, "picked": jrow["picked"], "facts": facts,
-                              **({"neighbors": nb_cards} if nb_cards else {})})
-            cc = ex.get("claude_contract") or {}
-            contract["must_show_flags"] = sorted(set(contract["must_show_flags"]) | set(cc.get("must_show_flags") or []))
-            contract["priority"] = contract["priority"] or cc.get("priority")
-            contract["rule"] = contract["rule"] or cc.get("rule")
-            for x in nbs:
-                if x not in seen:
-                    seen.add(x)
-                    frontier.append(x)
         else:
             walk["stop"] = walk["stop"] or "steps"
         walk["steps_n"] = len(walk["steps"])

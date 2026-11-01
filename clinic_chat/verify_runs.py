@@ -103,9 +103,11 @@ def walk_calls(w: dict) -> list[tuple[str, dict, str]]:
         if st.get("node"):
             out.append(("peek", {"id": st["node"]}, "peek"))
         ex = st.get("expand") or {}
-        if ex.get("sections") or ex.get("neighbors"):
-            out.append(("expand", {"id": st["node"], "sections": ex.get("sections") or None,
-                                   "neighbors": ex.get("neighbors") or None}, "expand"))
+        # 섹션별 호출 기록(calls) — 예산 넘어 뺀 호출은 모델이 안 받았으니 뺌
+        for c in [c for c in ex.get("calls") or [ex] if c.get("excluded") is not True]:
+            if c.get("sections") or c.get("neighbors"):
+                out.append(("expand", {"id": st["node"], "sections": c.get("sections") or None,
+                                       "neighbors": c.get("neighbors") or None}, "expand"))
     return out
 
 
