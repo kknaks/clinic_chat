@@ -782,6 +782,7 @@ class Walker:
         self.fixed_done = False  # 의도별 고정 섹션은 첫 시술 노드에서 한 번
         self.required_done: set[str] = set()
         self.bundle_done: set[str] = set()
+        self.safety_first_done = False
 
     def kind(self, node: str) -> str | None:
         return ((self.peeks.get(node) or ({},))[0].get("node") or {}).get("kind")
@@ -799,9 +800,11 @@ class Walker:
         기록 walk.required · walk.base_bundle(첫 시술 노드) · walk.bundles[] · walk.fixed."""
         proc = self.kind(node) in PROC_NODE_KINDS
         items: list[tuple[str, str]] = []
-        if proc and node == self.start and node not in self.required_done:
+        first_proc = proc and (node == self.start or (self.s.walk_safety_budget > 0 and not self.safety_first_done))
+        if first_proc and node not in self.required_done:  # 시술 S · 아니면(고침 4) 처음 걷는 시술 노드
             items += self.safety_items(intent)
             self.required_done.add(node)
+            self.safety_first_done = True
         bd = None
         if self.s.walk_base_bundle and node not in self.bundle_done:
             self.bundle_done.add(node)
@@ -824,7 +827,7 @@ class Walker:
             self.walk["bundles"].append(row)
             if proc and self.walk["base_bundle"] is None:
                 self.walk["base_bundle"] = row
-        if node == self.start and any(w == "required" for _, w in items):
+        if any(w == "required" for _, w in items):
             req = self.walk["required"]
             req["nodes"].append(node)
             req["filtered"] += [f"{node}|{x}" for x in filt if x in self.s.required_sections()]

@@ -553,3 +553,13 @@ async def test_fix4_i04_management_in_safety_pool(deps_factory, hub):
     r, _, _ = await run(deps_factory, "소프웨이브 부작용", jev, profile="fix4", walk_max_steps=1, walk_fill=False)
     sb = r["trace"]["walk"]["safety_budget"]
     assert (U140, "safety.management") in {(x["node"], x["section"]) for x in sb["sections"]}
+
+
+async def test_fix4_safety_at_first_procedure_node(deps_factory, hub):
+    """고민 S · I-01(묶음 없음) — 처음 걷는 시술 노드에서 안전 섹션(안전 예산) → fact 0 되돌아감이 안 남."""
+    jev = FakeJev(intent="I-01", choices={"start": "concern:P3", "nb": U140, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, "처짐이 고민이에요", jev, profile="fix4", walk_max_steps=2, walk_fill=False)
+    w = r["trace"]["walk"]
+    assert not w["fallback"] and [(x["node"], x["section"]) for x in w["safety_budget"]["sections"][:4]] == [
+        (U140, x) for x in SAFE]
+    assert w["required"]["nodes"][0] == U140
