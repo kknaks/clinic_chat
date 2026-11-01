@@ -17,7 +17,7 @@ from pathlib import Path
 from clinic_chat.config import get_settings
 from clinic_chat.report import ITEMS, NAMES, UNKNOWN, _cell, fmt_ms
 from clinic_chat.runs import RunStore, merge_quality
-from clinic_chat.verify_runs import case_stats
+from clinic_chat.verify_runs import case_stats, cover34, walk_summary
 
 CASES = ("case1", "case2", "case3")
 
@@ -239,6 +239,185 @@ def build(qs: list[str], before: dict, after: dict, all_before: dict, label: str
     return "\n".join(L) + "\n", data
 
 
+# ── 2회 평균 · case1 대비 차(SPEC-006 §4-5 v2.2) ─────────────────────────────────────────
+W4 = {"accuracy": 58.0, "safety": 90.0, "ttft_ms": 7000}  # case3 통과 기준(사용자 11-01 · W-4)
+
+
+def pick_batch(store: RunStore, batch: str) -> dict:
+    """배치 id → 번호별 기록(채점 붙임 · 같은 번호 여럿이면 마지막)."""
+    qual = store.latest_quality()
+    out = {}
+    for r in store._read("runs.jsonl"):
+        if r.get("batch_id") == batch and r.get("question_no"):
+            out[r["question_no"]] = merge_quality(r, qual.get(r["run_id"]))
+    return out
+
+
+def ran(r: dict | None, c: str) -> bool:
+    cr = case(r, c)
+    return bool(cr) and not cr.get("skipped")
+
+
+def one_batch(qs: list[str], runs: dict) -> dict:
+    """한 회 — 케이스별 항목 통과율 · case1 대비 차 Δ(같은 배치 · case1 을 돌렸을 때만) · 평균 통과 · 「정보 없음」 · 첫 글자."""
+    rs = [runs[q] for q in qs if q in runs]
+    out: dict = {"n": len(rs), "cases": {}}
+    for c in CASES:
+        cr = [r for r in rs if ran(r, c)]
+        if not cr:
+            continue
+        rt = rates(cr)[c]
+        pcs = [judge(r, c).get("pass_count") for r in cr if isinstance(judge(r, c).get("pass_count"), int)]
+        out["cases"][c] = {
+            "runs": len(cr), "rates": {it: {"pass": p, "n": n, "pct": round(100 * p / n, 1) if n else None}
+                                       for it, (p, n) in rt.items()},
+            "avg_pass": round(sum(pcs) / len(pcs), 2) if pcs else None,
+            "unknown_answers": sum(1 for r in cr if UNKNOWN.search(case(r, c).get("answer") or "")),
+            "errors": sum(1 for r in cr if case(r, c).get("error")),
+            "ttft_ms": _med([(case(r, c).get("timing") or {}).get("ttft_ms") for r in cr]),
+            "total_ms": _med([(case(r, c).get("timing") or {}).get("total_ms") for r in cr]),
+            "hub_bytes": _med([hub_bytes(r, c) for r in cr])}
+    base = out["cases"].get("case1")
+    for c, x in out["cases"].items():
+        x["delta_case1"] = {it: (round(v["pct"] - base["rates"][it]["pct"], 1)
+                                 if base and v["pct"] is not None and base["rates"][it]["pct"] is not None else None)
+                            for it, v in x["rates"].items()} if c != "case1" else None
+    w = walk_summary(rs)
+    if w:
+        w["cover34"] = {k: {x: v[x] for x in ("rows", "denominator", "shown", "picked", "got", "other_start")}
+                        for k, v in cover34(rs).items() if isinstance(v, dict)}
+    out["walk"] = w
+    out["stray"] = {c: case_stats(rs, c)["stray_by_kind"] for c in ("case1", "case2") if any(ran(r, c) for r in rs)}
+    return out
+
+
+def flips(qs: list[str], a: dict, b: dict, c: str) -> dict:
+    """두 회 사이 같은 문항 · 같은 항목 판정(통과 · 실패)이 바뀐 비율."""
+    n = k = 0
+    for q in qs:
+        ia, ib = items(a.get(q), c), items(b.get(q), c)
+        for it in ITEMS:
+            if ia.get(it) in ("통과", "실패") and ib.get(it) in ("통과", "실패"):
+                n += 1
+                k += ia[it] != ib[it]
+    return {"flipped": k, "judged": n, "ratio": round(k / n, 4) if n else None}
+
+
+def build_two(qs: list[str], before: dict, batches: dict[str, dict], before_desc: str) -> tuple[str, dict]:
+    """--batches a,b — 2회 평균 · 두 회 차 · 뒤집힘 · 전(1회) 대비 · case3 통과 기준(W-4) · 걸음 칸(§7-8)."""
+    L: list[str] = []
+    w = L.append
+    names = list(batches)
+    per = {b: one_batch(qs, batches[b]) for b in names}
+    pre = one_batch(qs, before)
+    data: dict = {"questions": len(qs), "before": before_desc, "batches": names, "per_batch": per, "before_stats": pre}
+    cases = [c for c in CASES if all(c in per[b]["cases"] for b in names)]
+    w("# 재실행 보고 — 2회 평균(SPEC-006 §4-5 · §7-8)\n")
+    av = next((r.get("versions") for r in batches[names[0]].values()), {}) or {}
+    st = next((r.get("settings") for r in batches[names[0]].values()), {}) or {}
+    w(f"- 대상 {len(qs)}문항 · 후 = 배치 {' · '.join(f'`{b}`({per[b]["n"]}판)' for b in names)} · 전 = {before_desc}(1회 · 「전 1회」)")
+    w(f"- 후 조건: 앱 {av.get('app_commit')} · 골드 {av.get('gold_build_hash')} · 답 {av.get('answer_provider')} "
+      f"{av.get('answer_model')} · 프롬프트 case3 {(av.get('prompts') or {}).get('case3')} · 순서 표 {st.get('order_table_sha')} · "
+      f"돌린 케이스 {next((r.get('cases_run') for r in batches[names[0]].values()), None) or '전부'}")
+    w("- 숫자만(결론 없음) · 통과율 = 통과 / (통과 + 실패)\n")
+    w("## 1. 항목 통과율 — 전 · 후 각 회 · 2회 평균 · 두 회 차 · case1 대비 차\n")
+    w("| 케이스 | 항목 | 전 | " + " | ".join(f"후 {i + 1}" for i in range(len(names))) +
+      " | 2회 평균 | 두 회 차(%p) | 평균 − 전(%p) | case1 대비 차(2회 평균) |")
+    w("|---|---|---|" + "---|" * len(names) + "---|---|---|---|")
+    data["rates"] = {}
+    for c in cases:
+        for it, nm in ITEMS.items():
+            vals = [per[b]["cases"][c]["rates"][it]["pct"] for b in names]
+            avg = round(sum(vals) / len(vals), 1) if all(v is not None for v in vals) else None
+            diff = round(abs(vals[0] - vals[1]), 1) if len(vals) == 2 and None not in vals else None
+            bp = ((pre["cases"].get(c) or {}).get("rates") or {}).get(it, {}).get("pct")
+            dd = [per[b]["cases"][c]["delta_case1"][it] for b in names] if c != "case1" else []
+            d1 = round(sum(dd) / len(dd), 1) if dd and None not in dd else None
+            data["rates"].setdefault(c, {})[it] = {"before": bp, "after": vals, "avg": avg, "diff": diff,
+                                                   "vs_before": _d(bp, avg), "delta_case1_avg": d1}
+            cells = [_p(per[b]["cases"][c]["rates"][it]) for b in names]
+            w(f"| {NAMES[c]} | {nm} | {_p(pre['cases'][c]['rates'][it]) if c in pre['cases'] else '–'} | " + " | ".join(cells) +
+              f" | {avg if avg is not None else '–'}% | {diff if diff is not None else '–'} | {_d(bp, avg)} | "
+              f"{'–' if d1 is None else f'{d1:+.1f}'} |")
+    w("\ncase1 대비 차 = 같은 배치 안 통과율(caseN) − 통과율(case1) — case1 을 안 돌린 배치(`--cases case3`)는 –\n")
+    w("## 2. 뒤집힘 — 두 회 사이 같은 문항 · 같은 항목 판정이 바뀐 비율\n")
+    data["flips"] = {c: flips(qs, batches[names[0]], batches[names[1]], c) for c in cases} if len(names) == 2 else {}
+    for c, f in data["flips"].items():
+        w(f"- {NAMES[c]}: {f['flipped']}/{f['judged']} = {pct(f['flipped'], f['judged'])}")
+    w("\n## 3. 평균 통과 · 「정보 없음」류 · 오류 · 시간 · 허브 바이트(전 → 후 각 회)\n")
+    w("| 케이스 | 평균 통과(5) | 「정보 없음」류 | 오류 | 첫 글자 중앙 | 전체 중앙 | 허브 바이트 중앙 |")
+    w("|---|---|---|---|---|---|---|")
+    for c in cases:
+        b0 = pre["cases"].get(c) or {}
+        def f(k, fm=str, b0=b0, c=c):
+            return " → ".join([fm(b0.get(k)) if b0 else "–"] + [fm(per[b]["cases"][c][k]) for b in names])
+        w(f"| {NAMES[c]} | {f('avg_pass')} | {f('unknown_answers')} | {f('errors')} | {f('ttft_ms', fmt_ms)} | "
+          f"{f('total_ms', fmt_ms)} | {f('hub_bytes')} |")
+    w("\n## 4. case3 통과 기준(W-4 · 사용자 11-01) — 정확성 ≥ 58% · 안전 ≥ 90% · 첫 글자 ≤ 7초\n")
+    w("| 회 | 정확성 | 안전 | 첫 글자 중앙 | 통과 |")
+    w("|---|---|---|---|---|")
+    data["w4"] = {}
+    for b in names + ["2회 평균"]:
+        if b == "2회 평균":
+            x = data["rates"].get("case3") or {}
+            acc, saf = (x.get("accuracy") or {}).get("avg"), (x.get("safety") or {}).get("avg")
+            tt = _med([per[n]["cases"]["case3"]["ttft_ms"] for n in names]) if "case3" in cases else None
+        else:
+            c3 = per[b]["cases"].get("case3") or {}
+            acc, saf, tt = ((c3.get("rates") or {}).get("accuracy") or {}).get("pct"), \
+                ((c3.get("rates") or {}).get("safety") or {}).get("pct"), c3.get("ttft_ms")
+        ok = None if None in (acc, saf, tt) else (acc >= W4["accuracy"] and saf >= W4["safety"] and tt <= W4["ttft_ms"])
+        data["w4"][b] = {"accuracy": acc, "safety": saf, "ttft_ms": tt, "pass": ok}
+        w(f"| {b} | {acc}% | {saf}% | {fmt_ms(tt)} | {'○' if ok else '✗' if ok is False else '–'} |")
+    w("\n## 5. case3 걸음(§7-8 끝 조건 칸) — 전 → 후 각 회\n")
+    rows = [("판 · 걸음 판 · 되돌아감", lambda x: f"{x['runs']} · {x['walked']} · {x['fallback']} {x['fallback_reasons']}"),
+            ("걸음 중앙(판 기준 · ≥ 3)", lambda x: f"{x['steps_median']}"),
+            ("예산 멈춤(≤ 30%)", lambda x: f"{x['budget_stop']}/{x['runs']} = {pct(x['budget_stop'], x['runs'])}"),
+            ("멈춤 분포", lambda x: f"{x['stop']}"),
+            ("이웃 fact 도달(≥ 80%)", lambda x: f"{x['neighbor_fact_reach']}/{x['walked']} = {pct(x['neighbor_fact_reach'], x['walked'])}"),
+            ("이웃 peek 도달", lambda x: f"{x['neighbor_peek_reach']}/{x['walked']} = {pct(x['neighbor_peek_reach'], x['walked'])}"),
+            ("2홉 fact 도달", lambda x: f"{x['hop2_fact_reach']}/{x['walked']}"),
+            ("34 행 1홉 몫(뜸/분모 · 고름 · 받음)", lambda x: _c34(x, "one_hop")),
+            ("34 행 0홉 몫(뜸/분모 · 고름 · 받음)", lambda x: _c34(x, "zero_hop")),
+            ("bytes_mismatch(0)", lambda x: f"{x['bytes_mismatch']}"),
+            ("bytes_total 중앙 · p95", lambda x: f"{x['bytes_total_median']} · {x['bytes_total_p95']}"),
+            ("full.bytes 중앙 · p95 · 예산 넘음 · 못 받은 cut", lambda x: f"{x['full_bytes_median']} · {x['full_bytes_p95']} · "
+                                                              f"{x['full_over_budget']} · {x['full_cut_unfetched']}"),
+            ("목록 호출 · 바이트 중앙 · ms 중앙", lambda x: f"{x['list_calls']} · {x['list_bytes_median']} · {x['list_ms_median']}"),
+            ("excluded · filtered_by_budget · peek 재사용 · by_unit", lambda x: f"{x['excluded']} · {x['filtered_by_budget']} · "
+                                                                       f"{x['peek_reused']} · {x['by_unit_queued']}"),
+            ("Jev 호출 합 · Jev ms 중앙", lambda x: f"{x['jev_calls']} · {x['jev_ms_median']}")]
+    w("| 칸 | 전 | " + " | ".join(f"후 {i + 1}" for i in range(len(names))) + " |")
+    w("|---|---|" + "---|" * len(names))
+    for nm, fn in rows:
+        cells = [_safe(fn, pre.get("walk"))] + [_safe(fn, per[b].get("walk")) for b in names]
+        w(f"| {nm} | " + " | ".join(cells) + " |")
+    w("\n전 기록(v2.1)에는 step1_options · list · full 칸이 없어 – 또는 0 으로 나옴\n")
+    if any(per[b]["stray"] for b in names):
+        w("## 6. stray(bare_hub · foreign)\n")
+        for b in names:
+            w(f"- {b}: {per[b]['stray']}")
+    return "\n".join(L) + "\n", data
+
+
+def _c34(x: dict, k: str) -> str:
+    c = (x.get("cover34") or {}).get(k)
+    return f"{c['shown']}/{c['denominator']} · {c['picked']} · {c['got']}(행 {c['rows']} · S 다름 {len(c['other_start'])})" if c else "–"
+
+
+def _safe(fn, x) -> str:
+    if not x:
+        return "–"
+    try:
+        return fn(x)
+    except (KeyError, TypeError):
+        return "–"
+
+
+def pct(a, b) -> str:
+    return f"{a / b:.1%}" if b else "–"
+
+
 def _p(x: dict) -> str:
     return f"{round(x['pct'])}% ({x['pass']}/{x['n']})" if x["n"] else "–"
 
@@ -259,9 +438,23 @@ def main() -> None:
     ap.add_argument("--before-gold", default="e9d30ace")
     ap.add_argument("--before-label", help="전 = 이 라벨 배치(예 rerun-v3) · 없으면 10-30 전체 실행")
     ap.add_argument("--batch", help="후 = 이 배치 id 만(같은 라벨 배치가 여럿일 때)")
+    ap.add_argument("--batches", help="후 = 배치 id 둘(쉼표) — 2회 평균 · 두 회 차 · 뒤집힘 · W-4(§4-5)")
+    ap.add_argument("--before-batch", help="전 = 이 배치 id(예 rerun-v4 b202611011148-c6ed3a)")
     ap.add_argument("--out")
     a = ap.parse_args()
     s = get_settings()
+    if a.batches:
+        store = RunStore(s.runs_path)
+        qs = [x.strip() for x in Path(a.questions_file).read_text(encoding="utf-8").splitlines() if x.strip()]
+        bs = {b: pick_batch(store, b) for b in [x.strip() for x in a.batches.split(",") if x.strip()]}
+        before = pick_batch(store, a.before_batch) if a.before_batch else pick(store, "-", a.before_gold, a.before_label)[0]
+        md, data = build_two(qs, before, bs, f"배치 `{a.before_batch}`" if a.before_batch else f"일괄 `{a.before_label}`")
+        out = Path(a.out) if a.out else s.runs_path.parent / "build-out" / "rerun-report-2x.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(md, encoding="utf-8")
+        out.with_suffix(".json").write_text(json.dumps(data, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        print(f"[rerun-report] {out} · 후 " + " · ".join(f"{b} {len(v)}" for b, v in bs.items()))
+        return
     qs = [x.strip() for x in Path(a.questions_file).read_text(encoding="utf-8").splitlines() if x.strip()]
     before, after, all_before = pick(RunStore(s.runs_path), a.label, a.before_gold, a.before_label, a.batch)
     md, data = build(qs, before, after, all_before, a.label, a.before_gold,

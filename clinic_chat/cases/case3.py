@@ -851,12 +851,12 @@ class Walker:
                 for x in arg:
                     if x not in self.seen:
                         self.seen.add(x)
-                        self.queue.append({"node": x, "edge": self.edge_of.get(x)})
+                        self.queue.append({"node": x, "edge": self.edge_of.get(x), "hop": step.get("hop", 0) + 1})
             if what == "sections" and node == self.start and (peek.get("node") or {}).get("kind") in ("family", "product"):
                 for u in ((ex.get("by_unit") or {}).get(arg[0]) or {}):  # v2.4 — 단위를 그 section 으로 대기열 뒤에
                     if (u, arg[0]) not in self.unit_seen:
                         self.unit_seen.add((u, arg[0]))
-                        self.queue.append({"node": u, "section": arg[0], "edge": self.s_link})
+                        self.queue.append({"node": u, "section": arg[0], "edge": self.s_link, "hop": 1})
                         self.walk["by_unit_queued"].append({"unit": u, "section": arg[0]})
                         self.edge_of.setdefault(u, self.s_link)
         kept = [c for c in calls if not c.get("excluded")]
@@ -1013,7 +1013,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
 
         # ③ 걸음 1 — 이웃 먼저(§3-4-6 표) + 섹션(의도별 상한) 한 요청 · 「충분」 없음
         if wk is not None:
-            step: dict[str, Any] = {"k": 1, "node": S, "phase": "first"}
+            step: dict[str, Any] = {"k": 1, "node": S, "phase": "first", "hop": 0}
             walk["steps"].append(step)
             try:
                 peek = await wk.peek(1, S, step)
@@ -1061,7 +1061,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                     break
                 k += 1
                 node = entry["node"]
-                step = {"k": k, "node": node, "phase": phase}
+                step = {"k": k, "node": node, "phase": phase, "hop": entry.get("hop", 0)}
                 if entry.get("section"):
                     step["by_unit_section"] = entry["section"]
                 walk["steps"].append(step)

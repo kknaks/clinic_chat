@@ -78,3 +78,26 @@ def test_pick_before_label_and_batch(tmp_path):
     assert all_before["Q001"]["run_id"] == "v3" and all_before["Q002"]["run_id"] == "full2"
     before2, _, _ = rerun_report.pick(store, "rerun-v4", "e9d30ace")
     assert before2["Q001"]["run_id"] == "full1"
+
+
+def test_two_batches_average_flips_and_w4():
+    """§4-5 — 같은 문항 두 배치 · 판정 일부 다름 → 2회 평균 · 두 회 차 · 뒤집힘 · case1 대비 차 · W-4."""
+    bad = {**OK, "accuracy": "실패"}
+    r1 = {"Q001": rec("Q001", (OK, OK, OK), "g", "v5a"), "Q002": rec("Q002", (OK, OK, bad), "g", "v5a")}
+    r2 = {"Q001": rec("Q001", (OK, OK, bad), "g", "v5b"), "Q002": rec("Q002", (OK, OK, bad), "g", "v5b")}
+    before = {"Q001": rec("Q001", (OK, bad, bad), "g0"), "Q002": rec("Q002", (OK, OK, bad), "g0")}
+    md, data = rerun_report.build_two(["Q001", "Q002"], before, {"a": r1, "b": r2}, "전")
+    acc = data["rates"]["case3"]["accuracy"]
+    assert acc["after"] == [50.0, 0.0] and acc["avg"] == 25.0 and acc["diff"] == 50.0 and acc["before"] == 0.0
+    assert acc["delta_case1_avg"] == -75.0  # (50−100 + 0−100)/2
+    assert data["flips"]["case3"] == {"flipped": 1, "judged": 10, "ratio": 0.1}
+    assert data["w4"]["a"]["pass"] is False and data["w4"]["2회 평균"]["accuracy"] == 25.0
+    assert "## 4. case3 통과 기준" in md
+
+
+def test_two_batches_case3_only_skipped_columns():
+    r = rec("Q001", (OK, OK, OK), "g", "v5a")
+    for c in ("case1", "case2"):
+        r["cases"][c] = {"skipped": True, "answer": "", "trace": {}, "timing": {}}
+    md, data = rerun_report.build_two(["Q001"], {}, {"a": {"Q001": r}, "b": {"Q001": r}}, "전")
+    assert list(data["rates"]) == ["case3"] and data["rates"]["case3"]["accuracy"]["delta_case1_avg"] is None

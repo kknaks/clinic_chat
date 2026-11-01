@@ -199,6 +199,11 @@
    "place": "1홉·1쪽",
    "skind": "family",
    "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-028"
+    ]
+   },
    "v22": false,
    "v23": false,
    "v24": true,
@@ -234,6 +239,20 @@
    "place": "1홉·1쪽",
    "skind": "concern",
    "start": "concern:P5-1",
+   "targets": {
+    "concern_avoid": [
+     "unit_procedure:U5-030"
+    ],
+    "concern_avoid_unit": [
+     "unit_procedure:U5-030"
+    ],
+    "treats": [
+     "unit_procedure:U5-023"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-023"
+    ]
+   },
    "v22": false,
    "v23": false,
    "v24": true,
@@ -266,6 +285,11 @@
    "place": "1홉·1쪽",
    "skind": "family",
    "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-023"
+    ]
+   },
    "v22": false,
    "v23": false,
    "v24": true,
@@ -283,6 +307,14 @@
    "place": "1홉·1쪽",
    "skind": "family",
    "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-141"
+    ],
+    "product_family": [
+     "product:M8-4-1"
+    ]
+   },
    "v22": false,
    "v23": true,
    "v24": true,
@@ -300,6 +332,14 @@
    "place": "1홉·1쪽",
    "skind": "concern",
    "start": "concern:P6",
+   "targets": {
+    "treats": [
+     "unit_procedure:U5-048"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-048"
+    ]
+   },
    "v22": false,
    "v23": true,
    "v24": true,
@@ -377,6 +417,42 @@
    "place": "1홉·1쪽",
    "skind": "check_condition",
    "start": "check_condition:C-PREG",
+   "targets": {
+    "requires_check_unit": [
+     "unit_procedure:U5-023",
+     "unit_procedure:U5-024",
+     "unit_procedure:U5-025",
+     "unit_procedure:U5-026",
+     "unit_procedure:U5-027",
+     "unit_procedure:U5-028",
+     "unit_procedure:U5-029",
+     "unit_procedure:U5-030",
+     "unit_procedure:U5-031",
+     "unit_procedure:U5-039",
+     "unit_procedure:U5-043",
+     "unit_procedure:U5-049",
+     "unit_procedure:U5-050",
+     "unit_procedure:U5-090",
+     "unit_procedure:U5-099",
+     "unit_procedure:U5-100",
+     "unit_procedure:U5-101",
+     "unit_procedure:U5-131",
+     "unit_procedure:U5-137",
+     "unit_procedure:U5-138",
+     "unit_procedure:U5-141",
+     "unit_procedure:U5-144",
+     "unit_procedure:U5-145",
+     "unit_procedure:U5-146",
+     "unit_procedure:U5-147",
+     "unit_procedure:U5-148",
+     "unit_procedure:U5-149",
+     "unit_procedure:U5-150",
+     "unit_procedure:U5-151",
+     "unit_procedure:U5-155",
+     "unit_procedure:U5-156",
+     "unit_procedure:U5-157"
+    ]
+   },
    "v22": false,
    "v23": true,
    "v24": true,
@@ -393,6 +469,11 @@
    "place": "1홉·1쪽",
    "skind": "family",
    "start": "family:M15",
+   "targets": {
+    "requires_check": [
+     "check_condition:C-ISO"
+    ]
+   },
    "v22": false,
    "v23": true,
    "v24": true,
@@ -439,6 +520,14 @@
    "place": "1홉·1쪽",
    "skind": "concern",
    "start": "concern:P14-3",
+   "targets": {
+    "treats": [
+     "unit_procedure:U5-153"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-153"
+    ]
+   },
    "v22": false,
    "v23": true,
    "v24": true,
@@ -567,5 +656,6 @@
   },
   "zero_hop_p1": 4,
   "zero_hop_p1_in_section2_intents": 3
- }
+ },
+ "targets_note": "1홉·1쪽 행의 targets{edge kind: [노드]} = 목표 fact 를 1쪽에 가진 S 의 이웃(같은 스크립트 place() 셈 · 출력만 다른 곳 · 원본 행 값은 그대로)"
 }

@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from clinic_chat.cases.loop import VALID_INTENTS
+from clinic_chat.cases.loop import VALID_INTENTS, stray_kind
 from clinic_chat.clients.hub_mcp import HubMCP
 from clinic_chat.clients.hub_rest import HubRest, HubRestError
 from clinic_chat.config import ROOT, TRUNCATION_MARKERS, get_settings, truncation_markers_sha
@@ -97,18 +97,133 @@ def is_stray(c: dict) -> bool:
 
 
 def walk_calls(w: dict) -> list[tuple[str, dict, str]]:
-    """걸음 기록 → 재호출 목록 (도구, 입력, 몫 peek|expand)."""
+    """걸음 기록 → 재호출 목록 (도구, 입력, 몫 peek|expand|list|full). v2.4 기록은 호출마다 보낸 본문(`input`) 그대로 ·
+    peek 재사용 걸음은 허브 호출 없음 · 옛 기록(input 칸 없음)은 sections · neighbors 로."""
     out = []
+    start = w.get("start_node")
+    for kd in (w.get("list") or {}).get("kinds") or []:
+        out.append(("expand", {"id": start, "neighbor_kinds": [kd]}, "list"))
     for st in w.get("steps") or []:
-        if st.get("node"):
+        if st.get("node") and not st.get("peek_reused") and not st.get("error", "").startswith("Jev"):
             out.append(("peek", {"id": st["node"]}, "peek"))
         ex = st.get("expand") or {}
         # 섹션별 호출 기록(calls) — 예산 넘어 뺀 호출은 모델이 안 받았으니 뺌
         for c in [c for c in ex.get("calls") or [ex] if c.get("excluded") is not True]:
-            if c.get("sections") or c.get("neighbors"):
+            if c.get("input"):
+                out.append(("expand", {"id": st["node"], **c["input"]}, "expand"))
+            elif c.get("sections") or c.get("neighbors"):
                 out.append(("expand", {"id": st["node"], "sections": c.get("sections") or None,
                                        "neighbors": c.get("neighbors") or None}, "expand"))
+    for c in (w.get("full") or {}).get("calls_detail") or []:
+        if c.get("input"):
+            out.append(("expand", {"id": c["node"], **c["input"]}, "full"))
     return out
+
+
+def p95(xs: list[int | float]) -> int | None:
+    xs = sorted(x for x in xs if isinstance(x, (int, float)))
+    return int(xs[min(len(xs) - 1, round(0.95 * (len(xs) - 1)))]) if xs else None
+
+
+COVER34_FILE = ROOT / "clinic_chat" / "walk_cover34.json"
+
+
+def _step_facts(st: dict) -> list[str]:
+    return list((st.get("expand") or {}).get("fact_ids") or [])
+
+
+def cover34(runs: list[dict]) -> dict:
+    """§3-4-8 · §7-8 34 행 — 1홉 몫(목표를 1쪽에 가진 이웃 ∈ walk.step1_options) · 0홉 몫(그 section ∈ 선택지) ·
+    S 가 rerun-v4 와 같은 행만 문턱 분모 · 다른 행은 보고 · 실제로 고른 행 · 받은 행."""
+    rows = json.loads(COVER34_FILE.read_text(encoding="utf-8"))["rows"]
+    by_no = {r.get("question_no"): r for r in runs if r.get("question_no")}
+    out = {}
+    for place, key in (("1홉·1쪽", "one_hop"), ("0홉·1쪽", "zero_hop")):
+        rs = [x for x in rows if x["place"] == place]
+        det = []
+        for x in rs:
+            rec = by_no.get(x["no"])
+            w = trace(rec, "case3").get("walk") if rec else None
+            if not w:
+                det.append({"no": x["no"], "run": bool(rec), "same_start": None})
+                continue
+            same = w.get("start_node") == x["start"]
+            opts = set(w.get("step1_options") or [])
+            st1 = (w.get("steps") or [{}])[0]
+            j1 = st1.get("jev") or {}
+            if key == "one_hop":
+                tg = {n for ns in (x.get("targets") or {}).values() for n in ns}
+                shown = bool(tg & opts)
+                picked = bool(tg & set(j1.get("picked_neighbors") or []))
+                got = any(st.get("node") in tg and _step_facts(st) for st in w.get("steps") or [])
+            else:
+                secs = set(x.get("sections") or [])
+                shown = bool({"section:" + y for y in secs} & opts)
+                picked = bool(secs & set(j1.get("picked_sections") or []))
+                got = any(st.get("node") == x["start"] and set((st.get("expand") or {}).get("sections") or []) & secs
+                          for st in w.get("steps") or [])
+            det.append({"no": x["no"], "run": True, "same_start": same, "start": w.get("start_node"), "shown": shown,
+                        "picked": picked, "got": got, "fallback": bool(w.get("fallback"))})
+        same = [d for d in det if d.get("same_start")]
+        out[key] = {"rows": len(rs), "denominator": len(same), "shown": sum(d["shown"] for d in same),
+                    "picked": sum(d["picked"] for d in same), "got": sum(d["got"] for d in same),
+                    "other_start": [d["no"] for d in det if d.get("same_start") is False],
+                    "other_start_shown": sum(1 for d in det if d.get("same_start") is False and d.get("shown")),
+                    "not_run": [d["no"] for d in det if not d.get("run")], "detail": det}
+    out["sum_shown"] = out["one_hop"]["shown"] + out["zero_hop"]["shown"]
+    return out
+
+
+def walk_summary(runs: list[dict]) -> dict | None:
+    """case3 걸음 셈(§4-4 v2.2~v2.4 · §7-8) — 판 단위 · 182 기준(되돌아간 판 포함) · 이웃 fact 도달은 걸음 판 기준."""
+    ws = [(r, trace(r, "case3").get("walk")) for r in runs]
+    ws = [(r, w) for r, w in ws if w]
+    if not ws:
+        return None
+    n = len(ws)
+    walked = [w for _, w in ws if not w.get("fallback")]
+    stop = collections.Counter(str(w.get("stop")) for _, w in ws)
+
+    def nb_fact(w: dict) -> bool:
+        return any(st.get("node") != w.get("start_node") and _step_facts(st) for st in w.get("steps") or [])
+
+    def nb_peek(w: dict) -> bool:
+        return len({st.get("node") for st in w.get("steps") or [] if st.get("node")}) >= 2
+
+    def hop2(w: dict) -> bool:
+        return any((st.get("hop") or 0) >= 2 and _step_facts(st) for st in w.get("steps") or [])
+
+    steps = [st for _, w in ws for st in w.get("steps") or []]
+    calls = [c for st in steps for c in (st.get("expand") or {}).get("calls") or []]
+    fulls = [w.get("full") for _, w in ws if w.get("full")]
+    return {
+        "runs": n, "walked": len(walked), "fallback": n - len(walked),
+        "fallback_reasons": dict(sorted(collections.Counter(str(w.get("fallback_reason")) for _, w in ws
+                                                            if w.get("fallback")).items())),
+        "steps_median": med([w.get("steps_n") or 0 for _, w in ws]),
+        "steps_n": dict(sorted(collections.Counter(str(w.get("steps_n")) for _, w in ws).items())),
+        "stop": dict(sorted(stop.items())), "budget_stop": stop.get("budget", 0),
+        "budget_stop_ratio": round(stop.get("budget", 0) / n, 4),
+        "neighbor_fact_reach": sum(nb_fact(w) for w in walked), "neighbor_peek_reach": sum(nb_peek(w) for w in walked),
+        "hop2_fact_reach": sum(hop2(w) for w in walked),
+        "bytes_total_median": med([w["bytes_total"] for w in walked if isinstance(w.get("bytes_total"), int)]),
+        "bytes_total_p95": p95([w["bytes_total"] for w in walked if isinstance(w.get("bytes_total"), int)]),
+        "full_bytes_median": med([f.get("bytes") or 0 for f in fulls]), "full_bytes_p95": p95([f.get("bytes") or 0 for f in fulls]),
+        "full_over_budget": sum(1 for f in fulls if f.get("over_budget")),
+        "full_cut_unfetched": sum(len(f.get("cut_unfetched_ids") or []) for f in fulls),
+        "list_calls": sum((w.get("list") or {}).get("calls") or 0 for _, w in ws),
+        "list_bytes_median": med([(w.get("list") or {}).get("bytes") for _, w in ws if (w.get("list") or {}).get("calls")]),
+        "list_ms_median": med([(w.get("list") or {}).get("ms") for _, w in ws if (w.get("list") or {}).get("calls")]),
+        "excluded": sum(1 for c in calls if c.get("excluded")),
+        "filtered_by_budget": sum(len((st.get("jev") or {}).get("filtered_by_budget") or []) for st in steps),
+        "bytes_mismatch": sum(w.get("bytes_mismatch") or 0 for _, w in ws),
+        "peek_reused": sum(1 for st in steps if st.get("peek_reused")),
+        "by_unit_queued": sum(len(w.get("by_unit_queued") or []) for _, w in ws),
+        "jev_calls": sum(w.get("jev_calls") or 0 for _, w in ws),
+        "jev_ms_median": med([w["jev_ms_total"] for _, w in ws if isinstance(w.get("jev_ms_total"), (int, float))]),
+        "peek_bytes_median": med([st["peek_bytes"] for st in steps if isinstance(st.get("peek_bytes"), int)]),
+        "order_table_sha": sorted({str(w.get("order_table_sha")) for _, w in ws}),
+    }
 
 
 def case_stats(runs: list[dict], case: str) -> dict:
@@ -140,16 +255,14 @@ def case_stats(runs: list[dict], case: str) -> dict:
                    if w else (tr.get("hub") or {}).get("result_bytes"))
         if isinstance(tot, int):
             got.append(tot)
-    walks = [trace(r, "case3").get("walk") for r in runs] if case == "case3" else []
-    walks = [w for w in walks if w]
+    by_kind = collections.Counter()
+    for r in runs:
+        for c in trace(r, case).get("tool_calls") or []:
+            if is_stray(c):
+                by_kind[c.get("stray_kind") or stray_kind(str(c.get("tool")))] += 1
     return {"intent_passed": ok, "intent_calls": n, "intent_ratio": round(ok / n, 4) if n else None,
-            "truncated_marker": marked, "stray": stray, "hub_bytes_median": med(got),
-            "walk": {"runs": len(walks), "fallback": sum(1 for w in walks if w.get("fallback")),
-                     "steps_median": med([w["steps_n"] for w in walks if isinstance(w.get("steps_n"), int)]),
-                     "bytes_total_median": med([w["bytes_total"] for w in walks if isinstance(w.get("bytes_total"), int)]),
-                     "jev_calls": sum(w.get("jev_calls") or 0 for w in walks),
-                     "jev_ms_median": med([w["jev_ms_total"] for w in walks if isinstance(w.get("jev_ms_total"), (int, float))])}
-            if walks else None}
+            "truncated_marker": marked, "stray": stray, "stray_by_kind": {k: by_kind.get(k, 0) for k in ("bare_hub", "foreign")},
+            "hub_bytes_median": med(got), "walk": walk_summary(runs) if case == "case3" else None}
 
 
 def call_key(tool: str, args: Any) -> str:
@@ -293,6 +406,8 @@ def verify(runs: list[dict], quality: list[dict], rp: Replay, hub_hash: str | No
     intent_vals: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
     stray_c: collections.Counter = collections.Counter()
     stray_names: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
+    stray_kinds: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
+    stray_rows: list[dict] = []
     fair: dict[tuple, list[int]] = collections.defaultdict(list)
     texts: dict[tuple[str, str], list[str]] = {}
     walk_rows: list[dict] = []
@@ -306,11 +421,19 @@ def verify(runs: list[dict], quality: list[dict], rp: Replay, hub_hash: str | No
             calls = trace(rec, case).get("tool_calls") or []
             got: list[str] = []
             total = 0
-            for c in calls:
+            for ci, c in enumerate(calls):
                 tool = c.get("tool")
                 if is_stray(c):
+                    if "stray_fixed_next" not in c:  # 옛 기록 — 바로 다음 호출이 같은 도구 제 이름인가(§3-8 사실 3)
+                        nx = calls[ci + 1] if ci + 1 < len(calls) else None
+                        c = {**c, "stray_fixed_next": bool(nx and not is_stray(nx) and (
+                            nx.get("tool") == tool or str(tool).startswith(str(nx.get("tool")))))}
                     stray_c[(case, prov)] += 1
                     stray_names[(case, prov)][str(tool)] += 1
+                    stray_kinds[(case, prov)][c.get("stray_kind") or stray_kind(str(tool))] += 1
+                    stray_rows.append({"no": rec.get("question_no"), "case": case, "provider": prov, "tool": tool,
+                                       "kind": c.get("stray_kind") or stray_kind(str(tool)),
+                                       "fixed_next": c.get("stray_fixed_next")})
                     continue
                 ip = intent_passed(c)
                 if ip is not None:
@@ -352,7 +475,7 @@ def verify(runs: list[dict], quality: list[dict], rp: Replay, hub_hash: str | No
                 keys3.append(rp.need(hub["tool"], hub.get("input")))
         texts[(rec["run_id"], "case3")] = keys3 if same_build else None
     return {"trunc_rows": trunc_rows, "intent_c": intent_c, "intent_vals": intent_vals, "stray_c": stray_c,
-            "stray_names": stray_names, "fair": fair, "texts": texts, "walk_rows": walk_rows,
+            "stray_names": stray_names, "stray_kinds": stray_kinds, "stray_rows": stray_rows, "fair": fair, "texts": texts, "walk_rows": walk_rows,
             "compare_ok": compare_ok, "quality": quality}
 
 
@@ -407,22 +530,16 @@ def finish(acc: dict, rp: Replay, runs: list[dict], meta: dict) -> dict:
         vals = acc["intent_vals"].get((case, prov), collections.Counter())
         intent_sum[f"{case}/{prov}"] = {"passed": ok, "calls": n, "ratio": round(ok / n, 4) if n else None,
                                          "given": sum(vals.values()), "values": dict(sorted(vals.items()))}
-    stray = {f"{c}/{p}": {"n": n, "names": dict(sorted(acc["stray_names"][(c, p)].items()))}
+    stray = {f"{c}/{p}": {"n": n, "names": dict(sorted(acc["stray_names"][(c, p)].items())),
+                          "by_kind": {k: acc["stray_kinds"][(c, p)].get(k, 0) for k in ("bare_hub", "foreign")},
+                          "fixed_next": sum(1 for x in acc["stray_rows"] if (x["case"], x["provider"]) == (c, p)
+                                            and x["fixed_next"]),
+                          "questions": sorted({str(x["no"]) for x in acc["stray_rows"] if (x["case"], x["provider"]) == (c, p)})}
              for (c, p), n in sorted(acc["stray_c"].items())}
-    # 걸음
-    wr = acc["walk_rows"]
-    walk = None
-    if wr:
-        walk = {"runs": len(wr), "fallback": sum(1 for w in wr if w["fallback"]),
-                "fallback_reasons": dict(sorted(collections.Counter(str(w["fallback_reason"]) for w in wr
-                                                                    if w["fallback"]).items())),
-                "stop": dict(sorted(collections.Counter(str(w["stop"]) for w in wr).items())),
-                "steps_n": dict(sorted(collections.Counter(str(w["steps_n"]) for w in wr).items())),
-                "bytes_total_median": med([w["bytes_total"] for w in wr if isinstance(w["bytes_total"], int)]),
-                "jev_calls_total": sum(w["jev_calls"] or 0 for w in wr),
-                "jev_ms_total": round(sum(w["jev_ms_total"] or 0 for w in wr), 1),
-                "hub_ms_total": round(sum(w["hub_ms_total"] or 0 for w in wr), 1),
-                "peek_bytes_median": med([b for w in wr for b in w["peek_bytes"]])}
+    # 걸음(§4-4 v2.2~v2.4)
+    walk = walk_summary(runs)
+    if walk:
+        walk["cover34"] = cover34(runs)
     fair = {f"{c}/{p}": {"runs": len(xs), "median": med(xs)} for (c, p), xs in sorted(acc["fair"].items())}
     # C 비율
     rows_c = []
@@ -481,19 +598,42 @@ def render(J: dict) -> str:
     L += ["", "도구별:", "", "| 케이스/provider | 도구 | 넘김 | 호출 | 비율 |", "|---|---|---|---|---|"]
     for x in J["intent_by_tool"]:
         L.append(f"| {x['case']}/{x['provider']} | {x['tool']} | {x['passed']} | {x['calls']} | {pct(x['passed'], x['calls'])} |")
-    L += ["", "## 격리 밖 도구(stray)", ""]
+    L += ["", "## 격리 밖 도구(stray · §3-8 bare_hub = 접두 없는 허브 이름 · foreign = 그 밖)", ""]
     if J["stray"]:
-        L += ["| 케이스/provider | 호출 | 이름 |", "|---|---|---|"]
+        L += ["| 케이스/provider | 호출 | bare_hub | foreign | 다음 호출이 고쳐 부름 | 이름 | 문항 |", "|---|---|---|---|---|---|---|"]
         for k, t in J["stray"].items():
-            L.append(f"| {k} | {t['n']} | {' · '.join(f'{a} {b}' for a, b in t['names'].items())} |")
+            L.append(f"| {k} | {t['n']} | {t['by_kind']['bare_hub']} | {t['by_kind']['foreign']} | {t['fixed_next']} | "
+                     f"{' · '.join(f'{a} {b}' for a, b in t['names'].items())} | {' · '.join(t['questions'])} |")
     else:
         L.append("0")
-    L += ["", "## case3 걸음", ""]
+    L += ["", "## case3 걸음(§4-4 · §7-8)", ""]
     w = J["walk"]
     if w:
-        L += [f"- 판 {w['runs']} · 되돌아감 {w['fallback']} {w['fallback_reasons']} · 멈춤 {w['stop']} · 걸음 수 {w['steps_n']}",
-              (f"- bytes_total 중앙 {w['bytes_total_median']} · peek 바이트 중앙 {w['peek_bytes_median']} · "
-               f"Jev 호출 합 {w['jev_calls_total']} · Jev ms 합 {w['jev_ms_total']} · 허브 ms 합 {w['hub_ms_total']}")]
+        n, wn = w["runs"], w["walked"]
+        L += ["| 칸 | 값 |", "|---|---|",
+              f"| 판 · 걸음 판 · 되돌아감(사유) | {n} · {wn} · {w['fallback']} {w['fallback_reasons']} |",
+              f"| 걸음 수 중앙(판 {n} 기준 · 분포) | {w['steps_median']} · {w['steps_n']} |",
+              f"| 멈춤 · 예산 멈춤 비율 | {w['stop']} · {w['budget_stop']}/{n} = {pct(w['budget_stop'], n)} |",
+              (f"| 이웃 fact 도달 · 이웃 peek 도달 · 2홉 fact 도달(걸음 판 기준) | {w['neighbor_fact_reach']}/{wn} = "
+               f"{pct(w['neighbor_fact_reach'], wn)} · {w['neighbor_peek_reach']}/{wn} = {pct(w['neighbor_peek_reach'], wn)} · "
+               f"{w['hop2_fact_reach']}/{wn} |"),
+              f"| bytes_total 중앙 · p95 | {w['bytes_total_median']} · {w['bytes_total_p95']} |",
+              (f"| full.bytes 중앙 · p95 · 원문 예산 넘은 판 · 못 받은 cut 줄 | {w['full_bytes_median']} · {w['full_bytes_p95']} · "
+               f"{w['full_over_budget']} · {w['full_cut_unfetched']} |"),
+              f"| 목록 호출(neighbor_kinds) 합 · 바이트 중앙 · ms 중앙 | {w['list_calls']} · {w['list_bytes_median']} · {w['list_ms_median']} |",
+              (f"| excluded · filtered_by_budget · bytes_mismatch · peek 재사용 · by_unit 대기열 | {w['excluded']} · "
+               f"{w['filtered_by_budget']} · {w['bytes_mismatch']} · {w['peek_reused']} · {w['by_unit_queued']} |"),
+              (f"| Jev 호출 합 · Jev ms 중앙 · peek 바이트 중앙 · 순서 표 판 | {w['jev_calls']} · {w['jev_ms_median']} · "
+               f"{w['peek_bytes_median']} · {' · '.join(w['order_table_sha'])} |")]
+        c = w.get("cover34")
+        if c:
+            L += ["", "34 행(§3-4-8 · 받는 자리 · S 가 rerun-v4 와 같은 행만 분모):", "",
+                  "| 몫 | 행 | 분모(S 같음) | 선택지에 뜸 | 고름 | 받음 | S 다른 행(뜸) | 판 없음 |", "|---|---|---|---|---|---|---|---|"]
+            for key, nm in (("one_hop", "1홉·1쪽"), ("zero_hop", "0홉·1쪽")):
+                x = c[key]
+                L.append(f"| {nm} | {x['rows']} | {x['denominator']} | {x['shown']} | {x['picked']} | {x['got']} | "
+                         f"{' · '.join(x['other_start']) or '-'}({x['other_start_shown']}) | {' · '.join(x['not_run']) or '-'} |")
+            L.append(f"\n합(뜸) {c['sum_shown']}")
     else:
         L.append("걸음 기록 없음(v1 case3)")
     L += ["", "## 공정성 — 모델이 받은 허브 바이트(판마다 합) 중앙", "", "| 케이스/provider | 판 | 중앙 B |", "|---|---|---|"]

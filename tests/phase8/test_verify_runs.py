@@ -80,9 +80,10 @@ async def test_counts(setup):
     i2 = J["intent"]["case2/claude-cli"]
     assert (i2["passed"], i2["calls"], i2["given"]) == (2, 4, 4) and i2["values"] == {"I-03": 2, "none": 2}
     assert "case1/claude-cli" not in J["intent"]  # 원장 도구 = intent 해당 없음
-    assert J["stray"] == {"case2/claude-cli": {"n": 1, "names": {"Bash": 1}}}
+    st = J["stray"]["case2/claude-cli"]
+    assert (st["n"], st["names"], st["by_kind"]) == (1, {"Bash": 1}, {"bare_hub": 0, "foreign": 1})
     w = J["walk"]
-    assert w["runs"] == 1 and w["stop"] == {"enough": 1} and w["peek_bytes_median"] == 900 and w["jev_calls_total"] == 2
+    assert w["runs"] == 1 and w["stop"] == {"enough": 1} and w["peek_bytes_median"] == 900 and w["jev_calls"] == 2
     assert J["fairness"]["case3/claude-cli"] == {"runs": 1, "median": 1200}  # bytes_total + peek
     c2 = J["c_ratio"]["case2/claude-cli"]
     assert c2["fail_rows"] == 3 and c2["C"] == 1 and c2["not_comparable"] == 1  # r3 = 빌드 다름
@@ -120,3 +121,38 @@ def test_forms_integral_floats_not_truncation():
     rest = json.dumps({"days": [14.0, 14.0], "x": "가"}, ensure_ascii=False, separators=(",", ":"))
     mcp = json.dumps({"days": [14, 14], "x": "가"}, ensure_ascii=False, separators=(",", ":"))
     assert len(mcp.encode()) in V.forms(rest) and len(mcp.encode()) < len(rest.encode())
+
+
+def _w(start, steps, **kw):
+    return {"cases": {"case3": {"trace": {"walk": {"start_node": start, "steps": steps, "steps_n": len(steps), **kw}}}}}
+
+
+def test_walk_summary_and_cover34():
+    """§4-4 v2.2~v2.4 걸음 칸 · 34 행 몫(fixture = walk_cover34.json · S 같은 행만 분모)."""
+    rows = {r["no"]: r for r in json.loads(V.COVER34_FILE.read_text(encoding="utf-8"))["rows"]}
+    q106, q055 = rows["Q106"], rows["Q055"]
+    tgt = q106["targets"]["key_family"][0]
+    runs = [
+        {**_w(q106["start"], [{"node": q106["start"], "hop": 0, "jev": {"picked_neighbors": [tgt], "filtered_by_budget": ["x"]},
+                               "expand": {"fact_ids": [], "calls": [{"bytes": 10, "excluded": True}]}},
+                              {"node": tgt, "hop": 1, "expand": {"fact_ids": ["f1"], "calls": [{"bytes": 5}]}},
+                              {"node": "n2", "hop": 2, "expand": {"fact_ids": ["f2"]}},
+                              {"node": q106["start"], "peek_reused": True}],
+              stop="steps", bytes_total=900, step1_options=[tgt, "section:overview"], bytes_mismatch=1,
+              full={"bytes": 4000, "over_budget": False, "cut_unfetched_ids": ["c1"]},
+              list={"calls": 1, "bytes": 700, "ms": 3.0}), "question_no": "Q106"},
+        {**_w("family:OTHER", [{"node": "family:OTHER", "hop": 0}], stop="budget", fallback=True,
+              fallback_reason="no_facts", step1_options=["section:disclosure"]), "question_no": "Q055"},
+        {**_w(q055["start"], [], stop="empty", fallback=True, fallback_reason="no_start"), "question_no": "Q001"},
+    ]
+    w = V.walk_summary(runs)
+    assert (w["runs"], w["walked"], w["fallback"], w["fallback_reasons"]) == (3, 1, 2, {"no_facts": 1, "no_start": 1})
+    assert w["steps_median"] == 1 and w["budget_stop"] == 1 and w["budget_stop_ratio"] == round(1 / 3, 4)
+    assert (w["neighbor_fact_reach"], w["neighbor_peek_reach"], w["hop2_fact_reach"]) == (1, 1, 1)
+    assert (w["excluded"], w["filtered_by_budget"], w["bytes_mismatch"], w["peek_reused"]) == (1, 1, 1, 1)
+    assert (w["full_bytes_median"], w["full_cut_unfetched"], w["list_calls"], w["list_bytes_median"]) == (4000, 1, 1, 700)
+    c = V.cover34(runs)
+    one, zero = c["one_hop"], c["zero_hop"]
+    assert (one["rows"], one["denominator"], one["shown"], one["picked"], one["got"]) == (8, 1, 1, 1, 1)
+    assert zero["denominator"] == 0 and zero["other_start"] == ["Q055"] and zero["other_start_shown"] == 1
+    assert "Q078" in zero["not_run"] and c["sum_shown"] == 1
