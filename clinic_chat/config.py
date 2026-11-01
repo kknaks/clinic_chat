@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     walk_max_steps: int = 4
     walk_byte_budget: int = 20_000
     walk_enough_min: float = 0.5
+    # v2.2~v2.4 걸음 규칙(§3-4-1 · §3-4-6) — 걸음당 섹션 · 이웃 · 걸음 1 섹션 상한(의도별 덮어씀) · ⑤ cut 줄 원문 예산 · 원문 줄 수
+    walk_sections_per_step: int = 2
+    walk_neighbors_max: int = 3
+    walk_first_section_max: int = 1
+    walk_first_section_max_by_intent: str = "I-02:2,I-03:2,I-04:2,I-05:2"
+    walk_full_byte_budget: int = 15_000
+    walk_full_facts_max: int = 64
+    walk_order_table: str = ""  # 비면 clinic_chat/cases/walk_order.json(order_v24 복사본)
     auto_quality: bool = False  # sdk 판 ① · ② 자동 여부(기본 끔 — 화면 「채점」 버튼). CLI 판은 늘 자동
 
     # CLI provider(실험 — 구독 인증 · cli-research) — 10-30 사용자 결정 값
@@ -103,6 +111,14 @@ class Settings(BaseSettings):
     @classmethod
     def _blank_none(cls, v):  # .env 의 빈칸 = 안 정함
         return None if isinstance(v, str) and not v.strip() else v
+
+    def first_section_max(self, intent: str | None) -> int:
+        """걸음 1 섹션 상한 — WALK_FIRST_SECTION_MAX_BY_INTENT(「I-02:2,…」)에 있으면 그 값."""
+        for part in self.walk_first_section_max_by_intent.split(","):
+            k, _, v = part.strip().partition(":")
+            if k and k == intent and v.strip().isdigit():
+                return int(v)
+        return self.walk_first_section_max
 
     @property
     def has_anthropic_key(self) -> bool:

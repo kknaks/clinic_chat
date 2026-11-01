@@ -1,0 +1,376 @@
+{
+ "first_section_max_2": [
+  "I-02",
+  "I-03",
+  "I-04",
+  "I-05"
+ ],
+ "place_461": {
+  "0홉·1쪽": 93,
+  "0홉·2쪽+": 19,
+  "1홉·1쪽": 120,
+  "1홉·2쪽+": 94,
+  "2홉+": 75,
+  "받을 곳 없음": 33,
+  "이름·속성만": 27
+ },
+ "place_by_intent": {
+  "I-01": {
+   "0홉·1쪽": 2,
+   "0홉·2쪽+": 1,
+   "1홉·1쪽": 14,
+   "1홉·2쪽+": 19,
+   "2홉+": 12,
+   "받을 곳 없음": 2,
+   "이름·속성만": 3
+  },
+  "I-02": {
+   "0홉·1쪽": 9,
+   "0홉·2쪽+": 2,
+   "1홉·1쪽": 5,
+   "1홉·2쪽+": 6,
+   "2홉+": 2,
+   "받을 곳 없음": 0,
+   "이름·속성만": 2
+  },
+  "I-03": {
+   "0홉·1쪽": 16,
+   "0홉·2쪽+": 0,
+   "1홉·1쪽": 2,
+   "1홉·2쪽+": 10,
+   "2홉+": 2,
+   "받을 곳 없음": 0,
+   "이름·속성만": 0
+  },
+  "I-04": {
+   "0홉·1쪽": 27,
+   "0홉·2쪽+": 2,
+   "1홉·1쪽": 10,
+   "1홉·2쪽+": 10,
+   "2홉+": 1,
+   "받을 곳 없음": 0,
+   "이름·속성만": 6
+  },
+  "I-05": {
+   "0홉·1쪽": 21,
+   "0홉·2쪽+": 7,
+   "1홉·1쪽": 20,
+   "1홉·2쪽+": 16,
+   "2홉+": 4,
+   "받을 곳 없음": 5,
+   "이름·속성만": 0
+  },
+  "I-06": {
+   "0홉·1쪽": 13,
+   "0홉·2쪽+": 5,
+   "1홉·1쪽": 30,
+   "1홉·2쪽+": 11,
+   "2홉+": 27,
+   "받을 곳 없음": 2,
+   "이름·속성만": 9
+  },
+  "I-07": {
+   "0홉·1쪽": 1,
+   "0홉·2쪽+": 0,
+   "1홉·1쪽": 10,
+   "1홉·2쪽+": 3,
+   "2홉+": 13,
+   "받을 곳 없음": 22,
+   "이름·속성만": 2
+  },
+  "I-08": {
+   "0홉·1쪽": 0,
+   "0홉·2쪽+": 1,
+   "1홉·1쪽": 0,
+   "1홉·2쪽+": 0,
+   "2홉+": 0,
+   "받을 곳 없음": 2,
+   "이름·속성만": 0
+  },
+  "I-09": {
+   "0홉·1쪽": 3,
+   "0홉·2쪽+": 1,
+   "1홉·1쪽": 15,
+   "1홉·2쪽+": 15,
+   "2홉+": 9,
+   "받을 곳 없음": 0,
+   "이름·속성만": 3
+  },
+  "I-10": {
+   "0홉·1쪽": 1,
+   "0홉·2쪽+": 0,
+   "1홉·1쪽": 11,
+   "1홉·2쪽+": 2,
+   "2홉+": 4,
+   "받을 곳 없음": 0,
+   "이름·속성만": 0
+  },
+  "I-11": {
+   "0홉·1쪽": 0,
+   "0홉·2쪽+": 0,
+   "1홉·1쪽": 3,
+   "1홉·2쪽+": 2,
+   "2홉+": 1,
+   "받을 곳 없음": 0,
+   "이름·속성만": 2
+  }
+ },
+ "rule": "받는 자리 = 노드 자신의 section 줄 1쪽 · 1홉·1쪽 행(S 줄 1쪽에 없고 edge kind k 이웃 X 의 줄 1쪽에 있음)의 edge kind 셈 · n ≥ 10 이면 그 의도 · 아니면 전체 · 내림차순(동점 = 전체 셈 → 이름) · 의도 1홉·1쪽 행 90% 덮을 때까지(최소 3) · S 가 계열 · 제품이면 단위 이웃 종류 {'family': 'key_family', 'product': 'product_unit'} 를 늘 더함",
+ "table": {
+  "I-01": {
+   "counts": {
+    "has_statement": 1,
+    "key_family": 3,
+    "key_site": 3,
+    "procedure_relation": 1,
+    "requires_check_unit": 1,
+    "site_caution": 1,
+    "site_caution_unit": 3,
+    "treats": 5,
+    "treats_unit": 5
+   },
+   "covered": 13,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_family",
+    "key_site",
+    "site_caution_unit",
+    "procedure_relation",
+    "requires_check_unit"
+   ],
+   "n1": 14,
+   "source": "intent"
+  },
+  "I-02": {
+   "covered": 5,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_family",
+    "requires_check",
+    "product_family",
+    "procedure_relation",
+    "key_technique",
+    "anchors_combo",
+    "key_site"
+   ],
+   "n1": 5,
+   "source": "_all"
+  },
+  "I-03": {
+   "covered": 2,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_family",
+    "requires_check",
+    "product_family",
+    "procedure_relation",
+    "key_technique",
+    "anchors_combo",
+    "key_site"
+   ],
+   "n1": 2,
+   "source": "_all"
+  },
+  "I-04": {
+   "counts": {
+    "key_family": 8,
+    "key_technique": 1,
+    "procedure_relation": 2,
+    "product_family": 6
+   },
+   "covered": 9,
+   "kinds": [
+    "key_family",
+    "product_family",
+    "procedure_relation"
+   ],
+   "n1": 10,
+   "source": "intent"
+  },
+  "I-05": {
+   "counts": {
+    "anchors_combo": 1,
+    "has_statement": 1,
+    "key_family": 1,
+    "key_site": 1,
+    "key_technique": 4,
+    "product_family": 1,
+    "product_unit": 2,
+    "requires_check": 1,
+    "treats": 9,
+    "treats_unit": 7,
+    "uses_product": 2
+   },
+   "covered": 18,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_technique",
+    "product_unit",
+    "uses_product",
+    "key_family",
+    "requires_check",
+    "product_family"
+   ],
+   "n1": 20,
+   "source": "intent"
+  },
+  "I-06": {
+   "counts": {
+    "anchors_combo": 1,
+    "key_family": 9,
+    "key_technique": 3,
+    "procedure_relation": 7,
+    "product_family": 3,
+    "product_unit": 3,
+    "requires_check": 4,
+    "treats": 7,
+    "treats_unit": 7,
+    "uses_product": 2
+   },
+   "covered": 29,
+   "kinds": [
+    "key_family",
+    "treats",
+    "treats_unit",
+    "procedure_relation",
+    "requires_check",
+    "product_family",
+    "key_technique",
+    "product_unit"
+   ],
+   "n1": 30,
+   "source": "intent"
+  },
+  "I-07": {
+   "counts": {
+    "anchors_combo": 3,
+    "concern_avoid": 2,
+    "concern_avoid_unit": 2,
+    "key_family": 2,
+    "product_family": 1,
+    "requires_check": 3,
+    "treats": 3,
+    "treats_unit": 3
+   },
+   "covered": 9,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "requires_check",
+    "anchors_combo",
+    "key_family"
+   ],
+   "n1": 10,
+   "source": "intent"
+  },
+  "I-09": {
+   "counts": {
+    "has_complication": 1,
+    "key_family": 4,
+    "key_site": 1,
+    "procedure_pair": 1,
+    "procedure_relation": 1,
+    "product_family": 3,
+    "requires_check": 6,
+    "requires_check_unit": 3,
+    "treats": 1,
+    "treats_unit": 1
+   },
+   "covered": 14,
+   "kinds": [
+    "requires_check",
+    "key_family",
+    "product_family",
+    "requires_check_unit",
+    "treats",
+    "treats_unit",
+    "procedure_relation",
+    "key_site"
+   ],
+   "n1": 15,
+   "source": "intent"
+  },
+  "I-10": {
+   "counts": {
+    "anchors_combo": 1,
+    "key_family": 1,
+    "key_technique": 2,
+    "procedure_relation": 1,
+    "requires_check": 1,
+    "treats": 6,
+    "treats_unit": 6
+   },
+   "covered": 10,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_technique",
+    "key_family",
+    "requires_check"
+   ],
+   "n1": 11,
+   "source": "intent"
+  },
+  "I-11": {
+   "covered": 3,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_family",
+    "requires_check",
+    "product_family",
+    "procedure_relation",
+    "key_technique",
+    "anchors_combo",
+    "key_site"
+   ],
+   "n1": 3,
+   "source": "_all"
+  },
+  "_all": {
+   "counts": {
+    "anchors_combo": 8,
+    "concern_avoid": 2,
+    "concern_avoid_unit": 2,
+    "has_complication": 1,
+    "has_statement": 2,
+    "key_family": 30,
+    "key_site": 5,
+    "key_technique": 10,
+    "procedure_pair": 1,
+    "procedure_relation": 13,
+    "product_family": 15,
+    "product_unit": 5,
+    "requires_check": 17,
+    "requires_check_unit": 4,
+    "site_caution": 1,
+    "site_caution_unit": 3,
+    "treats": 33,
+    "treats_unit": 31,
+    "uses_product": 4
+   },
+   "covered": 108,
+   "kinds": [
+    "treats",
+    "treats_unit",
+    "key_family",
+    "requires_check",
+    "product_family",
+    "procedure_relation",
+    "key_technique",
+    "anchors_combo",
+    "key_site"
+   ],
+   "n1": 120
+  }
+ },
+ "unit_link": {
+  "family": "key_family",
+  "product": "product_unit"
+ },
+ "unit_link_adds_461": 0
+}

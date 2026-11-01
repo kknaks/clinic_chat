@@ -38,7 +38,7 @@ async def test_ttft_excludes_thinking_and_first_text_any_round(deps_factory):
     assert r["timing"]["ttft_answer_ms"] == 60.0  # 마지막 바퀴 · thinking 델타(30) 제외
 
 
-WALK = {"start": "unit_procedure:U5-140", "pick": "section:aftercare"}  # 걸음 1: 소프웨이브 peek → aftercare 펼침
+WALK = {"start": "unit_procedure:U5-140", "nb": "unit_procedure:U5-102", "sec": "section:overview"}  # 걸음 1: 이웃 + 섹션
 
 
 async def test_case3_stage_times(deps_factory):
@@ -50,8 +50,9 @@ async def test_case3_stage_times(deps_factory):
     c = Clock(now=clk.now)
     c.start()
     r = await case3.run(deps, "소프웨이브 끝나고 사우나", CaseTimer(c), lambda t: None)
-    assert [s["name"] for s in r["timing"]["stages"]] == ["hub_resolve", "jev#0", "hub_peek#1", "jev#1", "hub_expand#1",
-                                                          "claude"]
+    names = [s["name"] for s in r["timing"]["stages"]]
+    assert names[:6] == ["hub_resolve", "jev#0", "hub_peek#1", "jev#1", "hub_expand#1", "hub_expand#1-2"]
+    assert names[-1] == "claude" and all(n.startswith(("hub_", "jev#")) for n in names[:-1])
     assert r["timing"]["ttft_ms"] == 40.0 and r["timing"]["total_ms"] == 50.0
     assert r["tokens"]["jev#0"]["input_tokens"] == 321 and r["tokens"]["claude"]["output_tokens"] == 20
     # v1 되돌림 스위치(WALK_MAX_STEPS=0) — 단계 이름은 v1 그대로
@@ -152,7 +153,8 @@ async def test_case3_cost_and_system_cache_only(deps_factory):
     r = await case3.run(deps, "소프웨이브 끝나고 사우나", CaseTimer(c), lambda t: None)
     p = fa.calls[0]
     assert p["system"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in p  # 1회 호출 — 질문 뒤 표시 안 함
-    assert set(r["cost"]["by_stage"]) == {"jev#0", "jev#1", "claude"} and r["cost"]["usd"] > 0
+    assert {"jev#0", "jev#1", "claude"} <= set(r["cost"]["by_stage"]) and r["cost"]["usd"] > 0
+    assert all(k == "claude" or k.startswith("jev#") for k in r["cost"]["by_stage"])  # 허브 단계는 비용 없음
 
 
 async def test_gold_hash_falls_back_to_health(deps_factory, tmp_path, hub, monkeypatch):

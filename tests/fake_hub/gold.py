@@ -35,6 +35,10 @@ NODES: dict[str, dict] = {
     "family:M4": {"name": "콜라겐 부스터"},
     "product:M4-1-1": {"name": "스컬트라", "family": "family:M4"},
     "unit_procedure:U5-300": {"name": "볼 스컬트라", "family": "family:M4"},
+    # 걸음 v2.4 fixture — 단위 6개 계열(key_family n 6 > 앞 4 → expand(neighbor_kinds) 목록) · 고민 → 단위 5(treats n 5)
+    "concern:P9": {"name": "기미"},
+    "family:M5": {"name": "피코 토닝"},
+    **{f"unit_procedure:U5-50{k}": {"name": f"토닝 부위{k}", "family": "family:M5"} for k in range(1, 7)},
 }
 for _id, _n in NODES.items():
     _n["kind"] = _id.split(":", 1)[0]
@@ -49,7 +53,8 @@ INTENTS = [
 ]
 MENUS = ["처짐/탄력"]
 TREATS = {"concern:P2": ["unit_procedure:U5-001"], "concern:P2-3": ["unit_procedure:U5-001"],
-          "concern:P3": ["unit_procedure:U5-102", "unit_procedure:U5-140"]}
+          "concern:P3": ["unit_procedure:U5-102", "unit_procedure:U5-140"],
+          "concern:P9": [f"unit_procedure:U5-50{k}" for k in range(1, 6)]}
 SECTIONS = ["overview", "method", "recovery", "aftercare", "timeline", "emergency", "disclosure", "safety.side_effects",
             "safety.complications", "safety.pih", "checks", "site_caution", "dose", "products", "evidence", "ops",
             "market", "all"]  # SPEC-005 §4-3 이름(10-30 허브 짧은 카드 판)
@@ -288,15 +293,19 @@ def vocab(kinds: list[str] | None = None, sections: list[str] | None = None, int
             "enums": {"sections": SECTIONS, "sub_condition": ["세션"]}}
 
 
-# T10 · T11(SPEC-005 v3.2 §5-16) — Jev 걸음용 peek · expand. 의도 · 동봉 없음 · intent 는 받되 무시(M-3 · 모르는 값만 4xx)
-PEEK_ITEMS_PER_KIND = 8
+# T10 · T11(SPEC-005 v3.3 §5-16 · 0.3.4) — Jev 걸음용 peek · expand(짧은 fact 꼴). 의도 · 동봉 없음 · intent 는 받되 무시(M-3)
+PEEK_ITEMS_PER_KIND = 4
 PEEK_NAME_CHARS = 20
 EXPAND_SECTION_MAX = 12
 EXPAND_NEIGHBORS_MAX = 20
+EXPAND_LINE_CHARS = 40
+BY_UNIT_MAX = 4
 KIND_ORDER = ["procedure_relation", "requires_check", "site_caution", "has_complication", "combo_component",
               "uses_product", "product_unit", "contains", "treats", "concern_avoid", "has_statement"]
+UNIT_LEVEL_SECTIONS = ("ops", "dose", "market", "timeline", "aftercare", "safety.pih", "site_caution", "products")
 VALID_INTENTS = {i for i, _n, _e in INTENTS}
-SECTION_FACTS = {"aftercare": 3}  # section 마다 fixture fact 수(기본 1) — more_ids 시험용은 EXPAND_SECTION_MAX 넘게 못 둠
+SECTION_FACTS = {"aftercare": 3}  # section 마다 fixture fact 수(기본 1) — 3번째 줄은 40자 넘는 긴 글(cut)
+LONG = " — 시술 뒤 사흘은 사우나 · 찜질방 · 격한 운동을 피하고 붉은기가 남으면 진정 크림을 바른다"
 
 
 def _intent_ok(intent: str | None) -> None:
@@ -304,56 +313,102 @@ def _intent_ok(intent: str | None) -> None:
         raise GoldError(f"없는 intent: {intent}")
 
 
+def _units_of(i: str) -> list[str]:
+    n = NODES[i]
+    fam = i if n["kind"] == "family" else n.get("family")
+    return [u for u, x in NODES.items() if x["kind"] == "unit_procedure" and fam and x.get("family") == fam]
+
+
 def _edges(i: str) -> dict[str, list[tuple[str, str]]]:
-    """노드 하나의 이웃 — {edge kind: [(이웃 id, 라벨)]} (fixture 그래프: 계열 · 고민 · 부위 · 제품 · 확인 조건 · 쌍)."""
+    """노드 하나의 이웃 — {edge kind: [(이웃 id, 라벨)]} (실물 kind 이름: 단위 ↔ 계열 key_family · 제품 ↔ 단위 product_unit ·
+    고민 ↔ 단위 treats · 단위 → 확인 조건 requires_check_unit · 부위 site_caution_unit · 같은 계열 단위 procedure_relation)."""
     n = NODES[i]
     out: dict[str, list[tuple[str, str]]] = {}
     add = lambda k, x, lab="": out.setdefault(k, []).append((x, lab))
     if n["kind"] == "unit_procedure":
-        if n.get("family"):
-            add("contains", n["family"])
-        for c, us in TREATS.items():
-            if i in us:
-                add("treats", c)
+        for u in _units_of(i):
+            if u != i:
+                add("procedure_relation", u, "first=None · days=14 · same_day=True")
+        for c in ("check_condition:C-PREG", "check_condition:C-PRIOR"):
+            add("requires_check_unit", c, "주의")
         if n.get("site"):
-            add("site_caution", n["site"], "부위 주의")
+            add("site_caution_unit", n["site"], "danger=2")
         for p, x in NODES.items():
             if x["kind"] == "product" and x.get("family") == n.get("family"):
-                add("uses_product", p)
-        for c in ("check_condition:C-PREG", "check_condition:C-PRIOR"):
-            add("requires_check", c, "주의")
-        for u, x in NODES.items():
-            if x["kind"] == "unit_procedure" and u != i and x.get("family") == n.get("family"):
-                add("procedure_relation", u, "first=None · days=14 · same_day=True")
+                add("product_unit", p)
+        for c, us in TREATS.items():
+            if i in us:
+                add("treats", c, "cc=fixture")
+        if n.get("family"):
+            add("key_family", n["family"])
     elif n["kind"] == "family":
-        for u, x in NODES.items():
-            if x["kind"] == "unit_procedure" and x.get("family") == i:
-                add("contains", u)
+        for u in _units_of(i):
+            add("key_family", u)
     elif n["kind"] == "concern":
         for u in TREATS.get(i, []):
-            add("treats", u)
-    elif n["kind"] == "product" and n.get("family"):
-        add("contains", n["family"])
+            add("treats", u, "cc=fixture")
+    elif n["kind"] == "product":
+        for u in _units_of(i):
+            add("product_unit", u)
+        if n.get("family"):
+            add("product_family", n["family"])
+    elif n["kind"] == "check_condition":
+        for u, x in NODES.items():
+            if x["kind"] == "unit_procedure":
+                add("requires_check_unit", u, "주의")
     return out
 
 
-def _kind_rank(k: str) -> tuple[int, str]:
-    return (KIND_ORDER.index(k), k) if k in KIND_ORDER else (len(KIND_ORDER), k)
-
-
-def _sections_of(i: str) -> list[dict]:
-    if NODES[i]["kind"] not in ("unit_procedure", "family", "product"):
-        return []
-    out = []
-    for sec in (x for x in SECTIONS if x != "all"):
-        fs = _sec_facts(i, sec)
-        out.append({"name": sec, "n_facts": len(fs), "bytes": sum(len(f["text"].encode()) for f in fs)})
-    return out
+def _kind_rank(k: str) -> tuple[int, int, str]:
+    for suf in ("_unit", "_product"):
+        if k.endswith(suf) and k[: -len(suf)] in KIND_ORDER:
+            return (KIND_ORDER.index(k[: -len(suf)]), 1, k)
+    return (KIND_ORDER.index(k), 0, k) if k in KIND_ORDER else (len(KIND_ORDER), 0, k)
 
 
 def _sec_facts(i: str, sec: str) -> list[dict]:
-    return [{**_fact(i, sec), "id": f"{i}#{sec}#fixture[{k}]", "text": f"fixture {NODES[i]['name']} {sec} {k}"}
+    if NODES[i]["kind"] not in ("unit_procedure", "family", "product"):
+        return []
+    return [{**_fact(i, sec), "id": f"{i}#{sec}#fixture[{k}]",
+             "text": f"fixture {NODES[i]['name']} {sec} {k}" + (LONG if k == 2 else "")}
             for k in range(SECTION_FACTS.get(sec, 1))]
+
+
+def _row(f: dict, full: bool) -> dict:
+    row: dict[str, Any] = {"id": f["id"]}
+    if full:
+        row["text"] = f["text"]
+    else:
+        t = " ".join(f["text"].split())
+        if len(t) <= EXPAND_LINE_CHARS:
+            row["line"] = t
+        else:
+            row["line"] = t[: EXPAND_LINE_CHARS - 1] + "…"
+            row["cut"] = True
+    row["section"] = f["section"]
+    if full:
+        row["source"] = {"file": "fixture.json", "path": f["id"]}
+    return row
+
+
+def _bytes(o: Any) -> int:
+    import json
+
+    return len(json.dumps(o, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _sections_of(i: str) -> list[dict]:
+    """peek sections[] — bytes = 그 section 하나로 부른 expand 기본 꼴 1쪽 응답 바이트(실제로 만들어 잼 · v3.3)."""
+    out = []
+    for sec in (x for x in SECTIONS if x != "all"):
+        fs = _sec_facts(i, sec)
+        if fs:
+            out.append({"name": sec, "n_facts": len(fs), "bytes": _bytes(expand(i, sections=[sec]))})
+    return out
+
+
+def _n_facts(i: str) -> int:
+    return sum(len(_sec_facts(i, s)) for s in SECTIONS if s != "all")
 
 
 def peek(id: str, include_conditional: bool = False, intent: str | None = None) -> dict:
@@ -363,49 +418,85 @@ def peek(id: str, include_conditional: bool = False, intent: str | None = None) 
     for k, xs in sorted(_edges(id).items(), key=lambda kv: _kind_rank(kv[0])):
         by_kind[k] = {"n": len(xs), "direction": "out",
                       "items": [{"id": x, "kind": NODES[x]["kind"], "name": NODES[x]["name"][:PEEK_NAME_CHARS],
-                                 "label": lab or k} for x, lab in xs[:PEEK_ITEMS_PER_KIND]]}
+                                 "label": lab or k, "n_facts": _n_facts(x)} for x, lab in xs[:PEEK_ITEMS_PER_KIND]]}
     node = {"id": id, "kind": n["kind"], "name": n["name"], "flags": [], "gate_status": "통과", "default_out": False}
     req = {"id": id, "include_conditional": include_conditional, "intent": intent}
     return {"build": BUILD, "request": req, "intent_used": None, "node": node,
             "safety": _safety(id) if n["kind"] == "unit_procedure" else {},
-            "neighbors_by_kind": by_kind, "sections": [x for x in _sections_of(id) if x["n_facts"]],
-            "priority_hint": [k for k in ("site_caution", "requires_check") if k in by_kind],
-            "claude_contract": {"allowed_fact_ids": [], "rule": RULE}}
+            "neighbors_by_kind": by_kind, "sections": _sections_of(id),
+            "priority_hint": [k for k in ("site_caution_unit", "requires_check_unit") if k in by_kind],
+            "global": {"n": 0, "ids": []}, "facts": [],
+            "claude_contract": {"allowed_fact_ids": [], "priority": [], "use_first": [], "must_show_flags": [], "rule": RULE}}
 
 
 def expand(id: str, sections: list[str] | None = None, neighbors: list[str] | None = None,
-           neighbor_kinds: list[str] | None = None, include_conditional: bool = False,
-           fact_ids: list[str] | None = None, intent: str | None = None) -> dict:
+           neighbor_kinds: list[str] | None = None, fact_ids: list[str] | None = None, full: bool = False,
+           page: int = 1, include_conditional: bool = False, intent: str | None = None) -> dict:
+    """v3.3 기본 꼴 — facts[]{id, line(≤ 40 · 넘으면 39 + 「…」 · cut), section} · more · by_unit{section: {unit: n}} ·
+    units_more_n · 이웃 slim · fact_ids 원문 행(끝에 · 겹치면 줄 빼고 한 번) · claude_contract{allowed, must_show_flags}."""
     n = _need(id)
     _intent_ok(intent)
     _check_sections(sections)
     edges = _edges(id)
-    peeked = {x: k for k, xs in edges.items() for x, _ in xs[:PEEK_ITEMS_PER_KIND]}
+    allowed = {x: k for k, xs in edges.items() for x, _ in xs}
     for x in neighbors or []:
-        if x not in peeked:
-            raise GoldError(f"peek 가 낸 이웃 아님: {x}")
-    pick = [(x, peeked[x]) for x in neighbors or []]
-    for k in neighbor_kinds or []:
-        pick += [(x, k) for x, _ in edges.get(k, []) if (x, k) not in pick]
-    secs: dict[str, dict] = {}
-    facts: list[dict] = []
-    for sec in sections or []:
+        if x not in allowed:
+            raise GoldError(f"{id} 의 이웃 아님: {x}")
+    own = {f["id"]: f for s in SECTIONS if s != "all" for u in [id] + (_units_of(id) if n["kind"] in ("family", "product") else [])
+           for f in _sec_facts(u, s)}
+    if len(fact_ids or []) > 64:
+        raise GoldError("fact_ids 는 64개까지")
+    for f in fact_ids or []:
+        if f not in own:
+            raise GoldError(f"fact_ids: {f} 는 {id} 의 fact 가 아님")
+    want = list(dict.fromkeys(fact_ids or []))
+    rows, more, by_unit, units_more = [], {}, {}, {}
+    seen = set(want)
+    lo, hi = (page - 1) * EXPAND_SECTION_MAX, page * EXPAND_SECTION_MAX
+    for sec in dict.fromkeys(sections or []):
         fs = _sec_facts(id, sec)
-        secs[sec] = {"facts": fs[:EXPAND_SECTION_MAX], "more_ids": [f["id"] for f in fs[EXPAND_SECTION_MAX:]],
-                     "total": len(fs)}
-        facts += fs[:EXPAND_SECTION_MAX]
-    nbs = [{"id": x, "kind": NODES[x]["kind"], "name": NODES[x]["name"], "edge": k,
-            **({"safety": _safety(x)} if NODES[x]["kind"] == "unit_procedure" else {}),
-            "sections_n": {s["name"]: s["n_facts"] for s in _sections_of(x) if s["n_facts"]}}
-           for x, k in pick[:EXPAND_NEIGHBORS_MAX]]
-    body = {"node": {"id": id, "kind": n["kind"], "name": n["name"]}, "sections": secs, "neighbors": nbs,
-            "truncated": len(pick) > EXPAND_NEIGHBORS_MAX, "more_ids": [x for x, _ in pick[EXPAND_NEIGHBORS_MAX:]],
-            "intent_used": None}
-    req = {"id": id, "sections": sections, "neighbors": neighbors, "neighbor_kinds": neighbor_kinds,
-           "include_conditional": include_conditional, "fact_ids": fact_ids, "intent": intent}
-    out = _wrap(req, body, facts)
-    out["claude_contract"]["priority"] = ["safety", "site_caution", "checks"]
+        for f in fs[lo:hi]:
+            if f["id"] not in seen:
+                seen.add(f["id"])
+                rows.append(_row(f, full))
+        if len(fs) > hi:
+            more[sec] = len(fs) - hi
+        if n["kind"] in ("family", "product") and sec in UNIT_LEVEL_SECTIONS:
+            units = _units_of(id)
+            bu = {u: c for u in units[:BY_UNIT_MAX] if (c := len(_sec_facts(u, sec)))}
+            if bu:
+                by_unit[sec] = bu
+            if len(units) > BY_UNIT_MAX:
+                units_more[sec] = len(units) - BY_UNIT_MAX
+    rows += [_row(own[f], True) for f in want]
+    req = {k: v for k, v in {"id": id, "sections": sections, "neighbors": neighbors, "neighbor_kinds": neighbor_kinds,
+                             "fact_ids": fact_ids, "full": full or None, "page": page if page != 1 else None,
+                             "include_conditional": include_conditional or None, "intent": intent}.items() if v}
+    out: dict[str, Any] = {"build": {"build_hash": BUILD["build_hash"]}, "request": req, "intent_used": None,
+                           "node": {"id": id, "kind": n["kind"], "name": n["name"]}, "facts": rows}
+    if more:
+        out["more"] = more
+    if by_unit:
+        out["by_unit"] = by_unit
+    if units_more:
+        out["units_more_n"] = units_more
+    pick = [(x, allowed[x]) for x in dict.fromkeys(neighbors or [])]
+    for k in sorted(set(neighbor_kinds or []), key=_kind_rank):
+        pick += [(x, k) for x, _ in edges.get(k, []) if x not in {p for p, _ in pick}]
+    if pick:
+        out["neighbors"] = [{"id": x, "kind": NODES[x]["kind"], "name": NODES[x]["name"], "edge": f"E-{k}-{x}", "kind_edge": k,
+                             **({"safety": _safety(x)} if NODES[x]["kind"] == "unit_procedure" else {}),
+                             "sections_n": {s["name"]: s["n_facts"] for s in _sections_meta(x)}}
+                            for x, k in pick[:EXPAND_NEIGHBORS_MAX]]
+        if len(pick) > EXPAND_NEIGHBORS_MAX:
+            out["neighbors_truncated"] = True
+            out["neighbors_more_ids"] = [x for x, _ in pick[EXPAND_NEIGHBORS_MAX:]]
+    out["claude_contract"] = {"allowed": "facts_uncut", "must_show_flags": []}
     return out
+
+
+def _sections_meta(i: str) -> list[dict]:
+    return [{"name": s, "n_facts": len(fs)} for s in SECTIONS if s != "all" and (fs := _sec_facts(i, s))]
 
 
 def _with_sections_check(fn):

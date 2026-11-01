@@ -2,19 +2,25 @@
 
 ① hub_resolve: T1 resolve(질문 전체 · 질문마다)
 ② jev#0: 의도 Choice 12 + 시작 노드 Choice(① 후보 · 비면 vocab 계열 · 고민 · 부위 · 「해당 없음」)
-③ 걸음 k = 1..WALK_MAX_STEPS: hub_peek#k → jev#k(Choice「펼칠 것」 + 짝 Noul + Noul「충분」) → hub_expand#k
-   멈춤 = enough · steps · budget(WALK_BYTE_BUDGET 넘는 expand 는 통째로 뺌) · empty
-④ claude: Sonnet 1회 · 도구 없음 · 입력 = 질문 + 걸음마다 모은 fact + 안전 요약 + claude_contract
+③ 걸음 1(v2.4): hub_peek#1 → hub_list#1-j(표 종류 중 앞 4 밖) → jev#1(이웃 Choice + 짝 Noul · 섹션 Choice · 「충분」 없음)
+   → hub_expand#1(이웃 slim → 섹션 하나씩 · 짧은 fact)
+④ 걸음 2..N: 대기열(고른 이웃 · 계열 · 제품 S 의 by_unit 단위) · 비면 S 로 돌아옴(peek 재사용) · 넘는 섹션은 빼고 계속
+   멈춤 = enough(fact ≥ 1) · steps · budget(남은 예산 < 섹션 · 이웃 없음) · empty
+⑤ hub_full#n: cut 줄 원문(출처 노드마다 expand(fact_ids) · WALK_FULL_BYTE_BUDGET)
+⑥ claude: Sonnet 1회 · 도구 없음 · 입력 = §3-4-7 꼴(facts rank 순 · 출처 노드 · 인용 가능 id · 안전 요약)
 되돌아가기(시작 노드 없음 · 첫 peek 실패 · 모은 fact 0) = v1 경로 1회(`fallback_*` — 의도 → 골드 도구 경로 · 의도 묶음).
 WALK_MAX_STEPS=0 이면 v1 경로만(되돌림 스위치).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
 from collections.abc import Callable
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from typesafe_sdk import Choice, Noul, TypeSafeError
@@ -459,11 +465,39 @@ async def fallback_run(deps: Deps, question: str, timer: CaseTimer, on_text: Cal
     return res
 
 
-# ───────────── Jev 걸음(SPEC-006 v2 §3-4 · 보충 jev-walk) ─────────────
+# ───────────── Jev 걸음(SPEC-006 v2.4 §3-4-1 · 보충 jev-walk) ─────────────
 NONE_ENOUGH = "없음(충분)"
-WALK_NEIGHBORS_MAX = 3  # 걸음당 다음 peek 이웃 수(W-3)
+NO_SECTION = "없음"
 START_KINDS = ("family", "concern", "site")  # ① 후보가 비면 시작 노드를 고르는 vocab 종류(Q-4)
 SEC = "section:"
+NO_WALK_INTENTS = ("I-12",)  # 걸음 없음(허브 도구 없음 · v1 과 같게 「가격 정보 없음」 · §3-4-6 표)
+ORDER_FILE = Path(__file__).with_name("walk_order.json")
+
+
+@lru_cache(maxsize=4)
+def _order_file(path: str) -> tuple[dict, str]:
+    raw = Path(path).read_bytes()
+    return json.loads(raw), hashlib.sha256(raw).hexdigest()[:12]
+
+
+def order_table(settings: Any) -> tuple[dict, str]:
+    """걸음 1 이웃 순서 표(§3-4-6 · spec006-v24-recount.json order_v24 복사본) · 판 sha(파일 sha256 앞 12자)."""
+    return _order_file(str(Path(settings.walk_order_table) if settings.walk_order_table else ORDER_FILE))
+
+
+def order_kinds(table: dict, intent: str | None, s_kind: str | None) -> list[str]:
+    """그 의도의 edge kind(행 없으면 전체 `_all`) + S 가 계열이면 key_family · 제품이면 product_unit(표에 없을 때 · 늘 더함)."""
+    rows = table.get("table") or {}
+    kinds = list((rows.get(intent or "") or rows.get("_all") or {}).get("kinds") or [])
+    link = (table.get("unit_link") or {}).get(s_kind or "")
+    if link and link not in kinds:
+        kinds.append(link)
+    return kinds
+
+
+def _compact(o: Any) -> int:
+    """허브 REST 본문과 같은 직렬화의 UTF-8 바이트(§3-4-2 · F-1 — 공백 없는 구분자)."""
+    return len(json.dumps(o, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def walk_start_options(vocab: dict, cands: list[dict]) -> tuple[dict[str, str], str]:
@@ -480,27 +514,50 @@ def walk_start_options(vocab: dict, cands: list[dict]) -> tuple[dict[str, str], 
     return crit, src
 
 
-def walk_options(peek: dict, seen: set[str]) -> tuple[dict[str, str], dict[str, str]]:
-    """peek → 펼칠 것 선택지(섹션 이름 ∪ 이웃 id) · 이웃 → edge kind. 이미 본 노드는 뺌."""
+def nb_label(name: str | None, nid: str, edge: str, label: str | None, n_facts: int | None) -> str:
+    """이웃 선택지 라벨(W-10) — 이름 — edge · label · fact {n_facts}."""
+    parts = [edge] + ([label] if label and label != edge else []) + ([f"fact {n_facts}"] if n_facts is not None else [])
+    return f"{name or nid} — {' · '.join(parts)}"
+
+
+def sec_label(sec: dict) -> str:
+    """섹션 선택지 라벨(W-10) — 이름 · fact {n_facts} · {bytes}B."""
+    nm = sec.get("name")
+    return f"{nm}: {INFO_SECTIONS.get(nm, nm)} · fact {sec.get('n_facts')} · {sec.get('bytes')}B"
+
+
+def section_options(peek: dict, taken: set[str], left: int) -> tuple[dict[str, str], list[str]]:
+    """peek 섹션 → 선택지 · 남은 예산(left)보다 큰 섹션(peek bytes = 실제 expand 바이트)은 미리 뺌(filtered_by_budget)."""
     opts: dict[str, str] = {}
-    kind_of: dict[str, str] = {}
+    filtered: list[str] = []
     for sec in peek.get("sections") or []:
         nm = sec.get("name")
-        if nm and sec.get("n_facts", 1):
-            opts[SEC + nm] = f"{nm}: {INFO_SECTIONS.get(nm, nm)} (fact {sec.get('n_facts')} · {sec.get('bytes')}B)"
-            kind_of[SEC + nm] = "section"
+        if not nm or nm in taken or not sec.get("n_facts", 1):
+            continue
+        if isinstance(sec.get("bytes"), int) and sec["bytes"] > left:
+            filtered.append(nm)
+            continue
+        opts[SEC + nm] = sec_label(sec)
+    return opts, filtered
+
+
+def walk_options(peek: dict, seen: set[str], taken: set[str] | None = None,
+                 left: int | None = None) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """걸음 2~ — 펼칠 것 선택지(남은 예산에 맞는 섹션 ∪ 이 노드의 이웃 id) · 이웃 → edge kind · 예산으로 뺀 섹션."""
+    opts, filtered = section_options(peek, taken or set(), left if left is not None else 1 << 62)
+    kind_of = {x: "section" for x in opts}
     for edge, grp in (peek.get("neighbors_by_kind") or {}).items():
         for it in grp.get("items") or []:
             i = it.get("id")
             if i and i not in seen and i not in opts:
-                opts[i] = f"{it.get('name') or i} — {edge} · {it.get('label') or ''}".rstrip(" ·")
+                opts[i] = nb_label(it.get("name"), i, edge, it.get("label"), it.get("n_facts"))
                 kind_of[i] = edge
-    return opts, kind_of
+    return opts, kind_of, filtered
 
 
-def _state(question: str, node: dict, steps_out: list[dict]) -> str:
-    """Jev state — 질문 · 지금 노드 · 지금까지 모은 fact 원문."""
-    got = [f"- [{f.get('section')}] {f.get('text')}" for s in steps_out for f in s["facts"]]
+def _state(question: str, node: dict, facts: list[dict]) -> str:
+    """Jev state — 질문 · 지금 노드 · 지금까지 모은 fact 한 줄."""
+    got = [f"- [{f.get('section')}] {f.get('line')}" for f in facts]
     return (f"질문: {question}\n\n지금 노드: {node.get('name')}({node.get('kind')})\n\n지금까지 모은 정보:\n"
             + ("\n".join(got) if got else "(없음)"))
 
@@ -508,6 +565,13 @@ def _state(question: str, node: dict, steps_out: list[dict]) -> str:
 def _choice_row(a: Any) -> dict:
     p_max, ratio = choice_stats(dict(a.probabilities))
     return {"choice": a.choice, "confidence": round(a.confidence, 4), "p_max": round(p_max, 4), "ratio": ratio}
+
+
+def _also(resp: Any, prefix: str, keys: list[str], skip: str | None) -> list[str]:
+    """짝 Noul ≥ NOUL_MIN 인 선택지 — 높은 순(같으면 선택지 순)."""
+    got = sorted(((resp.nouls[f"{prefix}{n}"].noul, n) for n in range(len(keys))
+                  if resp.nouls.get(f"{prefix}{n}") and resp.nouls[f"{prefix}{n}"].noul >= NOUL_MIN), key=lambda t: (-t[0], t[1]))
+    return [keys[n] for _, n in got if keys[n] != skip]
 
 
 async def _jev(deps: Deps, timer: CaseTimer, name: str, state: str, qs: dict, tokens: dict, walk: dict) -> Any:
@@ -528,17 +592,17 @@ async def _hub(deps: Deps, timer: CaseTimer, name: str, walk: dict, coro_fn) -> 
         t = timer.clock.ms()
         d = await coro_fn()
     ms = round(timer.clock.ms() - t, 1)
-    b = len(json.dumps(d, ensure_ascii=False).encode("utf-8"))
+    b = _compact(d)
     walk["hub_calls"] += 1
     walk["hub_ms_total"] = round(walk["hub_ms_total"] + ms, 1)
     return d, b, ms
 
 
 async def walk_pick(deps: Deps, timer: CaseTimer, k: int, question: str, peek: dict, opts: dict[str, str],
-                    kind_of: dict[str, str], steps_out: list[dict], seed: int, tokens: dict, walk: dict) -> dict:
-    """jev#k — Choice「펼칠 것」(+ 「없음(충분)」) · 선택지마다 짝 Noul · Noul「충분」. 255 넘으면 kind 를 먼저(2단)."""
+                    kind_of: dict[str, str], facts: list[dict], seed: int, tokens: dict, walk: dict) -> dict:
+    """jev#k(걸음 2~) — Choice「펼칠 것」(+ 「없음(충분)」) · 선택지마다 짝 Noul · Noul「충분」. 255 넘으면 kind 를 먼저(2단)."""
     rng = random.Random(seed * 1000 + k)
-    state = _state(question, peek.get("node") or {}, steps_out)
+    state = _state(question, peek.get("node") or {}, facts)
     enough_q = Noul(instructions="지금까지 모은 정보로 이 질문에 답하기에 충분한가?")
     two = len(opts) + 1 > CHOICE_MAX
     row: dict[str, Any] = {"options_n": len(opts), "two_stage": two}
@@ -546,7 +610,7 @@ async def walk_pick(deps: Deps, timer: CaseTimer, k: int, question: str, peek: d
     usage = 0
     if two:  # 1단: 종류(섹션 · edge kind) Choice + 충분
         kinds = sorted(set(kind_of.values()))
-        crit = {kd: ("섹션(이 노드의 원문 묶음)" if kd == "section" else f"이웃 — {kd}") for kd in kinds}
+        crit = {kd: ("섹션(이 노드의 fact 묶음)" if kd == "section" else f"이웃 — {kd}") for kd in kinds}
         crit[NONE_ENOUGH] = "더 펼칠 것 없음 — 지금까지로 충분"
         resp, ms = await _jev(deps, timer, f"jev#{k}", state, {"kind": Choice(
             instructions="이 질문에 답하려고 다음에 펼칠 종류는?", criteria=_shuffled(rng, crit)), "enough": enough_q},
@@ -556,7 +620,7 @@ async def walk_pick(deps: Deps, timer: CaseTimer, k: int, question: str, peek: d
         a = resp.choices["kind"]
         row["kind"] = _choice_row(a)
         row["enough"] = round(resp.nouls["enough"].noul, 4)
-        if a.choice == NONE_ENOUGH or row["enough"] >= deps.settings.walk_enough_min:
+        if a.choice == NONE_ENOUGH:
             row.update({"picked": [], "ms": round(ms_total, 1), "usage": {"input_tokens": usage}})
             return row
         opts = {x: d for x, d in opts.items() if kind_of[x] == a.choice}
@@ -575,20 +639,316 @@ async def walk_pick(deps: Deps, timer: CaseTimer, k: int, question: str, peek: d
     row.update(_choice_row(a))
     if not two:
         row["enough"] = round(resp.nouls["enough"].noul, 4)
-    also = sorted(((resp.nouls[f"also:{n}"].noul, n) for n in range(len(keys))
-                   if resp.nouls.get(f"also:{n}") and resp.nouls[f"also:{n}"].noul >= NOUL_MIN), key=lambda t: (-t[0], t[1]))
-    picked = ([a.choice] if a.choice != NONE_ENOUGH else []) + [keys[n] for _, n in also]
-    picked = list(dict.fromkeys(picked))
-    nbs = [x for x in picked if not x.startswith(SEC)][:WALK_NEIGHBORS_MAX]
-    row["picked"] = [x for x in picked if x.startswith(SEC)] + nbs
-    row["ms"] = round(ms_total, 1)
-    row["usage"] = {"input_tokens": usage}
+    picked = list(dict.fromkeys(([a.choice] if a.choice != NONE_ENOUGH else []) + _also(resp, "also:", keys, None)))
+    s = deps.settings
+    secs = [x for x in picked if x.startswith(SEC)][:s.walk_sections_per_step]
+    nbs = [x for x in picked if not x.startswith(SEC)][:s.walk_neighbors_max]
+    row.update({"picked": secs + nbs, "picked_sections": [x[len(SEC):] for x in secs], "picked_neighbors": nbs,
+                "ms": round(ms_total, 1), "usage": {"input_tokens": usage}})
     return row
+
+
+async def step1_neighbors(deps: Deps, timer: CaseTimer, walk: dict, node: str, peek: dict,
+                          kinds: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """걸음 1 이웃 선택지 — 표의 edge kind 종류 순 · peek 앞 4 + n > 앞 4 인 종류는 expand(neighbor_kinds=[kind]) 목록 전부
+    (hub_list#1-j · 예산 밖 · Sonnet 에 안 감). 표 종류에 이웃이 없으면 peek 종류 순(GOLD_PEEK_KIND_ORDER)의 다음 종류로 채움."""
+    nbk = peek.get("neighbors_by_kind") or {}
+    use = [x for x in kinds if (nbk.get(x) or {}).get("n")]
+    if not use:
+        fill = next((x for x, g in nbk.items() if g.get("n") and x not in kinds), None)
+        use = [fill] if fill else []
+        walk["order_fill"] = fill
+    opts: dict[str, str] = {}
+    kind_of: dict[str, str] = {}
+    lst = walk["list"]
+    for kd in use:
+        grp = nbk[kd]
+        items = grp.get("items") or []
+        for it in items:
+            i = it.get("id")
+            if i and i != node and i not in opts:
+                opts[i] = nb_label(it.get("name"), i, kd, it.get("label"), it.get("n_facts"))
+                kind_of[i] = kd
+        if (grp.get("n") or 0) <= len(items):
+            continue
+        j = lst["calls"] + 1
+        try:
+            ex, eb, ems = await _hub(deps, timer, f"hub_list#1-{j}", walk,
+                                     lambda k_=kd: deps.hub_rest.expand(node, neighbor_kinds=[k_]))
+        except Exception as e:  # noqa: BLE001 — 목록 실패는 앞 4 로 이어 감(기록)
+            lst.setdefault("errors", []).append(f"{kd}: {type(e).__name__}: {e}"[:200])
+            continue
+        lst["calls"] = j
+        lst["kinds"].append(kd)
+        lst["bytes"] += eb
+        lst["ms"] = round(lst["ms"] + ems, 1)
+        before = len(opts)
+        for r in ex.get("neighbors") or []:
+            i = r.get("id") if isinstance(r, dict) else None
+            if i and i != node and i not in opts:
+                n_facts = sum((r.get("sections_n") or {}).values()) if isinstance(r.get("sections_n"), dict) else None
+                opts[i] = nb_label(r.get("name"), i, r.get("kind_edge") or kd, None, n_facts)
+                kind_of[i] = r.get("kind_edge") or kd
+        for i in ex.get("neighbors_more_ids") or []:
+            if i and i != node and i not in opts:
+                opts[i] = nb_label(None, i, kd, None, None)
+                kind_of[i] = kd
+        lst["ids_n"] += len(opts) - before
+    return opts, kind_of
+
+
+async def walk_pick_first(deps: Deps, timer: CaseTimer, question: str, intent: str | None, peek: dict,
+                          nb_opts: dict[str, str], kind_of: dict[str, str], sec_opts: dict[str, str], seed: int,
+                          tokens: dict, walk: dict) -> dict:
+    """jev#1 — Choice「먼저 볼 이웃」 + 짝 Noul · Choice「같이 볼 섹션」(+ 「없음」 · 상한 2 인 의도는 짝 Noul) — 한 요청 ·
+    「충분」 은 묻지 않음. 이웃이 255 넘으면 1단(종류 + 섹션) → 2단(그 종류 이웃)."""
+    s = deps.settings
+    rng = random.Random(seed * 1000 + 1)
+    state = _state(question, peek.get("node") or {}, [])
+    sec_max = s.first_section_max(intent)
+    sec_keys = list(sec_opts)
+    two = len(nb_opts) > CHOICE_MAX
+    row: dict[str, Any] = {"options_n": len(nb_opts) + len(sec_opts), "nb_options_n": len(nb_opts),
+                           "sec_options_n": len(sec_opts), "sections_max": sec_max, "two_stage": two}
+    qs: dict[str, Any] = {}
+    if sec_opts:
+        qs["sec"] = Choice(instructions="이 노드에서 같이 볼 섹션은?",
+                           criteria=_shuffled(rng, {**sec_opts, NO_SECTION: "섹션은 지금 안 봄"}))
+        if sec_max > 1:
+            for n, x in enumerate(sec_keys):
+                qs[f"sec_also:{n}"] = Noul(instructions=f"이 질문에 답하려면 「{sec_opts[x]}」 섹션도 봐야 하나?")
+    nbs = dict(nb_opts)
+    if two:
+        kinds = list(dict.fromkeys(kind_of[x] for x in nb_opts))
+        qs["kind"] = Choice(instructions="이 질문에 답하려고 먼저 볼 이웃 종류는?",
+                            criteria=_shuffled(rng, {kd: f"이웃 — {kd}" for kd in kinds}))
+    elif nbs:
+        qs["nb"] = Choice(instructions="이 질문에 답하려고 먼저 볼 이웃은?", criteria=_shuffled(rng, nbs))
+        for n, x in enumerate(nbs):
+            qs[f"nb_also:{n}"] = Noul(instructions=f"이 질문에 답하려면 「{nbs[x]}」 도 봐야 하나?")
+    ms_total, usage = 0.0, 0
+    resp, ms = await _jev(deps, timer, "jev#1", state, qs, tokens, walk)
+    ms_total += ms
+    usage += resp.usage.input_tokens
+    secs: list[str] = []
+    if "sec" in resp.choices:
+        a = resp.choices["sec"]
+        row["sec"] = _choice_row(a)
+        first = [a.choice] if a.choice != NO_SECTION else []
+        secs = list(dict.fromkeys(first + (_also(resp, "sec_also:", sec_keys, None) if sec_max > 1 else [])))[:sec_max]
+    if two:
+        a = resp.choices["kind"]
+        row["kind"] = _choice_row(a)
+        nbs = dict(list({x: d for x, d in nb_opts.items() if kind_of[x] == a.choice}.items())[:CHOICE_MAX])
+        qs2: dict[str, Any] = {"nb": Choice(instructions="이 질문에 답하려고 먼저 볼 이웃은?", criteria=_shuffled(rng, nbs))}
+        for n, x in enumerate(nbs):
+            qs2[f"nb_also:{n}"] = Noul(instructions=f"이 질문에 답하려면 「{nbs[x]}」 도 봐야 하나?")
+        resp, ms = await _jev(deps, timer, "jev#1-2", state, qs2, tokens, walk)
+        ms_total += ms
+        usage += resp.usage.input_tokens
+    picked_nb: list[str] = []
+    if "nb" in resp.choices:
+        a = resp.choices["nb"]
+        row.update(_choice_row(a))
+        picked_nb = list(dict.fromkeys([a.choice] + _also(resp, "nb_also:", list(nbs), a.choice)))[:s.walk_neighbors_max]
+    elif "sec" in row:
+        row.update({k: row["sec"][k] for k in ("choice", "confidence", "p_max", "ratio")})
+    row.update({"picked": [SEC + x[len(SEC):] for x in secs] + picked_nb, "picked_sections": [x[len(SEC):] for x in secs],
+                "picked_neighbors": picked_nb, "ms": round(ms_total, 1), "usage": {"input_tokens": usage}})
+    return row
+
+
+class Walker:
+    """한 판의 걸음 상태 — 예산 · 대기열 · 모은 줄(rank 순) · peek 캐시 · 안전 요약 · 이웃 slim."""
+
+    def __init__(self, deps: Deps, timer: CaseTimer, walk: dict, start: str) -> None:
+        self.deps, self.timer, self.walk, self.start = deps, timer, walk, start
+        self.s = deps.settings
+        self.peeks: dict[str, tuple[dict, int, float]] = {}
+        self.facts: list[dict] = []  # 걸음 순 → 호출 순 → 응답 facts[] 순(중복 없음)
+        self.fact_seen: set[str] = set()
+        self.safety: dict[str, Any] = {}
+        self.cards: dict[str, dict] = {}
+        self.flags: set[str] = set()
+        self.rule: str | None = None
+        self.queue: list[dict] = []
+        self.seen: set[str] = {start}
+        self.unit_seen: set[tuple[str, str]] = set()
+        self.taken: dict[str, set[str]] = {}  # 노드 → 받은(또는 뺀) 섹션
+        self.edge_of: dict[str, str] = {}  # 노드 → 고른 edge kind
+        self.s_link: str | None = None  # S 가 계열 · 제품이면 단위 이웃 종류(key_family · product_unit)
+        self.texts: dict[str, str] = {}  # ⑤ 로 받은 원문
+
+    @property
+    def left(self) -> int:
+        return self.s.walk_byte_budget - self.walk["bytes_total"]
+
+    async def peek(self, k: int, node: str, step: dict) -> dict:
+        if node in self.peeks:
+            step.update({"peek_bytes": None, "peek_ms": None, "peek_reused": True})
+            return self.peeks[node][0]
+        peek, pb, pms = await _hub(self.deps, self.timer, f"hub_peek#{k}", self.walk,
+                                   lambda: self.deps.hub_rest.peek(node))  # 걸음 경로 = intent 안 넘김(F-1)
+        self.peeks[node] = (peek, pb, pms)
+        step.update({"peek_bytes": pb, "peek_ms": pms, "peek_reused": False})
+        if peek.get("safety") and node not in self.safety:
+            self.safety[node] = peek["safety"]
+        if node == self.start:
+            self.rule = (peek.get("claude_contract") or {}).get("rule")
+        return peek
+
+    async def expand(self, k: int, node: str, step: dict, peek: dict, secs: list[str], nbs: list[str]) -> list[dict]:
+        """이웃 slim 먼저(한 번) → 섹션 하나씩. 남은 예산을 넘는 호출은 그것만 빼고(excluded) 다음으로. → 받은 줄."""
+        plan = ([("neighbors", nbs)] if nbs else []) + [("sections", [x]) for x in secs]
+        if not plan:
+            return []
+        pb_of = {x.get("name"): x.get("bytes") for x in peek.get("sections") or []}
+        calls: list[dict] = []
+        got: list[dict] = []
+        for j, (what, arg) in enumerate(plan):
+            inp = {what: arg}
+            ex, eb, ems = await _hub(self.deps, self.timer, f"hub_expand#{k}" + (f"-{j + 1}" if j else ""), self.walk,
+                                     lambda a=inp: self.deps.hub_rest.expand(node, **a))
+            call: dict[str, Any] = {"sections": arg if what == "sections" else [], "neighbors": arg if what == "neighbors" else [],
+                                    "input": inp, "bytes": eb, "ms": ems}
+            if what == "sections":
+                self.taken.setdefault(node, set()).add(arg[0])
+                pb = pb_of.get(arg[0])
+                if isinstance(pb, int) and pb != eb:  # peek bytes ≠ 실제(차 0 이어야 함 · 실제 바이트로 판단)
+                    call["peek_bytes"] = pb
+                    self.walk["bytes_mismatch"] += 1
+            calls.append(call)
+            if eb > self.left:  # 그 호출만 통째로 뺌(잘라 넣지 않음) · 다음 섹션은 계속
+                call["excluded"] = True
+                self.walk["budget_hit"] = True
+                continue
+            self.walk["bytes_total"] += eb
+            rows = [f for f in ex.get("facts") or [] if isinstance(f, dict) and f.get("id")]
+            call["fact_ids"] = [f["id"] for f in rows]
+            for f in rows:
+                if f["id"] in self.fact_seen:
+                    continue
+                self.fact_seen.add(f["id"])
+                line = f.get("line", f.get("text"))
+                row = {"id": f["id"], "line": line, "section": f.get("section"), "node": node, "step": k}
+                if f.get("cut"):
+                    row["cut"] = True
+                if f.get("flags"):
+                    row["flags"] = f["flags"]
+                self.facts.append(row)
+                got.append(row)
+            for sec, n in (ex.get("more") or {}).items():
+                self.walk["more"][sec] = self.walk["more"].get(sec, 0) + n
+            self.flags |= set((ex.get("claude_contract") or {}).get("must_show_flags") or [])
+            for n in ex.get("neighbors") or []:
+                if not isinstance(n, dict) or not n.get("id"):
+                    continue
+                self.cards.setdefault(n["id"], {x: n.get(x) for x in ("id", "kind", "name", "edge", "kind_edge", "value",
+                                                                       "sections_n") if n.get(x) is not None})
+                if n.get("safety") and n["id"] not in self.safety:
+                    self.safety[n["id"]] = n["safety"]
+            if what == "neighbors":
+                for x in arg:
+                    if x not in self.seen:
+                        self.seen.add(x)
+                        self.queue.append({"node": x, "edge": self.edge_of.get(x)})
+            if what == "sections" and node == self.start and (peek.get("node") or {}).get("kind") in ("family", "product"):
+                for u in ((ex.get("by_unit") or {}).get(arg[0]) or {}):  # v2.4 — 단위를 그 section 으로 대기열 뒤에
+                    if (u, arg[0]) not in self.unit_seen:
+                        self.unit_seen.add((u, arg[0]))
+                        self.queue.append({"node": u, "section": arg[0], "edge": self.s_link})
+                        self.walk["by_unit_queued"].append({"unit": u, "section": arg[0]})
+                        self.edge_of.setdefault(u, self.s_link)
+        kept = [c for c in calls if not c.get("excluded")]
+        step["expand"] = {"sections": [x for c in kept for x in c["sections"]],
+                          "neighbors": [x for c in kept for x in c["neighbors"]],
+                          "bytes": sum(c["bytes"] for c in kept), "ms": round(sum(c["ms"] for c in calls), 1),
+                          "fact_ids": [f["id"] for f in got], "calls": calls}
+        excl = [x for c in calls if c.get("excluded") for x in c["sections"] + c["neighbors"]]
+        if excl:
+            step["expand"]["excluded"] = excl
+        return got
+
+    async def full(self) -> dict:
+        """⑤ cut 줄 원문 — rank 순 · 출처 노드마다 expand(node, fact_ids) 1회 · WALK_FULL_BYTE_BUDGET · WALK_FULL_FACTS_MAX 안.
+        응답 줄을 순서대로 담아 예산을 넘는 줄부터는 안 담음(인용 불가 줄로)."""
+        s = self.s
+        out = {"calls": 0, "fact_ids": [], "cut_unfetched_ids": [], "bytes": 0, "bytes_used": 0, "over_budget": False,
+               "calls_detail": []}
+        cut = [f for f in self.facts if f.get("cut")]
+        want: dict[str, list[str]] = {}
+        n_left = s.walk_full_facts_max
+        for f in cut:
+            if n_left <= 0:
+                break
+            want.setdefault(f["node"], []).append(f["id"])
+            n_left -= 1
+        texts: dict[str, str] = {}
+        for j, (node, ids) in enumerate(want.items(), start=1):
+            if out["bytes_used"] >= s.walk_full_byte_budget:
+                break
+            try:
+                ex, eb, ems = await _hub(self.deps, self.timer, f"hub_full#{j}", self.walk,
+                                         lambda n=node, x=ids: self.deps.hub_rest.expand(n, fact_ids=x))
+            except Exception as e:  # noqa: BLE001 — 원문 못 받음 = 그 줄은 인용 불가로
+                out["calls_detail"].append({"node": node, "fact_ids": ids, "error": f"{type(e).__name__}: {e}"[:200]})
+                continue
+            out["calls"] += 1
+            out["bytes"] += eb
+            rows = [r for r in ex.get("facts") or [] if isinstance(r, dict) and r.get("id") in ids and "text" in r]
+            used = eb - sum(_compact(r) + 1 for r in rows)  # 봉투
+            got = []
+            for r in rows:
+                rb = _compact(r) + 1
+                if out["bytes_used"] + used + rb > s.walk_full_byte_budget:
+                    out["over_budget"] = True
+                    break
+                used += rb
+                texts[r["id"]] = r["text"]
+                got.append(r["id"])
+            out["bytes_used"] += max(used, 0)
+            out["calls_detail"].append({"node": node, "input": {"fact_ids": ids}, "bytes": eb, "ms": ems, "fetched": got})
+        out["fact_ids"] = [f["id"] for f in cut if f["id"] in texts]
+        out["cut_unfetched_ids"] = [f["id"] for f in cut if f["id"] not in texts]
+        self.texts = texts
+        return out
+
+    def payload(self, intent_row: dict) -> dict:
+        """§3-4-7 Claude 꼴 — facts rank 순 · 출처 노드 · 인용 가능 id · 규칙 문장(판에 한 번)."""
+        facts, allowed = [], []
+        texts = self.texts
+        for rank, f in enumerate(self.facts, start=1):
+            n = f["node"]
+            src = {"id": n}
+            card = self.cards.get(n) or {}
+            pk = (self.peeks.get(n) or ({},))[0].get("node") or {}
+            src["kind"] = pk.get("kind") or card.get("kind")
+            src["name"] = pk.get("name") or card.get("name")
+            if n != self.start and self.edge_of.get(n):
+                src["edge"] = self.edge_of[n]
+            row: dict[str, Any] = {"id": f["id"]}
+            if not f.get("cut"):
+                row["text"] = f["line"]
+                allowed.append(f["id"])
+            elif f["id"] in texts:
+                row["text"] = texts[f["id"]]
+                allowed.append(f["id"])
+            else:
+                row.update({"line": f["line"]})
+            row.update({"section": f["section"], "source": src, "step": f["step"], "rank": rank})
+            if f.get("cut") and f["id"] not in texts:
+                row.update({"cut": True, "quotable": False})
+            if f.get("flags"):
+                row["flags"] = f["flags"]
+            facts.append(row)
+        return {"intent": {"choice": intent_row.get("choice"), "confidence": intent_row.get("confidence")},
+                "facts": facts, "neighbors": list(self.cards.values()), "safety": self.safety,
+                "claude_contract": {"rule": self.rule, "allowed_fact_ids": allowed, "must_show_flags": sorted(self.flags)}}
 
 
 async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[str], None], seed: int = 0,
               provider: str = "sdk") -> dict:
-    """case3 = Jev 재귀 탐색(§3-4-1). WALK_MAX_STEPS=0 이면 v1 경로만(fallback_run)."""
+    """case3 = Jev 재귀 탐색(§3-4-1 · v2.4). WALK_MAX_STEPS=0 이면 v1 경로만(fallback_run)."""
     s = deps.settings
     if s.walk_max_steps <= 0:
         return await fallback_run(deps, question, timer, on_text, seed, provider)
@@ -601,8 +961,12 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
     res["trace"] = trace
     tokens: dict[str, dict] = {}
     res["tokens"] = tokens
-    walk: dict[str, Any] = {"start_node": None, "intent": None, "steps": [], "stop": None, "steps_n": 0,
-                            "bytes_total": 0, "budget_hit": False, "fallback": False, "fallback_reason": None,
+    table, table_sha = order_table(s)
+    walk: dict[str, Any] = {"start_node": None, "intent": None, "order_kinds": [], "order_table_sha": table_sha,
+                            "list": {"kinds": [], "calls": 0, "bytes": 0, "ids_n": 0, "ms": 0.0}, "by_unit_queued": [],
+                            "step1_options": [], "bytes_mismatch": 0, "steps": [], "queue_left": [], "stop": None,
+                            "steps_n": 0, "bytes_total": 0, "budget_hit": False, "neighbor_reached": 0,
+                            "full": None, "more": {}, "fallback": False, "fallback_reason": None,
                             "jev_calls": 0, "jev_ms_total": 0.0, "hub_calls": 0, "hub_ms_total": 0.0, "fact_ids": []}
     trace["walk"] = walk
     try:
@@ -641,107 +1005,116 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             if sr["choice"] != NONE:
                 walk["start_node"] = sr["choice"]
         intent = walk["intent"]
+        S = walk["start_node"]
+        reason = None if S else "no_start"
+        if intent in NO_WALK_INTENTS:
+            reason = "no_walk_intent"
+        wk = Walker(deps, timer, walk, S) if not reason else None
 
-        # ③ 걸음
-        steps_out: list[dict] = []  # Sonnet 입력(걸음 순서)
-        safety: dict[str, Any] = {}  # 노드마다 한 번(예산 밖 · 늘 포함)
-        contract = {"allowed_fact_ids": [], "must_show_flags": [], "priority": None, "rule": None}
-        frontier = [walk["start_node"]] if walk["start_node"] else []
-        seen: set[str] = set(frontier)
-        reason = None if frontier else "no_start"
-        for k in range(1, s.walk_max_steps + 1):
-            if reason or not frontier:
-                walk["stop"] = walk["stop"] or "empty"
-                break
-            node = frontier.pop(0)
-            step: dict[str, Any] = {"k": k, "node": node}
+        # ③ 걸음 1 — 이웃 먼저(§3-4-6 표) + 섹션(의도별 상한) 한 요청 · 「충분」 없음
+        if wk is not None:
+            step: dict[str, Any] = {"k": 1, "node": S, "phase": "first"}
             walk["steps"].append(step)
             try:
-                peek, pb, pms = await _hub(deps, timer, f"hub_peek#{k}", walk,
-                                           lambda n=node: deps.hub_rest.peek(n, intent=intent))
-            except Exception as e:  # noqa: BLE001 — 첫 peek 실패 = 되돌아감 · 뒤 걸음이면 그 걸음만
+                peek = await wk.peek(1, S, step)
+            except Exception as e:  # noqa: BLE001 — 첫 peek 실패 = 되돌아감
                 step["error"] = f"{type(e).__name__}: {e}"[:300]
-                if k == 1:
-                    reason = "peek_failed"
-                    break
-                continue
-            step.update({"peek_bytes": pb, "peek_ms": pms})
-            if peek.get("safety") and node not in safety:
-                safety[node] = peek["safety"]
-            opts, kind_of = walk_options(peek, seen)
-            if not opts:
+                reason = "peek_failed"
+        if wk is not None and not reason:
+            s_kind = (peek.get("node") or {}).get("kind")
+            wk.s_link = (table.get("unit_link") or {}).get(s_kind or "")
+            walk["order_kinds"] = order_kinds(table, intent, s_kind)
+            nb_opts, kind_of = await step1_neighbors(deps, timer, walk, S, peek, walk["order_kinds"])
+            sec_opts, filt = section_options(peek, set(), wk.left)
+            walk["step1_options"] = list(nb_opts) + list(sec_opts)
+            if nb_opts or sec_opts:
+                try:
+                    jrow = await walk_pick_first(deps, timer, question, intent, peek, nb_opts, kind_of, sec_opts, seed,
+                                                 tokens, walk)
+                except TypeSafeError as e:
+                    step["error"] = _jev_error(e)
+                    walk["stop"] = "error"
+                    jrow = None
+                if jrow is not None:
+                    jrow["filtered_by_budget"] = filt
+                    step["jev"] = jrow
+                    for x in jrow["picked_neighbors"]:
+                        wk.edge_of[x] = kind_of.get(x)
+                    await wk.expand(1, S, step, peek, jrow["picked_sections"], jrow["picked_neighbors"])
+            else:
                 step["jev"] = None
-                if not frontier:
+                walk["stop"] = "empty"
+
+            # ④ 걸음 2..N — 대기열 앞 · 비면 S 로 돌아옴(peek 재사용) · 섹션 ≤ 2 · 이웃은 대기열 뒤
+            returned = False
+            k = 1
+            while walk["stop"] is None:
+                if k >= s.walk_max_steps:
+                    walk["stop"] = "steps"
+                    break
+                if wk.queue:
+                    entry, phase = wk.queue.pop(0), "queue"
+                elif not returned:
+                    entry, phase, returned = {"node": S}, "return", True
+                else:
                     walk["stop"] = "empty"
                     break
-                continue
-            try:
-                jrow = await walk_pick(deps, timer, k, question, peek, opts, kind_of, steps_out, seed, tokens, walk)
-            except TypeSafeError as e:
-                step["error"] = _jev_error(e)
-                walk["stop"] = "error"
-                break
-            step["jev"] = jrow
-            if jrow.get("enough", 0) >= s.walk_enough_min or (not jrow["picked"] and jrow.get("choice") == NONE_ENOUGH) \
-                    or ("kind" in jrow and not jrow["picked"]):
-                walk["stop"] = "enough"
-                break
-            secs = [x[len(SEC):] for x in jrow["picked"] if x.startswith(SEC)]
-            nbs = [x for x in jrow["picked"] if not x.startswith(SEC)]
-            # 섹션 하나씩 expand(고른 순서 = Choice 1위 → 짝 Noul 높은 순 · 이웃 slim 은 첫 호출에) — 남은 예산에 맞으면 담고
-            # 처음 넘는 것은 통째로 빼고 budget 멈춤(코디 11-01 · peek sections[].bytes 는 실제 expand 바이트가 아니라 못 씀)
-            plan = [([x], nbs if j == 0 else []) for j, x in enumerate(secs)] or [([], nbs)]
-            calls: list[dict] = []
-            facts: list[dict] = []
-            nb_cards: list[dict] = []
-            over = False
-            for j, (a_secs, a_nbs) in enumerate(plan):
-                ex, eb, ems = await _hub(deps, timer, f"hub_expand#{k}" + (f"-{j + 1}" if j else ""), walk,
-                                         lambda n=node, x=a_secs, y=a_nbs: deps.hub_rest.expand(
-                                             n, sections=x or None, neighbors=y or None, intent=intent))
-                got = [{"id": f.get("id"), "text": f.get("text"), "section": f.get("section")}
-                       for f in ex.get("facts") or [] if isinstance(f, dict)]
-                call = {"sections": a_secs, "neighbors": a_nbs, "bytes": eb, "ms": ems, "fact_ids": [f["id"] for f in got]}
-                calls.append(call)
-                if walk["bytes_total"] + eb > s.walk_byte_budget:  # 예산 넘으면 통째로 뺌(잘라 넣지 않음)
-                    call["excluded"] = True
-                    over = True
+                k += 1
+                node = entry["node"]
+                step = {"k": k, "node": node, "phase": phase}
+                if entry.get("section"):
+                    step["by_unit_section"] = entry["section"]
+                walk["steps"].append(step)
+                try:
+                    peek = await wk.peek(k, node, step)
+                except Exception as e:  # noqa: BLE001 — 뒤 걸음 peek 실패는 그 걸음만
+                    step["error"] = f"{type(e).__name__}: {e}"[:300]
+                    continue
+                taken = wk.taken.get(node, set())
+                if entry.get("section"):  # by_unit — Jev 섹션 고름 없이 그 section 만(예산 안)
+                    opts, filt = section_options(peek, taken, wk.left)
+                    step["jev"] = None
+                    if SEC + entry["section"] in opts:
+                        got = await wk.expand(k, node, step, peek, [entry["section"]], [])
+                    else:
+                        got = []
+                        step["filtered_by_budget"] = [x for x in filt if x == entry["section"]]
+                        if step["filtered_by_budget"]:
+                            walk["budget_hit"] = True
+                    if got and node != S:
+                        walk["neighbor_reached"] += 1
+                    continue
+                opts, kind_of, filt = walk_options(peek, wk.seen, taken, wk.left)
+                if not opts:
+                    step["jev"] = {"filtered_by_budget": filt, "options_n": 0} if filt else None
+                    if filt:  # 남은 예산 < 가장 작은 섹션 · 이웃 선택지 없음
+                        walk["budget_hit"] = True
+                        walk["stop"] = "budget"
+                    continue
+                try:
+                    jrow = await walk_pick(deps, timer, k, question, peek, opts, kind_of, wk.facts, seed, tokens, walk)
+                except TypeSafeError as e:
+                    step["error"] = _jev_error(e)
+                    walk["stop"] = "error"
                     break
-                walk["bytes_total"] += eb
-                facts += got
-                for n in ex.get("neighbors") or []:
-                    if not isinstance(n, dict):
-                        continue
-                    nb_cards.append({x: n.get(x) for x in ("id", "kind", "name", "edge", "value", "sections_n")
-                                     if n.get(x) is not None})
-                    if n.get("safety") and n.get("id") not in safety:
-                        safety[n["id"]] = n["safety"]
-                cc = ex.get("claude_contract") or {}
-                contract["must_show_flags"] = sorted(set(contract["must_show_flags"]) | set(cc.get("must_show_flags") or []))
-                contract["priority"] = contract["priority"] or cc.get("priority")
-                contract["rule"] = contract["rule"] or cc.get("rule")
-            kept = [c for c in calls if not c.get("excluded")]
-            step["expand"] = {"sections": [x for c in kept for x in c["sections"]],
-                              "neighbors": [x for c in kept for x in c["neighbors"]],
-                              "bytes": sum(c["bytes"] for c in kept), "ms": round(sum(c["ms"] for c in calls), 1),
-                              "fact_ids": [f["id"] for f in facts], "calls": calls,
-                              **({"excluded": [x for c in calls if c.get("excluded") for x in c["sections"] + c["neighbors"]]}
-                                 if over else {})}
-            if kept:
-                steps_out.append({"step": k, "node": node, "picked": jrow["picked"], "facts": facts,
-                                  **({"neighbors": nb_cards} if nb_cards else {})})
-                for x in kept[0]["neighbors"]:
-                    if x not in seen:
-                        seen.add(x)
-                        frontier.append(x)
-            if over:
-                walk["budget_hit"] = True
-                walk["stop"] = "budget"
-                break
-        else:
-            walk["stop"] = walk["stop"] or "steps"
+                jrow["filtered_by_budget"] = filt
+                step["jev"] = jrow
+                if wk.facts and (jrow.get("enough") or 0) >= s.walk_enough_min:
+                    walk["stop"] = "enough"
+                    break
+                if not jrow["picked"]:
+                    if wk.facts and (jrow.get("choice") == NONE_ENOUGH or (jrow.get("kind") or {}).get("choice") == NONE_ENOUGH):
+                        walk["stop"] = "enough"
+                        break
+                    continue
+                for x in jrow["picked_neighbors"]:
+                    wk.edge_of.setdefault(x, kind_of.get(x))
+                got = await wk.expand(k, node, step, peek, jrow["picked_sections"], jrow["picked_neighbors"])
+                if got and node != S:
+                    walk["neighbor_reached"] += 1
+            walk["queue_left"] = [e["node"] for e in wk.queue]
         walk["steps_n"] = len(walk["steps"])
-        walk["fact_ids"] = [f["id"] for st in steps_out for f in st["facts"]]
+        walk["fact_ids"] = [f["id"] for f in wk.facts] if wk else []
         if not reason and not walk["fact_ids"]:
             reason = "no_facts"
         if reason:  # 되돌아가기 — v1 경로 1회(의도 기본 묶음 · §3-4-3)
@@ -751,9 +1124,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                 res["error"] = err
                 return res
         else:
-            contract["allowed_fact_ids"] = list(dict.fromkeys(walk["fact_ids"]))
-            payload = {"intent": walk["jev0"]["intent"], "steps": steps_out, "safety": safety,
-                       "claude_contract": contract}
+            walk["full"] = await wk.full()  # ⑤ cut 줄 원문
+            payload = wk.payload(walk["jev0"]["intent"])
             text, cut = _cap(deps, json.dumps(payload, ensure_ascii=False), provider)
             if cut:
                 walk["truncated_to"] = _cap_of(deps, provider)
