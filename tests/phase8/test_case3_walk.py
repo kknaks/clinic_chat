@@ -361,18 +361,20 @@ def test_screen_walk_rows_and_marks():
         pytest.skip("node 없음")
     state = Path(__file__).resolve().parents[2] / "web" / "state.js"
     w = {"steps_n": 2, "stop": "budget", "bytes_total": 900, "budget_hit": True, "fact_ids": ["a", "b"], "jev_calls": 3,
-         "fallback": False, "steps": [
-             {"k": 1, "node": U140, "peek_bytes": 700, "jev": {"picked": ["section:aftercare"], "confidence": 0.8,
+         "fallback": False, "neighbor_reached": 1, "full": {"fact_ids": ["a"], "cut_unfetched_ids": ["b"]}, "steps": [
+             {"k": 1, "node": U140, "phase": "first", "peek_bytes": 700, "jev": {"picked": ["section:aftercare"], "confidence": 0.8,
                                                                 "enough": 0.1}, "expand": {"bytes": 900, "fact_ids": ["a", "b"]}},
              {"k": 2, "node": U102, "jev": {"picked": ["section:overview"]}, "expand": {"bytes": 50000, "excluded": True}}]}
     calls = [{"truncated": True, "intent_passed": False, "input": {"intent": "none"}},
-             {"intent_passed": True, "input": {"intent": "I-02"}}, {"stray": True, "intent_passed": None}]
+             {"intent_passed": True, "input": {"intent": "I-02"}}, {"stray": True, "intent_passed": None},
+             {"stray": True, "stray_kind": "bare_hub", "intent_passed": None}]
     script = ("const S=require(process.argv[1]);console.log(JSON.stringify([S.walkRows(" + json.dumps(w) + "),"
               + json.dumps(calls) + ".map(S.callMarks), S.stageKind('jev#2'), S.legendItems([{name:'hub_peek#1',start_ms:0,"
               "end_ms:2}])[0].label]))")
     rows, marks, kind, label = json.loads(subprocess.run([node, "-e", script, str(state)], capture_output=True, text=True,
                                                          check=True).stdout)
-    assert rows["head"].startswith("걸음 2 · 멈춤 budget · 900 B (예산) · fact 2 · Jev 3회")
+    assert rows["head"] == "걸음 2 · 멈춤 budget · 900 B (예산) · fact 2 · 이웃 fact 1 · 원문 1 / 한 줄 1 · Jev 3회"
+    assert rows["steps"][0]["phase"] == "첫"
     assert rows["steps"][1]["excluded"] is True and rows["steps"][0]["facts"] == 2
-    assert marks == [["✂ 잘림", "intent none ✕"], ["intent I-02"], ["격리 밖"]]
+    assert marks == [["✂ 잘림", "intent none ✕"], ["intent I-02"], ["격리 밖"], ["이름 틀림"]]
     assert kind == "jev" and label == "peek#1"

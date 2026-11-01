@@ -175,18 +175,24 @@
     return scrollHeight - (scrollTop + clientHeight) <= (slack == null ? 24 : slack);
   }
 
-  // case3 걸음 줄(SPEC-006 v2 §6) — 걸음 k · 노드 · 고른 것 · 신뢰도 · 바이트 · 멈춤 사유
+  // case3 걸음 줄(SPEC-006 v2.4 §6 · §3-4-4) — 걸음 k · phase(첫 · 대기열 · 돌아옴) · 노드 · 고른 것 · 신뢰도 · 바이트 · 멈춤 사유 ·
+  // 이웃 fact 도달 · 원문(⑤ 받은 cut 줄) / 한 줄(못 받은 cut 줄)
+  const PHASE = { first: "첫", queue: "대기열", return: "돌아옴" };
   function walkRows(w) {
     if (!w) return null;
     const steps = (w.steps || []).map((s) => {
       const j = s.jev || {}, e = s.expand || null;
       return {
-        k: s.k, node: s.node, picked: j.picked || [], enough: j.enough ?? null, confidence: j.confidence ?? null,
-        bytes: e ? e.bytes : null, excluded: !!(e && e.excluded), facts: e ? (e.fact_ids || []).length : 0,
-        peek_bytes: s.peek_bytes ?? null, error: s.error || null,
+        k: s.k, node: s.node, phase: PHASE[s.phase] || null, picked: j.picked || [], enough: j.enough ?? null,
+        confidence: j.confidence ?? null, bytes: e ? e.bytes : null, excluded: !!(e && e.excluded),
+        facts: e ? (e.fact_ids || []).length : 0, peek_bytes: s.peek_bytes ?? null, peek_reused: !!s.peek_reused,
+        by_unit: s.by_unit_section || null, error: s.error || null,
       };
     });
+    const f = w.full || null;
     const head = `걸음 ${w.steps_n} · 멈춤 ${w.stop || "–"} · ${w.bytes_total} B${w.budget_hit ? " (예산)" : ""} · fact ${(w.fact_ids || []).length}` +
+      (w.neighbor_reached != null ? ` · 이웃 fact ${w.neighbor_reached}` : "") +
+      (f ? ` · 원문 ${(f.fact_ids || []).length} / 한 줄 ${(f.cut_unfetched_ids || []).length}` : "") +
       ` · Jev ${w.jev_calls}회` + (w.fallback ? ` · 되돌아감(${w.fallback_reason})` : "");
     return { head, steps, fallback: !!w.fallback };
   }
@@ -197,7 +203,7 @@
     if (x.truncated === true) out.push("✂ 잘림");
     if (x.intent_passed === true) out.push(`intent ${(x.input || {}).intent}`);
     else if (x.intent_passed === false) out.push((x.input || {}).intent ? `intent ${(x.input || {}).intent} ✕` : "intent 없음");
-    if (x.stray) out.push("격리 밖");
+    if (x.stray) out.push(x.stray_kind === "bare_hub" ? "이름 틀림" : "격리 밖");
     return out;
   }
 

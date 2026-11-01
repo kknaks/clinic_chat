@@ -60,9 +60,9 @@
       const wr = S.walkRows(t.walk);
       const walkView = wr ? [el("details", { "data-key": "case3:walk" }, el("summary", { class: wr.fallback ? "low" : "" }, wr.head),
         el("ul", {}, wr.steps.map((s) => el("li", { class: s.error ? "bad" : s.excluded ? "low" : "" },
-          `걸음 ${s.k} · ${s.node}` + (s.picked.length ? ` · 고름 ${s.picked.join(", ")}` : "") +
+          `걸음 ${s.k}${s.phase ? `(${s.phase})` : ""} · ${s.node}` + (s.by_unit ? ` · 단위 ${s.by_unit}` : "") + (s.picked.length ? ` · 고름 ${s.picked.join(", ")}` : "") +
           (s.confidence != null ? ` · conf ${s.confidence}` : "") + (s.enough != null ? ` · 충분 ${s.enough}` : "") +
-          (s.peek_bytes != null ? ` · peek ${s.peek_bytes} B` : "") +
+          (s.peek_bytes != null ? ` · peek ${s.peek_bytes} B` : s.peek_reused ? " · peek 재사용" : "") +
           (s.bytes != null ? ` · expand ${s.bytes} B${s.excluded ? " (예산 넘어 뺌)" : ""} · fact ${s.facts}` : "") +
           (s.error ? ` · 오류 ${s.error}` : "")))))] : [];
       if (wr && !wr.fallback) return walkView;
@@ -87,11 +87,13 @@
     const tok = Object.values(c.tokens || {}).reduce((a, x) => a + (x.input_tokens || 0) + (x.output_tokens || 0), 0);
     const ir = t.intent_ratio != null ? ` · intent ${Math.round(100 * t.intent_ratio)}%` : "";
     const cut = calls.filter((x) => x.truncated === true).length;
-    const extra = ir + (cut ? ` · 잘림 ${cut}` : "") + (t.stray_tools ? ` · 격리 밖 ${t.stray_tools}` : "");
+    const sk = t.stray_by_kind || null;
+    const strayTxt = !t.stray_tools ? "" : sk ? ` · 이름 틀림 ${sk.bare_hub} · 격리 밖 ${sk.foreign}` : ` · 격리 밖 ${t.stray_tools}`;
+    const extra = ir + (cut ? ` · 잘림 ${cut}` : "") + strayTxt;
     return [el("details", { "data-key": `${name}:tools` }, el("summary", {}, `${label} ${calls.length} · 토큰 ${tok}${extra}`),
       el("ul", {}, calls.map((x) => el("li", { class: x.is_error ? "bad" : "" },
         el("code", {}, `${x.tool} ${JSON.stringify(x.input)}`), ` · ${x.delivered_bytes ?? x.output_bytes} B · ${ms(x.ms)}`,
-        ...S.callMarks(x).map((m) => el("span", { class: m.startsWith("✂") || m.endsWith("✕") || m === "격리 밖" ? "bad" : "muted" }, ` · ${m}`)),
+        ...S.callMarks(x).map((m) => el("span", { class: m.startsWith("✂") || m.endsWith("✕") || m === "격리 밖" || m === "이름 틀림" ? "bad" : "muted" }, ` · ${m}`)),
         name === "case2" && x.node_ids && x.node_ids.length ? el("div", { class: "muted" }, x.node_ids.join(", ")) : null))))];
   }
 
