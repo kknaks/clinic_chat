@@ -46,15 +46,31 @@ def node_ids(data: Any) -> list[str]:
 VALID_INTENTS = frozenset(f"I-{i:02d}" for i in range(1, 13))
 
 
-def mark_call(call: dict, *, intent_tools: Iterable[str], stray: bool) -> dict:
-    """호출 열 때 아는 칸(SPEC-006 §3-6 · §4-2) — `intent_passed`(스키마에 intent 있는 도구만 · I-01~I-12 일 때만 true)
-    · `stray`(허브 MCP 밖 도구)."""
+# 허브 MCP 도구 짧은 이름(골드 11 · 원장 3) — stray 나눔(SPEC-006 §3-8 막는 법 2)
+HUB_TOOL_NAMES = ("resolve", "recommend", "procedure_card", "pair_check", "check_conditions", "compare", "combos",
+                  "neighbors", "vocab", "peek", "expand", "raw_list", "raw_get", "raw_search")
+
+
+def stray_kind(name: str) -> str:
+    """`bare_hub` = 접두만 빠진 허브 도구 이름(짧은 이름이거나 그것으로 시작 · 예 check_conditions_placeholder) ·
+    `foreign` = 그 밖(내장 · 다른 서버 `mcp__x__…` · 지어낸 이름)."""
+    n = str(name or "")
+    if n.startswith("mcp__"):
+        return "foreign"
+    return "bare_hub" if any(n == t or n.startswith(t) for t in HUB_TOOL_NAMES) else "foreign"
+
+
+def mark_call(call: dict, *, intent_tools: Iterable[str], stray: bool, name: str | None = None) -> dict:
+    """호출 열 때 아는 칸(SPEC-006 §3-6 · §4-2 · §3-8) — `intent_passed`(스키마에 intent 있는 도구만 · I-01~I-12 일 때만 true)
+    · `stray`(허브 MCP 밖 도구) · `stray_kind`(stray 일 때 · name = CLI 가 받은 이름 그대로)."""
     inp = call.get("input")
     if call["tool"] in set(intent_tools) and not stray:
         call["intent_passed"] = isinstance(inp, dict) and inp.get("intent") in VALID_INTENTS
     else:
         call["intent_passed"] = None
     call["stray"] = stray
+    if stray:
+        call["stray_kind"] = stray_kind(name if name is not None else call["tool"])
     return call
 
 
@@ -76,6 +92,15 @@ def summarize_calls(trace: dict) -> dict:
                                if isinstance(c.get("input"), dict) and "intent" in c["input"])
     trace["intent_values"] = dict(sorted(vals.items()))
     trace["stray_tools"] = sum(1 for c in calls if c.get("stray"))
+    by = {"bare_hub": 0, "foreign": 0}
+    for i, c in enumerate(calls):
+        if not c.get("stray"):
+            continue
+        by[c.get("stray_kind") or "foreign"] += 1
+        nxt = calls[i + 1] if i + 1 < len(calls) else None  # 바로 다음 호출이 같은 도구의 제 이름(접두)인가
+        c["stray_fixed_next"] = bool(nxt and not nxt.get("stray") and
+                                     (nxt["tool"] == c["tool"] or str(c["tool"]).startswith(str(nxt["tool"]))))
+    trace["stray_by_kind"] = by
     return trace
 
 

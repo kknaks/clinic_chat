@@ -100,6 +100,10 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
                                "input_cap_bytes": None, "mcp_result_max_chars": 200000,
                                "truncation_markers_sha": truncation_markers_sha(),
                                "walk_max_steps": 4, "walk_byte_budget": 20000, "walk_enough_min": 0.5,
+                               "walk_sections_per_step": 2, "walk_neighbors_max": 3, "walk_first_section_max": 1,
+                               "walk_first_section_max_by_intent": "I-02:2,I-03:2,I-04:2,I-05:2",
+                               "walk_full_byte_budget": 15000, "walk_full_facts_max": 64,
+                               "order_table_sha": case3.order_table(deps.settings)[1],
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:
         assert set(rec["cases"][c]) >= {"answer", "stop_reason", "loop_capped", "error", "timing", "tokens", "trace",
@@ -167,3 +171,17 @@ async def test_gold_hash_falls_back_to_health(deps_factory, tmp_path, hub, monke
     deps2.startup["gold_build_hash"] = "d3a1abd52f70afe9"
     rec2 = await runner.execute(deps2, "q", lambda e, d: None, quality=False, provider="sdk")
     assert rec2["versions"]["gold_build_hash"] == "d3a1abd52f70afe9"
+
+
+async def test_cases_option_runs_case3_only(deps_factory, hub):
+    """배치 `--cases case3` — 안 돌린 열은 skipped 빈 열(호출 · 채점 없음)."""
+    deps = deps_factory(anthropic=FakeAnthropic(answer_policy))
+    deps.jev = FakeJev(intent="I-02").client(deps.settings)
+    deps.vocab = await deps.hub_rest.vocab()
+    hub.calls.clear()
+    rec = await runner.execute(deps, "소프웨이브 어떻게 해요?", lambda e, d: None, quality=False, cases=("case3",))
+    assert rec["cases_run"] == ["case3"]
+    assert rec["cases"]["case1"]["skipped"] is True and rec["cases"]["case2"]["skipped"] is True
+    assert "skipped" not in rec["cases"]["case3"] and rec["cases"]["case3"]["error"] is None
+    assert not any(via in ("gold-mcp", "raw-mcp") for via, _, _ in hub.calls)  # case1 · 2 도구 호출 0
+    assert runner.gradable(rec["cases"]) == ["case3"]

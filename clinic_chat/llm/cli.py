@@ -255,7 +255,9 @@ class ClaudeIngest:
             st = self.timer.open_stage(f"tool:{short}#{self.n_tool}", at=now)
             mine = bool(self.mcp) and name.startswith(f"{MCP_PREFIX}{self.mcp.name}__")
             call = mark_call({"tool": short, "input": b.get("input"), "output_bytes": None, "ms": None, "is_error": None},
-                             intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine)
+                             intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine, name=name)
+            if not mine:  # S-2 확인용 — CLI 원문 tool_use 블록 그대로(입력 꼴)
+                self.cli.setdefault("stray_events", []).append(b)
             self.tools[str(b.get("id"))] = (st, call)
             self.res["trace"]["tool_calls"].append(call)
 
@@ -478,9 +480,17 @@ class CodexIngest:
                 name = str(item.get("tool") or item.get("name") or it)
                 st = self.timer.open_stage(f"tool:{name}#{self.n_tool}", at=now)
                 mine = it == "mcp_tool_call" and bool(self.mcp) and item.get("server") in (None, self.mcp.name)
+                # stray 나눔용 이름 — 내장 항목(명령 · 검색 · 파일)과 다른 서버 도구는 foreign 으로 읽히게
+                raw_name = name if it != "mcp_tool_call" or item.get("server") in (None, getattr(self.mcp, "name", None)) \
+                    else f"mcp__{item.get('server')}__{name}"
+                if it != "mcp_tool_call":
+                    raw_name = f"{it}:{name}"
                 call = mark_call({"tool": name, "input": item.get("arguments"), "output_bytes": None, "ms": None,
                                   "is_error": None, "item_type": it},
-                                 intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine)
+                                 intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine,
+                                 name=raw_name)
+                if not mine:
+                    self.cli.setdefault("stray_events", []).append(item)
                 self.tools[iid] = (st, call)
                 self.res["trace"]["tool_calls"].append(call)
             st, call = self.tools[iid]

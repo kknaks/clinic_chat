@@ -56,7 +56,9 @@ async def test_claude_fields_and_summary(fake):  # noqa: F811
     assert bash["stray"] is True and bash["intent_passed"] is None and card["stray"] is False
     t = r["trace"]
     assert t["intent_ratio"] == round(1 / 3, 4) and t["intent_values"] == {"I-02": 1, "none": 1}
-    assert t["stray_tools"] == 1
+    assert t["stray_tools"] == 1 and t["stray_by_kind"] == {"bare_hub": 0, "foreign": 1} and bash["stray_kind"] == "foreign"
+    ev = t["cli"]["stray_events"]
+    assert len(ev) == 1 and ev[0]["type"] == "tool_use" and ev[0]["name"] == "Bash"  # CLI 원문 블록 그대로(S-2)
 
 
 CODEX = j({"type": "thread.started", "thread_id": "th1"}, {"type": "turn.started"},
@@ -137,3 +139,20 @@ def test_specs_carry_result_max(tmp_path):
     s = make_settings(tmp_path, judge_provider="claude-cli")
     assert answer_spec(s, "claude-cli").result_max == answer_spec(s, "codex-cli").result_max == 200_000
     assert judge_spec(s, "judge").result_max == 200_000
+
+
+def test_stray_kind_and_fixed_next():
+    """§3-8 — 접두 없는 허브 이름 = bare_hub(그것으로 시작해도) · 그 밖 foreign · 바로 다음이 제 이름이면 fixed_next."""
+    from clinic_chat.cases.loop import stray_kind
+
+    assert stray_kind("procedure_card") == "bare_hub" and stray_kind("check_conditions_placeholder") == "bare_hub"
+    assert stray_kind("Bash") == "foreign" and stray_kind("mcp__other__resolve") == "foreign"
+    calls = [mark_call({"tool": "procedure_card", "input": {}}, intent_tools=(), stray=True),
+             mark_call({"tool": "procedure_card", "input": {"id": "x"}}, intent_tools=(), stray=False),
+             mark_call({"tool": "check_conditions_placeholder", "input": {}}, intent_tools=(), stray=True),
+             mark_call({"tool": "check_conditions", "input": {}}, intent_tools=(), stray=False),
+             mark_call({"tool": "Bash", "input": {}}, intent_tools=(), stray=True)]
+    t = summarize_calls({"tool_calls": calls})
+    assert [c.get("stray_kind") for c in calls] == ["bare_hub", None, "bare_hub", None, "foreign"]
+    assert [c.get("stray_fixed_next") for c in calls] == [True, None, True, None, False]
+    assert t["stray_by_kind"] == {"bare_hub": 2, "foreign": 1} and t["stray_tools"] == 3

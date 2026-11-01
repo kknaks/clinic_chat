@@ -32,9 +32,14 @@ def new_run_id() -> str:
 
 async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None = None, quality: bool | None = None,
                   jev_seed: int | None = None, judge_seed: int | None = None, provider: str | None = None,
-                  on_case_done: Callable[[str, dict], None] | None = None) -> dict:
+                  on_case_done: Callable[[str, dict], None] | None = None, cases: tuple[str, ...] | None = None) -> dict:
     """provider = sdk · claude-cli · codex-cli(질문마다 · 세 케이스 모두 같은 provider).
-    quality=None 이면 CLI 판은 자동 채점 · sdk 판은 설정 AUTO_QUALITY(기본 끔 — 「채점」 버튼)."""
+    quality=None 이면 CLI 판은 자동 채점 · sdk 판은 설정 AUTO_QUALITY(기본 끔 — 「채점」 버튼).
+    cases = 돌릴 케이스(기본 셋 다 · 배치 `--cases case3` — 안 돌린 열은 `skipped: true` 빈 열로 기록 · 채점 안 함)."""
+    run_cases = tuple(cases or CASES)
+    bad = [c for c in run_cases if c not in CASES]
+    if bad:
+        raise ValueError(f"모르는 케이스: {bad}")
     provider = provider or deps.settings.default_provider
     if provider not in PROVIDERS:
         raise ValueError(f"모르는 provider: {provider}")
@@ -71,6 +76,9 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
         runners = {c: refused for c in CASES}
 
     async def one(c: str) -> dict:
+        if c not in run_cases:  # 안 돌린 열 — 빈 기록(채점 · 오류 없음)
+            return {"answer": "", "stop_reason": None, "loop_capped": False, "refusal": False, "error": None,
+                    "skipped": True, "timing": {}, "tokens": {}, "trace": {}, "cost": {"usd": 0.0, "by_stage": {}}}
         r = await one_inner(c)
         if on_case_done:  # 서버: 이 열 채점을 바로 시작(다른 열을 기다리지 않음)
             on_case_done(c, r)
@@ -121,7 +129,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "judge_provider": s.judge_provider, "judge_model": s.judge_model, "extract_model": s.extract_model,
                      "cli_version": (auth_info or {}).get("cli_version"), "auth_kind": (auth_info or {}).get("kind")
                      or ("api" if provider == "sdk" else None),
-                     "jev_model": s.typesafe_default_model, "prompts": prompts.versions(),
+                     "jev_model": s.typesafe_default_model, "prompts": prompts.versions(provider),
                      "gold_build_hash": gold_hash,
                      "raw_manifest_sha16": cases["case1"]["trace"].get("raw_manifest_sha16")
                      or (deps.raw_store.dir_manifest_sha16 if deps.raw_store else None),
@@ -135,8 +143,13 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "input_cap_bytes": (s.tool_result_max_bytes or None) if provider == "sdk" else None,
                      "mcp_result_max_chars": s.mcp_result_max_chars, "truncation_markers_sha": truncation_markers_sha(),
                      "walk_max_steps": s.walk_max_steps, "walk_byte_budget": s.walk_byte_budget,
-                     "walk_enough_min": s.walk_enough_min,
+                     "walk_enough_min": s.walk_enough_min, "walk_sections_per_step": s.walk_sections_per_step,
+                     "walk_neighbors_max": s.walk_neighbors_max, "walk_first_section_max": s.walk_first_section_max,
+                     "walk_first_section_max_by_intent": s.walk_first_section_max_by_intent,
+                     "walk_full_byte_budget": s.walk_full_byte_budget, "walk_full_facts_max": s.walk_full_facts_max,
+                     "order_table_sha": case3.order_table(s)[1],
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
+        **({"cases_run": list(run_cases)} if run_cases != CASES else {}),
         "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed, "judge_mode": "absolute",
         "cost": run_cost(cases, quality_cost),
     }
@@ -185,7 +198,8 @@ async def grade_case(deps: Deps, question: str, case: str, answer: str, emit: Em
 
 
 def gradable(cases: dict) -> list[str]:
-    return [c for c in CASES if (cases.get(c) or {}).get("answer") and not (cases.get(c) or {}).get("error")]
+    return [c for c in CASES if (cases.get(c) or {}).get("answer") and not (cases.get(c) or {}).get("error")
+            and not (cases.get(c) or {}).get("skipped")]
 
 
 async def run_quality(deps: Deps, question: str, cases: dict, emit: Emit, judge_seed: int | None = None) -> dict:

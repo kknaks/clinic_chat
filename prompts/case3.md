@@ -6,3 +6,9 @@
 - `needs_clarification` 이 있으면 필요한 정보를 고객에게 되묻는다.
 - `price_unavailable` 이면 가격 정보는 없다고만 말한다.
 - 결과의 `claude_contract` 를 지킨다(문장마다 facts 근거 · must_show_flags 표시).
+
+[허브 결과 — Jev 걸음으로 모은 것] 으로 받으면(걸음 판):
+
+- `facts` 는 rank 순이다(허브 줄 순서 = 우선순위) · `source` 는 그 fact 를 받은 출처 노드다.
+- `quotable: false` 줄은 근거로 인용하지 않는다 — 그 말이 필요하면 「자세한 내용은 확인 필요」 로 말한다.
+- 인용은 `claude_contract.allowed_fact_ids` 의 fact 만 · `must_show_flags` 표시는 빠뜨리지 않는다.

@@ -10,6 +10,7 @@
 - 끊겨도 이어서: 다시 띄우면 done 아닌 칸부터 · running 으로 남은 칸은 runs.jsonl 에 결과가 있으면 done
 
     uv run python -m clinic_chat.batch --providers claude-cli,codex-cli [--questions 1,3,4] [--resume <batch_id>] [--plan-only]
+        [--cases case3](걷기 고치는 동안 · case3 만 · 2회는 같은 판으로 --label …-r1 · …-r2)
 """
 
 from __future__ import annotations
@@ -153,7 +154,7 @@ def progress(plan: dict) -> dict:
 
 def outcome(rec: dict) -> tuple[str, dict]:
     """판 결과 → done | retry | limited (+ 정보)."""
-    cases = rec.get("cases") or {}
+    cases = {k: c for k, c in (rec.get("cases") or {}).items() if not (c or {}).get("skipped")}  # 안 돌린 열 빼고
     clis = [(c.get("trace") or {}).get("cli") or {} for c in cases.values()]
     if any(x.get("rate_limited") for x in clis):
         resets = [rl.get("resetsAt") for x in clis for rl in x.get("rate_limits") or [] if rl.get("resetsAt")]
@@ -259,8 +260,12 @@ async def _main() -> None:
     ap.add_argument("--resume")
     ap.add_argument("--skip-done", action="store_true", help="runs.jsonl 에 이미 있는 번호는 건너뜀")
     ap.add_argument("--plan-only", action="store_true")
+    ap.add_argument("--cases", default="", help="돌릴 케이스(예 case3 · 비면 셋 다) — 안 돌린 열은 skipped 빈 열 · 채점 안 함")
     a = ap.parse_args()
     s = get_settings()
+    run_cases = tuple(c.strip() for c in a.cases.split(",") if c.strip()) or None
+    if run_cases and any(c not in runner.CASES for c in run_cases):
+        raise SystemExit(f"[batch] 모르는 케이스: {run_cases}")
     bstore, rstore = BatchStore(s.runs_path), RunStore(s.runs_path)
     if a.resume:
         plan = bstore.load(a.resume)
@@ -277,8 +282,12 @@ async def _main() -> None:
                     and any((c or {}).get("judge") for c in (r.get("cases") or {}).values())}
         plan = make_plan(load_questions(s), [p.strip() for p in a.providers.split(",") if p.strip()], pick, skip,
                          label=a.label)
+        if run_cases:
+            plan["cases"] = list(run_cases)
         bstore.save(plan)
-    print(f"[batch] {plan['batch_id']} · 라벨 {plan.get('label')} · {plan['progress']}", flush=True)
+    run_cases = tuple(plan.get("cases") or ()) or None  # 이어 돌릴 때도 계획 파일의 케이스 그대로
+    print(f"[batch] {plan['batch_id']} · 라벨 {plan.get('label')} · 케이스 {plan.get('cases') or '전부'} · {plan['progress']}",
+          flush=True)
     if a.plan_only:
         return
     deps = build_deps(s)
@@ -295,7 +304,7 @@ async def _main() -> None:
     async def execute(q: str, provider: str, extra: dict) -> dict:
         # 답 세 열 + 열마다 ①② 채점이 모두 끝난 뒤 돌아옴(다음 문항은 그 뒤)
         rec = await runner.execute(deps, q, lambda e, d: None, provider=provider,
-                                   quality=runner.auto_quality(s, provider))
+                                   quality=runner.auto_quality(s, provider), cases=run_cases)
         rec.update(extra)
         rstore.append_run(rec)
         meta = {k: extra.get(k) for k in META if k in extra}
