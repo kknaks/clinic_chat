@@ -6,6 +6,7 @@ import json
 
 from clinic_chat import runner
 from clinic_chat.cases import case2, case3
+from clinic_chat.config import truncation_markers_sha
 from clinic_chat.runs import RunStore
 from clinic_chat.timing import CaseTimer, Clock
 from tests.fake_anthropic import FakeAnthropic, FakeClock, Turn, answer_policy
@@ -84,7 +85,9 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
     assert v["app_commit"] == "fixturecommit"
     assert rec["settings"] == {"thinking": "between_tools", "effort": "high", "tool_loop_max": 12,
                                "max_budget_usd": None, "service_tier": None, "timeout_sec": None,
-                               "input_cap_bytes": 20000,
+                               "input_cap_bytes": None, "mcp_result_max_chars": 200000,
+                               "truncation_markers_sha": truncation_markers_sha(),
+                               "walk_max_steps": 4, "walk_byte_budget": 20000, "walk_enough_min": 0.5,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:
         assert set(rec["cases"][c]) >= {"answer", "stop_reason", "loop_capped", "error", "timing", "tokens", "trace",

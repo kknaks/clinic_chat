@@ -17,6 +17,7 @@ from pathlib import Path
 from clinic_chat.config import get_settings
 from clinic_chat.report import ITEMS, NAMES, UNKNOWN, _cell, fmt_ms
 from clinic_chat.runs import RunStore, merge_quality
+from clinic_chat.verify_runs import case_stats
 
 CASES = ("case1", "case2", "case3")
 
@@ -67,10 +68,15 @@ def rates(runs: list[dict]) -> dict:
 
 def hub_bytes(r: dict, c: str) -> int | None:
     cr = case(r, c)
+    tr = cr.get("trace") or {}
     if c == "case3":
-        return ((cr.get("trace") or {}).get("hub") or {}).get("result_bytes")
-    calls = (cr.get("trace") or {}).get("tool_calls") or []
-    bs = [x.get("output_bytes") for x in calls if isinstance(x.get("output_bytes"), int)]
+        w = tr.get("walk")
+        if w:  # 걸음 판 = 펼친 바이트 + peek 바이트(§4-4 공정성과 같은 셈)
+            return (w.get("bytes_total") or 0) + sum((s.get("peek_bytes") or 0) for s in w.get("steps") or [])
+        return (tr.get("hub") or {}).get("result_bytes")
+    calls = tr.get("tool_calls") or []
+    bs = [x.get("delivered_bytes", x.get("output_bytes")) for x in calls]
+    bs = [b for b in bs if isinstance(b, int)]
     return sum(bs) if bs else None
 
 
@@ -139,7 +145,24 @@ def build(qs: list[str], before: dict, after: dict, all_before: dict, label: str
         w(f"| {NAMES[c]} | {b['avg_pass']} → {a['avg_pass']} | {b['unknown_answers']} → {a['unknown_answers']} | "
           f"{b['errors']} → {a['errors']} | {fmt_ms(b['ttft_ms'])} → {fmt_ms(a['ttft_ms'])} | "
           f"{fmt_ms(b['total_ms'])} → {fmt_ms(a['total_ms'])} | {b['hub_bytes']} → {a['hub_bytes']} |")
-    w("\n허브 결과 바이트: case1 · case2 = 그 열 도구 결과 바이트 합 · case3 = 허브 경로 결과 바이트(trace.hub.result_bytes)\n")
+    w("\n허브 결과 바이트: case1 · case2 = 그 열 도구 결과 바이트 합(모델이 받은 delivered) · case3 = 허브 경로 결과 바이트"
+      "(trace.hub.result_bytes) · 걸음 판은 bytes_total + peek\n")
+
+    # 2-1. 도구 전달 · intent · 격리 · 걸음(SPEC-006 v2 §3-6 · §4-4 · 기록 칸만)
+    w("## 2-1. intent 전달 · 잘린 호출(마커) · 격리 밖 도구 · case3 걸음 — 전 → 후\n")
+    w("| 케이스 | intent 전달 비율 | 잘린 호출(마커) | 격리 밖 도구 | 걸음(판 · 되돌아감 · 걸음 중앙 · bytes_total 중앙 · Jev 호출) |")
+    w("|---|---|---|---|---|")
+    data["delivery"] = {}
+    for c in CASES:
+        sb, sa = case_stats(b_runs, c), case_stats(a_runs, c)
+        data["delivery"][c] = {"before": sb, "after": sa}
+        ir = lambda st: f"{st['intent_ratio']:.1%} ({st['intent_passed']}/{st['intent_calls']})" \
+            if st["intent_calls"] else "해당 없음"
+        wk = lambda st: (f"{st['walk']['runs']} · {st['walk']['fallback']} · {st['walk']['steps_median']} · "
+                         f"{st['walk']['bytes_total_median']} · {st['walk']['jev_calls']}") if st["walk"] else "–"
+        w(f"| {NAMES[c]} | {ir(sb)} → {ir(sa)} | {sb['truncated_marker']} → {sa['truncated_marker']} | "
+          f"{sb['stray']} → {sa['stray']} | {wk(sb)} → {wk(sa)} |")
+    w("\n잘림 · C 비율의 허브 재호출 대조는 `clinic_chat.verify_runs`(§4-4)\n")
 
     # 3. 나빠진 문항
     w("## 3. 나빠진 문항 — 전 통과 → 후 실패\n")

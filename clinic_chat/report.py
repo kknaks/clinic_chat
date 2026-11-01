@@ -17,6 +17,7 @@ from pathlib import Path
 
 from clinic_chat.config import get_settings
 from clinic_chat.runs import RunStore, merge_quality
+from clinic_chat.verify_runs import case_stats
 
 CASES = ("case1", "case2", "case3")
 NAMES = {"case1": "case1 원장 MCP", "case2": "case2 골드 MCP", "case3": "case3 골드 + Jev"}
@@ -110,6 +111,21 @@ def build(runs: list[dict], plans: list[dict]) -> str:
           f"{fmt_ms(med([t.get('cli_boot_ms') for t in ts]))} | {fmt_ms(med([t.get('thinking_ms') for t in ts]))} | "
           f"{med(tools)} | {errs} |")
     w("")
+
+    # 2-1. 도구 결과 전달 · intent · 격리(SPEC-006 v2 §3-5 · §3-6 · 기록 칸만 — 허브 대조는 verify_runs)
+    w("## 2-1. 도구 전달 · intent · 격리(기록 칸)\n")
+    w("| 케이스 | intent 전달 비율 | 잘린 호출(마커) | 격리 밖 도구 | 받은 허브 바이트 중앙 | case3 걸음(판 · 되돌아감 · 걸음 중앙 · "
+      "bytes_total 중앙 · Jev 호출 · Jev ms 중앙) |")
+    w("|---|---|---|---|---|---|")
+    for c in CASES:
+        st = case_stats(runs, c)
+        ir = f"{st['intent_ratio']:.1%} ({st['intent_passed']}/{st['intent_calls']})" if st["intent_calls"] else "해당 없음"
+        wk = st["walk"]
+        ws = (f"{wk['runs']} · {wk['fallback']} · {wk['steps_median']} · {wk['bytes_total_median']} · {wk['jev_calls']} · "
+              f"{fmt_ms(wk['jev_ms_median'])}") if wk else "–"
+        w(f"| {NAMES[c]} | {ir} | {st['truncated_marker']} | {st['stray']} | {st['hub_bytes_median']} | {ws} |")
+    w("\nintent = 스키마에 intent 있는 도구 호출 중 I-01~I-12 를 넘긴 비율 · 잘림 = CLI 잘림 표시(마커)가 든 결과 — "
+      "허브 재호출 대조(unknown 포함)는 `clinic_chat.verify_runs`\n")
 
     # 3. 골드 약점
     w("## 3. 골드 약점 — case2 · case3 실패를 사유별로\n")

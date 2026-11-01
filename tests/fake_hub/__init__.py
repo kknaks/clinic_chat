@@ -1,4 +1,4 @@
-"""모의 허브 — 골드 MCP(9) · 원장 MCP(3) · 골드 REST. Streamable HTTP · stateless · JSON(SPEC-005 §1-3 · §5-12).
+"""모의 허브 — 골드 MCP(9 + T10 peek · T11 expand) · 원장 MCP(3) · 골드 REST. Streamable HTTP · stateless · JSON(SPEC-005 §1-3 · §5-12).
 
 시험은 포트를 열지 않고 `httpx2.ASGITransport` 로 붙는다(`lifespan()` 안에서 MCP 세션 매니저를 돌림).
 `calls` 에 받은 도구 호출을 남긴다(「채점 경로 허브 호출 0」 같은 시험용).
@@ -149,6 +149,14 @@ class FakeHub:
         @app.get(g + "/nodes/{nid}/neighbors")
         def nb(nid: str, depth: int = 1, limit: int = 50, sections: str | None = None):
             return run("neighbors", id=nid, depth=depth, limit=limit, sections=_csv(sections))
+
+        @app.get(g + "/nodes/{nid}/peek")
+        def peek(nid: str, include_conditional: bool = False, intent: str | None = None):
+            return run("peek", id=nid, include_conditional=include_conditional, intent=intent)
+
+        @app.post(g + "/nodes/{nid}/expand")
+        async def expand(nid: str, req: Request):
+            return run("expand", id=nid, **(await req.json()))
 
         app.mount(PREFIX + "/gold-mcp", self.gold_mcp.streamable_http_app(
             streamable_http_path="/mcp", json_response=True, stateless_http=True, transport_security=_SEC))

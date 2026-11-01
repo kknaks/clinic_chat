@@ -14,6 +14,7 @@ from typing import Any
 from clinic_chat import prompts
 from clinic_chat.cases import case1, case2, case3
 from clinic_chat.clients.anthropic_client import ANSWER_EFFORT, ANSWER_THINKING
+from clinic_chat.config import truncation_markers_sha
 from clinic_chat.deps import Deps
 from clinic_chat.llm import CLI_PROVIDERS, PROVIDERS, auth
 from clinic_chat.llm.specs import describe
@@ -130,8 +131,11 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "tool_loop_max": s.case_tool_loop_max if provider == "sdk" else None,
                      "max_budget_usd": s.cli_max_budget_usd if provider == "claude-cli" else None,
                      "service_tier": desc.get("service_tier"), "timeout_sec": s.cli_timeout_sec if provider != "sdk" else None,
-                     # 도구 · 허브 결과 입력 상한(세 케이스 공통 하나) — CLI 판은 case1 · 2 에 못 넣어 셋 다 안 넣음
-                     "input_cap_bytes": s.tool_result_max_bytes if provider == "sdk" else None,
+                     # 도구 · 허브 결과 입력 상한 — 0 = 없음(null · SPEC-006 v2 §2-5) · CLI 판은 넣을 자리 없음
+                     "input_cap_bytes": (s.tool_result_max_bytes or None) if provider == "sdk" else None,
+                     "mcp_result_max_chars": s.mcp_result_max_chars, "truncation_markers_sha": truncation_markers_sha(),
+                     "walk_max_steps": s.walk_max_steps, "walk_byte_budget": s.walk_byte_budget,
+                     "walk_enough_min": s.walk_enough_min,
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
         "cases": cases, "judge_order": judge_order, "judge_seed": judge_seed, "judge_mode": "absolute",
         "cost": run_cost(cases, quality_cost),

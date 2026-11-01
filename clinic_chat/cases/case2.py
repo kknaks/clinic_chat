@@ -17,7 +17,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
               provider: str = "sdk") -> dict:
     if provider in CLI_PROVIDERS:  # CLI 가 허브 MCP 를 직접 붙여 도구 루프를 돎(앱은 이벤트만 받음)
         res = await cli.run(answer_spec(deps.settings, provider), system=prompts.system_for("case2"), prompt=question,
-                            timer=timer, on_text=on_text, mcp=McpAttach("hub", url=deps.settings.hub_gold_mcp_url),
+                            timer=timer, on_text=on_text, mcp=McpAttach("hub", url=deps.settings.hub_gold_mcp_url,
+                                                               intent_tools=frozenset(deps.intent_tools)),
                             collect_node_ids=True)
         return res
     if deps.anthropic is None:
@@ -36,7 +37,7 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             client=deps.anthropic, model=deps.settings.answer_model, system=prompts.system_for("case2"),
             question=question, tools=tools, call_tool=s.call, timer=timer, on_text=on_text,
             loop_max=deps.settings.case_tool_loop_max, collect_node_ids=True, on_tool_result=seen,
-            tool_result_max_bytes=deps.settings.tool_result_max_bytes,
+            tool_result_max_bytes=deps.settings.tool_result_max_bytes, intent_tools=deps.intent_tools,
         )
     res["trace"]["gold_build_hash"] = meta.get("gold_build_hash")
     return res

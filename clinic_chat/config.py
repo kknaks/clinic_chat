@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,6 +14,32 @@ from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# 도구 결과 잘림 표시(SPEC-006 §3-5) — provider 별 문자열. 시작 값 = 바이너리 문자열(Claude 4 + 변형 3 · Codex 후보 5)
+# · WP-0 확인 시험이 실제로 나온 문자열로 고정한다. 기록 settings.truncation_markers_sha
+TRUNCATION_MARKERS: dict[str, tuple[str, ...]] = {
+    "claude-cli": (
+        "Output too large (",
+        "). Full output saved to:",
+        "exceeds maximum allowed tokens. Output has been saved to",
+        "Preview (first",
+        "The full output could not all be saved to",
+        "later output was discarded because this session writes no files",
+        "Output exceeded the persist limit; only the first",
+    ),
+    "codex-cli": (
+        "Warning: truncated output (original token count:",
+        "<truncated omitted_approx_tokens=",
+        "omitted_due_to_size_limit (overage_bytes=",
+        " bytes omitted ...",
+        " tokens truncated",
+    ),
+    "sdk": ("…[잘림: 결과 ",),  # loop.cap_text 표시(TOOL_RESULT_MAX_BYTES > 0 일 때만)
+}
+
+
+def truncation_markers_sha() -> str:
+    return hashlib.sha256(json.dumps(TRUNCATION_MARKERS, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
 class Settings(BaseSettings):
@@ -37,8 +65,14 @@ class Settings(BaseSettings):
     case_tool_loop_max: int = 12
     jev_confidence_min: float = 0.3
     # 도구 · 허브 결과 입력 상한(세 케이스 공통 하나) — sdk 판에서 case1 · 2 도구 결과와 case3 허브 결과에 같이.
-    # CLI 판은 case1 · 2 에 넣을 수 없어(CLI 가 직접 받음) case3 도 안 넣음 — 기록 settings.input_cap_bytes
-    tool_result_max_bytes: int = 20_000
+    # 0 = 없음(SPEC-006 v2 §2-5 · 두 판 같게 — 허브 응답 전체를 모델에). 기록 settings.input_cap_bytes
+    tool_result_max_bytes: int = 0
+    # 도구 결과 전달 보장(§3-5) — 허브 MCP 도구 meta 와 같은 값 · Claude 자식 env MAX_MCP_OUTPUT_TOKENS · Codex 토큰 한도
+    mcp_result_max_chars: int = 200_000
+    # case3 Jev 걸음(§3-4) — 걸음 상한(0 = 걸음 없이 v1 경로만) · 펼친 바이트 예산 · 「충분」 문턱
+    walk_max_steps: int = 4
+    walk_byte_budget: int = 20_000
+    walk_enough_min: float = 0.5
     auto_quality: bool = False  # sdk 판 ① · ② 자동 여부(기본 끔 — 화면 「채점」 버튼). CLI 판은 늘 자동
 
     # CLI provider(실험 — 구독 인증 · cli-research) — 10-30 사용자 결정 값

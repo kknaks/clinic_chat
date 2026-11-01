@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from clinic_chat.cases.loop import node_ids
+from clinic_chat.cases.loop import mark_call, mark_result, node_ids, summarize_calls
 from clinic_chat.config import ROOT
 from clinic_chat.llm import auth
 from clinic_chat.llm.cli_process import StopRun, child_env, run_cli
@@ -55,6 +55,7 @@ class McpAttach:
     command: str | None = None  # stdio(채점용 로컬 원장 MCP)
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    intent_tools: frozenset[str] = frozenset()  # 스키마에 intent 가 있는 도구(기록 intent_passed — §3-6)
 
 
 def new_result(spec: CliSpec) -> dict:
@@ -247,7 +248,9 @@ class ClaudeIngest:
                 self._round_close(now)
             self.n_tool += 1
             st = self.timer.open_stage(f"tool:{short}#{self.n_tool}", at=now)
-            call = {"tool": short, "input": b.get("input"), "output_bytes": None, "ms": None, "is_error": None}
+            mine = bool(self.mcp) and name.startswith(f"{MCP_PREFIX}{self.mcp.name}__")
+            call = mark_call({"tool": short, "input": b.get("input"), "output_bytes": None, "ms": None, "is_error": None},
+                             intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine)
             self.tools[str(b.get("id"))] = (st, call)
             self.res["trace"]["tool_calls"].append(call)
 
@@ -261,8 +264,8 @@ class ClaudeIngest:
             st, call = hit
             self.timer.close_stage(st)
             text = _result_text(b.get("content"))
-            call.update({"output_bytes": len(text.encode("utf-8")) if text is not None else None,
-                         "ms": round(st["end_ms"] - st["start_ms"], 1), "is_error": bool(b.get("is_error"))})
+            mark_result(call, text, "claude-cli")
+            call.update({"ms": round(st["end_ms"] - st["start_ms"], 1), "is_error": bool(b.get("is_error"))})
             if self.collect and text:
                 try:
                     call["node_ids"] = node_ids(json.loads(text))
@@ -364,8 +367,9 @@ class CodexIngest:
     """`codex exec --json` 줄 → timer · 결과. 글자 델타가 없어 ttft 는 첫 agent_message 완료(메시지 단위)."""
 
     def __init__(self, res: dict, timer: CaseTimer, on_text: Callable[[str], None], boot: dict,
-                 collect_node_ids: bool) -> None:
+                 collect_node_ids: bool, mcp: McpAttach | None = None) -> None:
         self.res, self.timer, self.on_text, self.boot, self.collect = res, timer, on_text, boot, collect_node_ids
+        self.mcp = mcp
         self.cli = res["trace"]["cli"]
         self.turn: dict | None = None
         self.n_seg = 0
@@ -464,8 +468,10 @@ class CodexIngest:
                 self.n_tool += 1
                 name = str(item.get("tool") or item.get("name") or it)
                 st = self.timer.open_stage(f"tool:{name}#{self.n_tool}", at=now)
-                call = {"tool": name, "input": item.get("arguments"), "output_bytes": None, "ms": None,
-                        "is_error": None, "item_type": it}
+                mine = it == "mcp_tool_call" and bool(self.mcp) and item.get("server") in (None, self.mcp.name)
+                call = mark_call({"tool": name, "input": item.get("arguments"), "output_bytes": None, "ms": None,
+                                  "is_error": None, "item_type": it},
+                                 intent_tools=self.mcp.intent_tools if self.mcp else (), stray=not mine)
                 self.tools[iid] = (st, call)
                 self.res["trace"]["tool_calls"].append(call)
             st, call = self.tools[iid]
@@ -487,8 +493,8 @@ class CodexIngest:
                     text = json.dumps(result, ensure_ascii=False) if result is not None else None
                     data = result
                 status = str(item.get("status", ""))
-                call.update({"output_bytes": len(text.encode("utf-8")) if text else None,
-                             "ms": round(st["end_ms"] - st["start_ms"], 1),
+                mark_result(call, text or None, "codex-cli")
+                call.update({"ms": round(st["end_ms"] - st["start_ms"], 1),
                              "is_error": status in ("failed", "error", "declined") or bool(item.get("error"))})
                 if self.collect and data is not None:
                     call["node_ids"] = node_ids(data)
@@ -562,7 +568,7 @@ async def _run_locked(spec: CliSpec, res: dict, cli: dict, *, system: str, promp
             if schema:
                 sf, of = work / "schema.json", work / "out.json"
                 sf.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
-            ing = CodexIngest(res, timer, on_text, boot, collect_node_ids)
+            ing = CodexIngest(res, timer, on_text, boot, collect_node_ids, mcp)
             cmd = codex_args(spec, instr, str(work), prompt, mcp, sf, of)
             stdin_text = None
         proc = await run_cli(cmd, cwd=str(work), env=env, timeout_s=spec.timeout_s, on_line=ing.line,
@@ -585,6 +591,7 @@ async def _run_locked(spec: CliSpec, res: dict, cli: dict, *, system: str, promp
         timer.close_open()
         timer.finish()
         res["timing"] = _timing(timer, spec)
+        summarize_calls(res["trace"])
         shutil.rmtree(work, ignore_errors=True)
     return res
 

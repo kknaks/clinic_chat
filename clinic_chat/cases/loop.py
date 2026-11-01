@@ -8,13 +8,15 @@ Sonnet 스트림 → `tool_use` 면 MCP 호출(병렬 호출은 모아 한 user 
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from clinic_chat.clients.anthropic_client import answer_params, block_to_param, stream_once, usage_dict
 from clinic_chat.clients.hub_mcp import ToolResult
+from clinic_chat.config import TRUNCATION_MARKERS
 from clinic_chat.pricing import cost_usd
 from clinic_chat.timing import CaseTimer
 
@@ -41,10 +43,46 @@ def node_ids(data: Any) -> list[str]:
     return list(seen)
 
 
+VALID_INTENTS = frozenset(f"I-{i:02d}" for i in range(1, 13))
+
+
+def mark_call(call: dict, *, intent_tools: Iterable[str], stray: bool) -> dict:
+    """호출 열 때 아는 칸(SPEC-006 §3-6 · §4-2) — `intent_passed`(스키마에 intent 있는 도구만 · I-01~I-12 일 때만 true)
+    · `stray`(허브 MCP 밖 도구)."""
+    inp = call.get("input")
+    if call["tool"] in set(intent_tools) and not stray:
+        call["intent_passed"] = isinstance(inp, dict) and inp.get("intent") in VALID_INTENTS
+    else:
+        call["intent_passed"] = None
+    call["stray"] = stray
+    return call
+
+
+def mark_result(call: dict, text: str | None, provider: str) -> dict:
+    """도구 결과를 받은 뒤 칸(§3-5) — `delivered_bytes`(모델이 받은 바이트 · `output_bytes` 같은 값 · 호환)
+    · `truncated`(provider 잘림 표시가 결과 글에 있음)."""
+    call["output_bytes"] = len(text.encode("utf-8")) if text is not None else None
+    call["delivered_bytes"] = call["output_bytes"]
+    call["truncated"] = bool(text) and any(m in text for m in TRUNCATION_MARKERS.get(provider, ()))
+    return call
+
+
+def summarize_calls(trace: dict) -> dict:
+    """판 단위 칸 — `intent_ratio` · `intent_values{}`(넘긴 값 그대로 · 틀린 값 포함) · `stray_tools`."""
+    calls = trace.get("tool_calls") or []
+    elig = [c for c in calls if c.get("intent_passed") is not None]
+    trace["intent_ratio"] = round(sum(1 for c in elig if c["intent_passed"]) / len(elig), 4) if elig else None
+    vals = collections.Counter(str(c["input"]["intent"]) for c in elig
+                               if isinstance(c.get("input"), dict) and "intent" in c["input"])
+    trace["intent_values"] = dict(sorted(vals.items()))
+    trace["stray_tools"] = sum(1 for c in calls if c.get("stray"))
+    return trace
+
+
 def cap_text(text: str, max_bytes: int) -> tuple[str, bool]:
-    """도구 결과가 크면 앞부분만 + 잘림 표시(바퀴마다 다시 보내는 입력 크기 상한 — SPEC-005 §5-12 크기 한도 20,000)."""
+    """도구 결과가 크면 앞부분만 + 잘림 표시(SDK 판 입력 상한 · 0 = 없음 — SPEC-006 v2 §2-5)."""
     b = text.encode("utf-8")
-    if len(b) <= max_bytes:
+    if max_bytes <= 0 or len(b) <= max_bytes:
         return text, False
     head = b[:max_bytes].decode("utf-8", errors="ignore")
     return (head + f"\n…[잘림: 결과 {len(b):,}바이트 중 앞 {max_bytes:,}바이트만 — 원장은 raw_get 의 path · offset · "
@@ -69,7 +107,8 @@ async def run_tool_loop(
     loop_max: int,
     collect_node_ids: bool = False,
     on_tool_result: Callable[[str, ToolResult], None] | None = None,
-    tool_result_max_bytes: int = 20_000,
+    tool_result_max_bytes: int = 0,
+    intent_tools: Iterable[str] = (),
 ) -> dict:
     res = new_case_result()
     messages: list[dict] = [{"role": "user", "content": question}]
@@ -121,11 +160,12 @@ async def run_tool_loop(
         done = await asyncio.gather(*(one(b, k) for b, k in zip(uses, ks)))
         results = []
         for b, r in done:
-            call = {"tool": b.name, "input": b.input, "output_bytes": len(r.text.encode("utf-8")),
-                    "ms": round(r.ms, 1), "is_error": r.is_error}
+            call = mark_call({"tool": b.name, "input": b.input, "ms": round(r.ms, 1), "is_error": r.is_error},
+                             intent_tools=intent_tools, stray=False)  # SDK 판은 준 도구만 부를 수 있음
             if collect_node_ids:
                 call["node_ids"] = node_ids(r.data) if r.data is not None else []
             text, cut = cap_text(r.text or "(빈 결과)", tool_result_max_bytes)
+            mark_result(call, text, "sdk")
             if cut:
                 call["truncated_to"] = tool_result_max_bytes
             tool_calls.append(call)
@@ -136,7 +176,7 @@ async def run_tool_loop(
     timer.finish()
     res["timing"] = timer.as_dict()
     res["tokens"] = tokens
-    res["trace"] = {"tool_calls": tool_calls}
+    res["trace"] = summarize_calls({"tool_calls": tool_calls})
     res["cost"] = case_cost(timer.stages)
     return res
 
