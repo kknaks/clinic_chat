@@ -57,7 +57,7 @@ TREATS = {"concern:P2": ["unit_procedure:U5-001"], "concern:P2-3": ["unit_proced
           "concern:P9": [f"unit_procedure:U5-50{k}" for k in range(1, 6)]}
 SECTIONS = ["overview", "method", "recovery", "aftercare", "timeline", "emergency", "disclosure", "safety.side_effects",
             "safety.complications", "safety.pih", "checks", "site_caution", "dose", "products", "evidence", "ops",
-            "market", "all"]  # SPEC-005 §4-3 이름(10-30 허브 짧은 카드 판)
+            "market", "safety.management", "all"]  # SPEC-005 §4-3 이름(10-30 허브 짧은 카드 판)
 
 
 class GoldError(ValueError):

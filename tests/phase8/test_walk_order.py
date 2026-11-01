@@ -43,3 +43,11 @@ def test_kinds_and_section_max():
     assert [s.first_section_max(i) for i in ("I-01", "I-02", "I-03", "I-04", "I-05", "I-06")] == [1, 2, 2, 2, 2, 1]
     _, sha = case3.order_table(s)
     assert len(sha) == 12
+
+
+def test_fixed_sections_by_intent():
+    """걷기 고침 2 ③ · SPEC-006 0.3.6 — I-04 에 safety.management(SPEC-005 0.3.5 G20 이 관리 · 예방을 옮김)."""
+    s = Settings()
+    assert s.fixed_sections("I-04") == ["safety.side_effects", "safety.complications", "safety.management"]
+    assert s.fixed_sections("I-02") == ["overview", "method"] and s.fixed_sections("I-06") == []
+    assert s.required_sections() == ["checks", "site_caution"] and s.walk_enough_min == 0.8

@@ -51,7 +51,7 @@ INFO_SECTIONS = {
     "overview": "시술 개요(무엇인지)", "method": "시술 방법 · 원리", "recovery": "회복 · 다운타임 · 효과 지속",
     "aftercare": "시술 후 관리 · 주의(사우나 · 운동 등)", "timeline": "시술 후 경과 날짜별", "emergency": "바로 병원에 와야 하는 증상",
     "disclosure": "필수 고지 사항", "safety.side_effects": "부작용", "safety.complications": "합병증 · 드문 위험",
-    "safety.pih": "색소 침착(PIH) 위험", "checks": "해도 되는지 확인할 조건(임신 · 질환 · 복용약 등)",
+    "safety.pih": "색소 침착(PIH) 위험", "safety.management": "합병증 · 부작용 관리 · 예방", "checks": "해도 되는지 확인할 조건(임신 · 질환 · 복용약 등)",
     "site_caution": "부위별 주의", "dose": "용량 · 회차 · 간격", "products": "쓰는 제품 · 브랜드", "evidence": "근거 · 연구",
     "ops": "소요 시간 · 마취", "market": "시장 정보",
 }

@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     walk_required_max: int = 3  # 필수 묶음을 받을 시술 수(모은 줄 rank 순 위 · 시작 시술은 따로)
     # 의도별 고정 섹션(고침 2 ③) — 첫 시술 노드에서 Jev 고름에 더함 · 「의도:섹션+섹션,…」
     walk_fixed_sections_by_intent: str = ("I-02:overview+method,I-03:aftercare+recovery,"
-                                          "I-04:safety.side_effects+safety.complications,I-05:recovery+timeline,"
+                                          "I-04:safety.side_effects+safety.complications+safety.management,I-05:recovery+timeline,"
                                           "I-07:evidence,I-08:evidence")
     # v2.2~v2.4 걸음 규칙(§3-4-1 · §3-4-6) — 걸음당 섹션 · 이웃 · 걸음 1 섹션 상한(의도별 덮어씀) · ⑤ cut 줄 원문 예산 · 원문 줄 수
     walk_sections_per_step: int = 2
