@@ -16,6 +16,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
+from clinic_chat.config import META_MAX_CHARS
 from clinic_chat.quality.raw_tools import RawStore, RawToolError
 from tests.fake_hub import gold
 
@@ -25,6 +26,7 @@ GOLD_MCP_URL = BASE + PREFIX + "/gold-mcp/mcp"
 RAW_MCP_URL = BASE + PREFIX + "/raw-mcp/mcp"
 REST_URL = BASE + PREFIX + "/gold"
 _SEC = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+META = {META_MAX_CHARS: 200_000}  # SPEC-005 §5-0-2 M-1(도구 결과 크기 meta)
 
 
 def _csv(v: str | None) -> list[str] | None:
@@ -68,7 +70,7 @@ class FakeHub:
             wrapped.__name__ = name
             wrapped.__signature__ = __import__("inspect").signature(core)
             wrapped.__annotations__ = {**core.__annotations__, "return": dict[str, Any]}
-            m.add_tool(wrapped, name=name, description=f"fixture {name}")
+            m.add_tool(wrapped, name=name, description=f"fixture {name}", meta=META)
 
         for fn in gold.TOOLS.values():
             reg(fn)
@@ -78,16 +80,16 @@ class FakeHub:
         m = MCPServer("procedure-hub-raw")
         hub = self
 
-        @m.tool(name="raw_list", description="원장 파일 목록 · 키 구조")
+        @m.tool(name="raw_list", description="원장 파일 목록 · 키 구조", meta=META)
         def raw_list(file: str | None = None, depth: int = 2) -> dict[str, Any]:
             return hub._mcp_run("raw-mcp", "raw_list", {"file": file, "depth": depth}, hub.store.raw_list)
 
-        @m.tool(name="raw_get", description="경로 원문 값")
+        @m.tool(name="raw_get", description="경로 원문 값", meta=META)
         def raw_get(path: str, offset: int = 0, max_bytes: int | None = None) -> dict[str, Any]:
             return hub._mcp_run("raw-mcp", "raw_get", {"path": path, "offset": offset, "max_bytes": max_bytes},
                                 hub.store.raw_get)
 
-        @m.tool(name="raw_search", description="원장 검색(공백 · 대소문자만)")
+        @m.tool(name="raw_search", description="원장 검색(공백 · 대소문자만)", meta=META)
         def raw_search(query: str, files: list[str] | None = None, limit: int = 20,
                        snippet_chars: int = 80) -> dict[str, Any]:
             return hub._mcp_run("raw-mcp", "raw_search", {"query": query, "files": files, "limit": limit,

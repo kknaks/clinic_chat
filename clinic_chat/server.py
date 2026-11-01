@@ -24,7 +24,7 @@ from clinic_chat import batch, runner
 from clinic_chat.clients import anthropic_client, jev_client
 from clinic_chat.clients.hub_mcp import HubMCP
 from clinic_chat.clients.hub_rest import HubRest
-from clinic_chat.config import ROOT, Settings, get_settings
+from clinic_chat.config import META_MAX_CHARS, ROOT, Settings, get_settings
 from clinic_chat.deps import NO_KEY, Deps
 from clinic_chat.llm import PROVIDERS, auth, cli
 from clinic_chat.llm.specs import describe
@@ -111,11 +111,14 @@ async def startup_check(deps: Deps) -> dict:
         deps.startup["gold_build_hash"] = (h.get("build") or {}).get("build_hash")
     except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
         info["hub_health"] = f"연결 안 됨: {type(e).__name__}"
+    metas: dict[str, dict] = {}
     for name, m in (("gold_mcp", deps.gold_mcp), ("raw_mcp", deps.raw_mcp)):
         try:
             async with m.session() as sess:
                 tools = await sess.list_tools()
                 info[name] = len(tools)
+                metas.update({f"{name}:{k}": v for k, v in (await sess.list_tools_meta()).items()})
+                deps.startup["gold_tools" if name == "gold_mcp" else "raw_tools"] = [t["name"] for t in tools]
                 if name == "gold_mcp":
                     deps.section_tools = {t["name"] for t in tools
                                           if "sections" in (t["input_schema"].get("properties") or {})}
@@ -125,6 +128,11 @@ async def startup_check(deps: Deps) -> dict:
                     info["intent_tools"] = sorted(deps.intent_tools)
         except Exception as e:  # noqa: BLE001 — 기동 확인 줄에 사유만
             info[name] = f"연결 안 됨: {type(e).__name__}"
+    if metas:  # 허브 도구 결과 크기 meta(SPEC-005 §5-0-2 M-1) — 없으면 경고만(실험은 막지 않음)
+        want = s.mcp_result_max_chars
+        ok = sum(1 for v in metas.values() if (v or {}).get(META_MAX_CHARS) == want)
+        info["tool_meta"] = f"도구 meta {ok}/{len(metas)}" + ("" if ok == len(metas) else
+                                                            f" ⚠ {META_MAX_CHARS} ≠ {want} 인 도구 있음(CLI 잘림 가능)")
     try:
         deps.vocab = await deps.hub_rest.vocab()
         v = deps.vocab.get("vocab", deps.vocab)

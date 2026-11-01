@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from clinic_chat.cases.loop import VALID_INTENTS, cap_text, mark_call, mark_result, summarize_calls
 from clinic_chat.config import TRUNCATION_MARKERS, truncation_markers_sha
 from clinic_chat.llm import cli
@@ -97,3 +99,40 @@ def test_markers_constant():
     assert len(TRUNCATION_MARKERS["claude-cli"]) == 7 and len(TRUNCATION_MARKERS["codex-cli"]) == 5
     assert len(truncation_markers_sha()) == 16
     assert json.dumps(TRUNCATION_MARKERS, ensure_ascii=False)  # 기록 가능한 꼴
+
+
+@pytest.mark.parametrize("provider,marker", [(p, m) for p in ("claude-cli", "codex-cli") for m in TRUNCATION_MARKERS[p]])
+def test_each_marker_truncated(provider, marker):
+    assert mark_result({"tool": "x"}, '{"a": 1}' + marker + "…", provider)["truncated"] is True
+    assert mark_result({"tool": "x"}, '{"a": 1}', provider)["truncated"] is False
+
+
+async def test_delivery_flags_and_env(fake, monkeypatch):  # noqa: F811
+    """WP-1 — Claude: env MAX_MCP_OUTPUT_TOKENS(키는 지움) · --disallowedTools / Codex: 토큰 한도 전체 + 도구별."""
+    lines, calls = fake
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-should-be-scrubbed")
+    lines(CLAUDE)
+    sp = spec("claude")
+    sp.result_max = 200_000
+    await cli.run(sp, system="s", prompt="q", timer=timer(), on_text=lambda t: None, mcp=HUB)
+    c = next(x for x in calls() if "-p" in x["argv"])
+    a = c["argv"]
+    assert a[a.index("--disallowedTools") + 1] == "Bash,Read,Grep,Glob,Edit,Write"
+    assert "MAX_MCP_OUTPUT_TOKENS" in c["env_keys"] and "ANTHROPIC_API_KEY" not in c["env_keys"]
+    lines(CODEX)
+    sp = spec("codex")
+    sp.result_max = 200_000
+    hub = McpAttach("hub", url="http://hub.test/gold", tools=("procedure_card", "check_conditions"))
+    await cli.run(sp, system="s", prompt="q", timer=timer(), on_text=lambda t: None, mcp=hub)
+    joined = " ".join(next(x for x in calls() if "exec" in x["argv"])["argv"])
+    for kv in ("tool_output_token_limit=200000", "mcp_servers.hub.tools.procedure_card.output_token_limit=200000",
+               "mcp_servers.hub.tools.check_conditions.output_token_limit=200000"):
+        assert kv in joined
+
+
+def test_specs_carry_result_max(tmp_path):
+    from clinic_chat.llm.specs import answer_spec, judge_spec
+    from tests.conftest import make_settings
+    s = make_settings(tmp_path, judge_provider="claude-cli")
+    assert answer_spec(s, "claude-cli").result_max == answer_spec(s, "codex-cli").result_max == 200_000
+    assert judge_spec(s, "judge").result_max == 200_000

@@ -38,6 +38,10 @@ TRUNCATION_MARKERS: dict[str, tuple[str, ...]] = {
 }
 
 
+# 허브 MCP 도구 결과 크기 meta 키(SPEC-005 §5-0-2 M-1 — Claude CLI 저장 문턱을 그 도구만 올림)
+META_MAX_CHARS = "anthropic/maxResultSizeChars"
+
+
 def truncation_markers_sha() -> str:
     return hashlib.sha256(json.dumps(TRUNCATION_MARKERS, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 

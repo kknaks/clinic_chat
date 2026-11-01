@@ -9,10 +9,10 @@ from clinic_chat.llm.cli import CliSpec
 def answer_spec(s: Settings, provider: str) -> CliSpec:
     if provider == "claude-cli":
         return CliSpec(provider, s.claude_cli_bin, s.claude_cli_model, s.claude_cli_effort, s.cli_timeout_sec,
-                       max_budget_usd=s.cli_max_budget_usd)
+                       max_budget_usd=s.cli_max_budget_usd, result_max=s.mcp_result_max_chars)
     if provider == "codex-cli":
         return CliSpec(provider, s.codex_cli_bin, s.codex_cli_model, s.codex_cli_effort, s.cli_timeout_sec,
-                       service_tier=s.codex_service_tier or None)
+                       service_tier=s.codex_service_tier or None, result_max=s.mcp_result_max_chars)
     raise ValueError(f"CLI provider 아님: {provider}")
 
 
@@ -22,7 +22,8 @@ def judge_spec(s: Settings, role: str) -> CliSpec:
         raise ValueError(f"채점 provider 는 claude-cli 만: {s.judge_provider}")
     model = s.extract_model if role == "extract" else s.judge_model
     effort = s.extract_cli_effort if role == "extract" else s.judge_cli_effort
-    return CliSpec("claude-cli", s.claude_cli_bin, model, effort, s.cli_timeout_sec, max_budget_usd=s.judge_max_budget_usd)
+    return CliSpec("claude-cli", s.claude_cli_bin, model, effort, s.cli_timeout_sec, max_budget_usd=s.judge_max_budget_usd,
+                   result_max=s.mcp_result_max_chars)
 
 
 def describe(s: Settings, provider: str) -> dict:

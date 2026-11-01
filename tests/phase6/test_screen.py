@@ -47,6 +47,7 @@ def ask(client, q="소프웨이브 어떻게 해요?"):
 def test_sse_contract_and_records(client):
     st = client.get("/api/status").json()
     assert st["gold_mcp"] == 11 and st["raw_mcp"] == 3 and st["cases"] == {"case1": None, "case2": None, "case3": None}
+    assert st["tool_meta"] == "도구 meta 14/14"  # 골드 11(+peek · expand) + 원장 3 — SPEC-005 §5-0-2 M-1
     rid, evs = ask(client)
     kinds = [e for e, _ in evs]
     assert kinds[-1] == "run_done" and kinds.count("case_done") == 3 and "cost" in kinds

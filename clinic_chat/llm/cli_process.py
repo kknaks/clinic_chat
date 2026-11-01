@@ -23,9 +23,12 @@ SCRUB_ENV = (
 )
 
 
-def child_env(extra: dict[str, str] | None = None, base: dict[str, str] | None = None) -> dict[str, str]:
+def child_env(extra: dict[str, str] | None = None, base: dict[str, str] | None = None,
+              mcp_output_tokens: int | None = None) -> dict[str, str]:
     env = {k: v for k, v in (os.environ if base is None else base).items() if k not in SCRUB_ENV}
     env.update(extra or {})
+    if mcp_output_tokens:  # Claude MCP 도구 결과 토큰 상한(기본 25,000 → 설정값 · SPEC-006 v2 §3-5)
+        env["MAX_MCP_OUTPUT_TOKENS"] = str(mcp_output_tokens)
     for k in SCRUB_ENV:  # extra 로도 못 넣음
         env.pop(k, None)
     return env

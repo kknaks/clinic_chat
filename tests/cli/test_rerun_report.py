@@ -35,3 +35,27 @@ def test_rerun_report():
     assert "## 3. 나빠진 문항" in md and "합 1건" in md
     assert data["before_gold"] == "e9d30ace08c65bb8" and data["after_gold"] == "d3a1abd52f70afe9"
     assert "고칠" not in md.split("## 1.")[1]  # 결론 · 고칠 안 없음
+
+
+def test_rerun_report_delivery_columns():
+    """WORK-006 — intent 전달 비율 · 잘린 호출(마커) · 격리 밖 · case3 걸음(전 v1 → 후 걸음)."""
+    before = {"Q001": rec("Q001", (OK, OK, OK), "d3a1abd52f70afe9")}
+    before["Q001"]["cases"]["case2"]["trace"]["tool_calls"] = [
+        {"tool": "procedure_card", "input": {"id": "x"}, "output_bytes": 1774},
+        {"tool": "Bash", "input": {}, "output_bytes": 68}]
+    before["Q001"]["cases"]["case3"]["trace"]["hub"] = {"tool": "procedure_card", "input": {"intent": "I-02"},
+                                                        "result_bytes": 46000}
+    after = {"Q001": rec("Q001", (OK, OK, OK), "f00dfeedf00dfeed", "rerun-v4")}
+    after["Q001"]["cases"]["case2"]["trace"]["tool_calls"] = [
+        {"tool": "procedure_card", "input": {"id": "x", "intent": "I-02"}, "delivered_bytes": 88000, "truncated": False,
+         "intent_passed": True, "stray": False}]
+    after["Q001"]["cases"]["case3"]["trace"] = {"walk": {"intent": "I-02", "steps_n": 2, "bytes_total": 9000,
+                                                         "fallback": False, "jev_calls": 3, "jev_ms_total": 900,
+                                                         "steps": [{"peek_bytes": 1500}, {"peek_bytes": 1500}]}}
+    md, data = rerun_report.build(["Q001"], before, after, before, "rerun-v4", "d3a1abd5")
+    d2, d3 = data["delivery"]["case2"], data["delivery"]["case3"]
+    assert (d2["before"]["intent_passed"], d2["before"]["intent_calls"], d2["before"]["stray"]) == (0, 1, 1)
+    assert (d2["after"]["intent_ratio"], d2["after"]["stray"]) == (1.0, 0)
+    assert d3["before"]["walk"] is None and d3["after"]["walk"]["steps_median"] == 2
+    assert data["summary"]["case3"]["after"]["hub_bytes"] == 12000  # bytes_total + peek 합
+    assert "## 2-1. intent 전달" in md and "0.0% (0/1) → 100.0% (1/1)" in md

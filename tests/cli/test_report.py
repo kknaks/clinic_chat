@@ -37,3 +37,15 @@ def test_error_kinds_grouped_with_followup():
     md = report.build(runs, [])
     assert "case3 I-09 계열 id → check_conditions(허브 400)** — 2건 · 문항 Q008(case3), Q009(case3)" in md
     assert "다음(제안):" not in md  # 모아 두기만(사용자 결정)
+
+
+def test_report_delivery_section():
+    c2 = case(OK)
+    c2["trace"] = {"tool_calls": [{"tool": "recommend", "input": {"intent": "none"}, "delivered_bytes": 10,
+                                   "intent_passed": False, "truncated": True, "stray": False},
+                                  {"tool": "Bash", "input": {}, "stray": True}]}
+    runs = [{"run_id": "r1", "question_no": "Q001", "question": "q", "provider": "claude-cli", "versions": {},
+             "cases": {"case1": case(OK), "case2": c2, "case3": case(OK)}}]
+    md = report.build(runs, [])
+    assert "## 2-1. 도구 전달 · intent · 격리" in md
+    assert "| case2 골드 MCP | 0.0% (0/1) | 1 | 1 | 10 |" in md

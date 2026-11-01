@@ -64,6 +64,11 @@ class HubSession:
             for t in res.tools
         ]
 
+    async def list_tools_meta(self) -> dict[str, dict]:
+        """도구 이름 → `_meta`(SPEC-005 §5-0-2 M-1 · 기동 확인 「도구 meta」)."""
+        res = await self._s.list_tools()
+        return {t.name: dict(t.meta or {}) for t in res.tools}
+
     async def call(self, name: str, arguments: dict) -> ToolResult:
         t = time.perf_counter()
         try:

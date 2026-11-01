@@ -32,6 +32,8 @@ from clinic_chat.timing import CaseTimer
 
 MCP_PREFIX = "mcp__"
 STRUCTURED_TOOL = "StructuredOutput"
+# 내장 도구 끔(W-6 — rerun-v3 의 bash 10건 · `--tools ""` 와 같이)
+DISALLOWED_TOOLS = "Bash,Read,Grep,Glob,Edit,Write"
 RATE_LIMIT_TEXT = re.compile(r"usage limit|rate limit|rate_limit|too many requests|quota", re.IGNORECASE)
 CACHE_DIR = ROOT / ".cache"  # .gitignore
 CODEX_AUTH = Path.home() / ".codex" / "auth.json"  # 사용자 Codex 로그인(링크만 — 내용은 읽지 않음)
@@ -46,6 +48,7 @@ class CliSpec:
     timeout_s: float
     max_budget_usd: float | None = None  # Claude 만
     service_tier: str | None = None  # Codex 만
+    result_max: int | None = None  # 도구 결과 한도(§3-5) — Claude env MAX_MCP_OUTPUT_TOKENS · Codex 토큰 한도
 
 
 @dataclass
@@ -56,6 +59,7 @@ class McpAttach:
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     intent_tools: frozenset[str] = frozenset()  # 스키마에 intent 가 있는 도구(기록 intent_passed — §3-6)
+    tools: tuple[str, ...] = ()  # 서버 도구 이름(Codex 도구별 output_token_limit)
 
 
 def new_result(spec: CliSpec) -> dict:
@@ -69,7 +73,8 @@ def new_result(spec: CliSpec) -> dict:
 def claude_args(spec: CliSpec, system: str, mcp: McpAttach | None, schema: dict | None) -> list[str]:
     """프롬프트는 stdin 으로(`--allowedTools` · `--tools` 가 가변 인자라 뒤 위치 인자를 삼킴 — 10-30 실물 확인)."""
     a = [spec.bin, "-p", "--model", spec.model, "--effort", spec.effort, "--system-prompt", system,
-         "--setting-sources", "", "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+         "--setting-sources", "", "--tools", "", "--disallowedTools", DISALLOWED_TOOLS,
+         "--disable-slash-commands", "--strict-mcp-config",
          "--no-session-persistence", "--permission-mode", "bypassPermissions",
          "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
     if spec.max_budget_usd:
@@ -354,6 +359,10 @@ def codex_args(spec: CliSpec, instructions_file: Path, cwd: str, prompt: str, mc
     # tools.view_image 는 0.166 에서 「알 수 없는 설정」 경고(10-30 실물) — 빼고 실물 JSONL 의 item 종류로 확인
     if spec.service_tier:
         a += ["-c", f'service_tier="{spec.service_tier}"']
+    if spec.result_max:  # 도구 결과 토큰 한도(§3-5) — 전체 + 도구별
+        a += ["-c", f"tool_output_token_limit={spec.result_max}"]
+        for t in (mcp.tools if mcp else ()):
+            a += ["-c", f"mcp_servers.{mcp.name}.tools.{t}.output_token_limit={spec.result_max}"]
     if mcp and mcp.url:
         a += ["-c", f"mcp_servers.{mcp.name}.url={json.dumps(mcp.url)}", "-c", f"mcp_servers.{mcp.name}.required=true",
               "-c", f'mcp_servers.{mcp.name}.default_tools_approval_mode="approve"',
@@ -554,7 +563,7 @@ async def _run_locked(spec: CliSpec, res: dict, cli: dict, *, system: str, promp
     boot = timer.open_stage("cli_boot")
     t_spawn = time.perf_counter()
     try:
-        env = child_env()
+        env = child_env(mcp_output_tokens=spec.result_max if spec.provider == "claude-cli" else None)
         if spec.provider == "claude-cli":
             ing: Any = ClaudeIngest(res, timer, on_text, boot, collect_node_ids, mcp)
             cmd = claude_args(spec, system, mcp, schema)

@@ -19,7 +19,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
               provider: str = "sdk") -> dict:
     if provider in CLI_PROVIDERS:  # CLI 가 허브 MCP 를 직접 붙여 도구 루프를 돎(앱은 이벤트만 받음)
         res = await cli.run(answer_spec(deps.settings, provider), system=prompts.system_for("case1"), prompt=question,
-                            timer=timer, on_text=on_text, mcp=McpAttach("hub", url=deps.settings.hub_raw_mcp_url),
+                            timer=timer, on_text=on_text, mcp=McpAttach("hub", url=deps.settings.hub_raw_mcp_url,
+                                                               tools=tuple(deps.startup.get("raw_tools") or ())),
                             collect_node_ids=False)
         res["trace"]["context"] = res["trace"]["tool_calls"]
         return res
