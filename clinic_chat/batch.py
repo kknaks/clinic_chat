@@ -185,6 +185,8 @@ async def run_batch(plan: dict, *, settings: Settings, bstore: BatchStore, execu
     gap, retries, waits, limit_wait = settings.batch_gap_sec, settings.batch_retries, backoffs(settings), \
         settings.batch_limit_wait_sec
     plan["state"] = "running"
+    plan["settings"] = {"batch_gap_sec": gap, "batch_retries": retries, "batch_retry_backoff_sec": waits,
+                        "batch_limit_wait_sec": limit_wait, "cases": plan.get("cases")}  # 배치 조건(기록)
     bstore.save(plan)
     first = True
     last_report = now()
