@@ -99,5 +99,5 @@ def test_two_batches_case3_only_skipped_columns():
     r = rec("Q001", (OK, OK, OK), "g", "v5a")
     for c in ("case1", "case2"):
         r["cases"][c] = {"skipped": True, "answer": "", "trace": {}, "timing": {}}
-    md, data = rerun_report.build_two(["Q001"], {}, {"a": {"Q001": r}, "b": {"Q001": r}}, "전")
+    _md, data = rerun_report.build_two(["Q001"], {}, {"a": {"Q001": r}, "b": {"Q001": r}}, "전")
     assert list(data["rates"]) == ["case3"] and data["rates"]["case3"]["accuracy"]["delta_case1_avg"] is None
