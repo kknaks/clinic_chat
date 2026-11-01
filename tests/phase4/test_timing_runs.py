@@ -110,6 +110,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
                                "walk_required_max": 3,
                                "walk_fixed_sections_by_intent": deps.settings.walk_fixed_sections_by_intent,
                                "walk_safety_budget": 8000, "walk_safety_sections": "safety.side_effects,safety.complications",
+                               "walk_safety_checks": True,
                                "walk_jev_sections": False, "walk_base_bundle": True, "walk_fill": True,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:

@@ -471,7 +471,8 @@ NO_SECTION = "없음"
 START_KINDS = ("family", "concern", "site")  # ① 후보가 비면 시작 노드를 고르는 vocab 종류(Q-4)
 SEC = "section:"
 NO_WALK_INTENTS = ("I-12",)
-PROC_NODE_KINDS = ("unit_procedure", "product", "family")  # 걷기 고침 2 — 필수 묶음 · 고정 섹션을 받는 「시술」 노드  # 걸음 없음(허브 도구 없음 · v1 과 같게 「가격 정보 없음」 · §3-4-6 표)
+PROC_NODE_KINDS = ("unit_procedure", "product", "family")
+CHECK_EDGE_KINDS = ("requires_check", "requires_check_unit")  # 고침 4 A — 시술 → 확인 조건 이웃  # 걷기 고침 2 — 필수 묶음 · 고정 섹션을 받는 「시술」 노드  # 걸음 없음(허브 도구 없음 · v1 과 같게 「가격 정보 없음」 · §3-4-6 표)
 ORDER_FILE = Path(__file__).with_name("walk_order.json")
 
 
@@ -925,6 +926,63 @@ class Walker:
             got = await self.expand(k, n, holder, self.peeks[n][0], [], [], plan, stage=f"hub_req#{i}")
             self._note_required(n, holder, got)
 
+    async def safety_checks(self) -> None:
+        """고침 4 A(코디 11-01) — 안전 예산 안: 답에 나올 시술(필수 묶음을 받은 시술 · rank 순)의 requires_check ·
+        requires_check_unit 이웃 확인 조건 노드 자신의 checks 줄(K8 — 시술 checks section 엔 없음). 이웃 목록(앞 4 밖은
+        expand(neighbor_kinds) · 예산 밖) → 질문이 말한 확인 조건(① resolve 후보) 먼저 · 그다음 시술 rank → 허브 순(금기류 · 등급) ·
+        peek(예산 밖) + expand(checks · 1쪽) · 넘으면 그 노드만 자르고 다음. 기록 walk.safety_budget.checks."""
+        sb = self.walk["safety_budget"]
+        info = sb.setdefault("checks", {"conditions": [], "list_calls": 0, "taken": [], "cut": []})
+        conds: list[str] = []
+        for n in self.walk["required"]["nodes"]:
+            pk = (self.peeks.get(n) or ({},))[0]
+            for kd in CHECK_EDGE_KINDS:
+                grp = (pk.get("neighbors_by_kind") or {}).get(kd) or {}
+                ids = [it.get("id") for it in grp.get("items") or [] if it.get("id")]
+                if (grp.get("n") or 0) > len(ids):
+                    try:
+                        ex, _eb, _ms = await _hub(self.deps, self.timer, f"hub_list#chk-{info['list_calls'] + 1}", self.walk,
+                                                  lambda n_=n, k_=kd: self.deps.hub_rest.expand(n_, neighbor_kinds=[k_]))
+                        info["list_calls"] += 1
+                        ids = [r.get("id") for r in ex.get("neighbors") or [] if isinstance(r, dict) and r.get("id")] + \
+                            list(ex.get("neighbors_more_ids") or [])
+                    except Exception as e:  # noqa: BLE001 — 목록 실패면 앞 4 로(기록)
+                        info.setdefault("errors", []).append(f"list {n} {kd}: {type(e).__name__}"[:200])
+                for c in ids:
+                    if c not in conds:
+                        conds.append(c)
+                        self.edge_of.setdefault(c, kd)
+        said = set((self.walk.get("resolve") or {}).get("candidates") or [])
+        conds = [c for c in conds if c in said] + [c for c in conds if c not in said]
+        info["conditions"] = conds
+        j = 0
+        for c in conds:
+            if self.left_of("safety") <= 0:
+                info["cut"] += [x for x in conds[conds.index(c):] if x not in info["taken"]]
+                break
+            try:
+                if c not in self.peeks:
+                    pk, pb, pms = await _hub(self.deps, self.timer, f"hub_peek#chk-{c.split(':')[-1]}", self.walk,
+                                             lambda c_=c: self.deps.hub_rest.peek(c_))
+                    self.peeks[c] = (pk, pb, pms)
+                pk = self.peeks[c][0]
+            except Exception as e:  # noqa: BLE001 — 그 확인 조건만 건너뜀(기록)
+                info.setdefault("errors", []).append(f"peek {c}: {type(e).__name__}"[:200])
+                continue
+            plan, filt = self.plan_extra(c, pk, [("checks", "safety")])
+            if filt:
+                info["cut"].append(c)
+                self._note_cut(c, [("checks", "safety")])
+                continue
+            if not plan:
+                continue
+            j += 1
+            holder: dict[str, Any] = {}
+            got = await self.expand(0, c, holder, pk, [], [], plan, stage=f"hub_safe#{j}")
+            if got:
+                info["taken"].append(c)
+            self._note_required(c, holder, got)
+
     @property
     def left(self) -> int:
         return self.s.walk_byte_budget - self.walk["bytes_total"]
@@ -1331,6 +1389,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                 return res
         else:
             await wk.required_end()  # 고침 2 ① 필수 묶음(답에 나올 시술 위 3)
+            if s.walk_safety_budget > 0 and s.walk_safety_checks:
+                await wk.safety_checks()  # 고침 4 A — 확인 조건 이웃 checks 줄(안전 예산)
             if s.walk_fill:
                 await wk.fill(intent)  # 고침 3 ③ 남은 예산 채우기
             walk["required"].pop("calls_ref", None)

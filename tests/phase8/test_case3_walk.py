@@ -563,3 +563,15 @@ async def test_fix4_safety_at_first_procedure_node(deps_factory, hub):
     assert not w["fallback"] and [(x["node"], x["section"]) for x in w["safety_budget"]["sections"][:4]] == [
         (U140, x) for x in SAFE]
     assert w["required"]["nodes"][0] == U140
+
+
+async def test_fix4a_condition_checks_in_safety_budget(deps_factory, hub):
+    """고침 4 A — 시술의 requires_check(_unit) 이웃 확인 조건 노드 checks 줄을 안전 예산에서 · 질문이 말한 조건 먼저."""
+    jev = FakeJev(intent="I-03", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, "소프웨이브 임신 중에 해도 돼요?", jev, profile="fix4", walk_max_steps=1, walk_fill=False)
+    w = r["trace"]["walk"]
+    ck = w["safety_budget"]["checks"]
+    assert ck["conditions"][0] == "check_condition:C-PREG"  # 질문이 말한 조건(resolve 후보) 먼저
+    assert set(ck["conditions"]) == {"check_condition:C-PREG", "check_condition:C-PRIOR"}
+    names = [x["name"] for x in r["timing"]["stages"]]
+    assert any(n.startswith("hub_peek#chk-") for n in names) and w["safety_budget"]["bytes"] <= 8000

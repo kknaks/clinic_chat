@@ -152,6 +152,7 @@ async def execute(deps: Deps, question: str, emit: Emit, *, run_id: str | None =
                      "walk_required_sections": s.walk_required_sections_csv, "walk_required_max": s.walk_required_max,
                      "walk_fixed_sections_by_intent": s.walk_fixed_sections_by_intent,
                      "walk_safety_budget": s.walk_safety_budget, "walk_safety_sections": s.walk_safety_sections_csv,
+                     "walk_safety_checks": s.walk_safety_checks,
                      "walk_jev_sections": s.walk_jev_sections, "walk_base_bundle": s.walk_base_bundle, "walk_fill": s.walk_fill,
                      "jev_confidence_min": s.jev_confidence_min, "jev_option_order_seed": jev_seed},
         **({"cases_run": list(run_cases)} if run_cases != CASES else {}),

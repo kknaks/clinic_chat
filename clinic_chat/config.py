@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     walk_required_max: int = 3
     # 고침 4 — 안전 예산(20KB 밖 · 필수 묶음 + 답에 나올 시술 위 3 의 안전 섹션) · 0 이면 일반 예산에서(고침 3 판)
     walk_safety_budget: int = 8_000
-    walk_safety_sections_csv: str = "safety.side_effects,safety.complications"  # 필수 묶음을 받을 시술 수(모은 줄 rank 순 위 · 시작 시술은 따로)
+    walk_safety_sections_csv: str = "safety.side_effects,safety.complications"
+    walk_safety_checks: bool = True  # 고침 4 A — 시술의 확인 조건 이웃 checks 줄도 안전 예산에서  # 필수 묶음을 받을 시술 수(모은 줄 rank 순 위 · 시작 시술은 따로)
     # 의도별 고정 섹션(고침 2 ③) — 첫 시술 노드에서 Jev 고름에 더함 · 「의도:섹션+섹션,…」
     walk_fixed_sections_by_intent: str = ("I-02:overview+method,I-03:aftercare+recovery,"
                                           "I-04:safety.side_effects+safety.complications+safety.management,I-05:recovery+timeline,"
