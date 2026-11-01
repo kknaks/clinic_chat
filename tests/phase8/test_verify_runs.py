@@ -140,7 +140,9 @@ def test_walk_summary_and_cover34():
                               {"node": q106["start"], "peek_reused": True}],
               stop="steps", bytes_total=900, step1_options=[tgt, "section:overview"], bytes_mismatch=1,
               full={"bytes": 4000, "over_budget": False, "cut_unfetched_ids": ["c1"]},
-              list={"calls": 1, "bytes": 700, "ms": 3.0}), "question_no": "Q106"},
+              list={"calls": 1, "bytes": 700, "ms": 3.0}, enough_ignored=2,
+              required={"fact_ids": ["r1", "r2"], "bytes": 300, "filtered": ["x|checks"]},
+              fixed={"sections": ["overview"], "filtered": []}), "question_no": "Q106"},
         {**_w("family:OTHER", [{"node": "family:OTHER", "hop": 0}], stop="budget", fallback=True,
               fallback_reason="no_facts", step1_options=["section:disclosure"]), "question_no": "Q055"},
         {**_w(q055["start"], [], stop="empty", fallback=True, fallback_reason="no_start"), "question_no": "Q001"},
@@ -151,6 +153,8 @@ def test_walk_summary_and_cover34():
     assert (w["neighbor_fact_reach"], w["neighbor_peek_reach"], w["hop2_fact_reach"]) == (1, 1, 1)
     assert (w["excluded"], w["filtered_by_budget"], w["bytes_mismatch"], w["peek_reused"]) == (1, 1, 1, 1)
     assert (w["full_bytes_median"], w["full_cut_unfetched"], w["list_calls"], w["list_bytes_median"]) == (4000, 1, 1, 700)
+    assert (w["required_runs"], w["required_facts"], w["required_bytes_median"], w["required_filtered"]) == (1, 2, 300, 1)
+    assert (w["fixed_runs"], w["enough_ignored"]) == (1, 2)
     c = V.cover34(runs)
     one, zero = c["one_hop"], c["zero_hop"]
     assert (one["rows"], one["denominator"], one["shown"], one["picked"], one["got"]) == (8, 1, 1, 1, 1)

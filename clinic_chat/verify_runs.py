@@ -223,6 +223,14 @@ def walk_summary(runs: list[dict]) -> dict | None:
         "jev_ms_median": med([w["jev_ms_total"] for _, w in ws if isinstance(w.get("jev_ms_total"), (int, float))]),
         "peek_bytes_median": med([st["peek_bytes"] for st in steps if isinstance(st.get("peek_bytes"), int)]),
         "order_table_sha": sorted({str(w.get("order_table_sha")) for _, w in ws}),
+        # 걷기 고침 2 — 필수 묶음 · 고정 섹션 · 「충분」 무시
+        "required_runs": sum(1 for w in walked if (w.get("required") or {}).get("fact_ids")),
+        "required_facts": sum(len((w.get("required") or {}).get("fact_ids") or []) for w in walked),
+        "required_bytes_median": med([(w.get("required") or {}).get("bytes") or 0 for w in walked if w.get("required")]),
+        "required_filtered": sum(len((w.get("required") or {}).get("filtered") or []) for w in walked),
+        "fixed_runs": sum(1 for w in walked if (w.get("fixed") or {}).get("sections")),
+        "fixed_filtered": sum(len((w.get("fixed") or {}).get("filtered") or []) for w in walked),
+        "enough_ignored": sum(w.get("enough_ignored") or 0 for _, w in ws),
     }
 
 
@@ -623,6 +631,9 @@ def render(J: dict) -> str:
               f"| 목록 호출(neighbor_kinds) 합 · 바이트 중앙 · ms 중앙 | {w['list_calls']} · {w['list_bytes_median']} · {w['list_ms_median']} |",
               (f"| excluded · filtered_by_budget · bytes_mismatch · peek 재사용 · by_unit 대기열 | {w['excluded']} · "
                f"{w['filtered_by_budget']} · {w['bytes_mismatch']} · {w['peek_reused']} · {w['by_unit_queued']} |"),
+              (f"| 필수 묶음 판 · fact · 바이트 중앙 · 예산으로 뺌 / 고정 섹션 판 · 뺌 / 「충분」 무시 | {w['required_runs']} · "
+               f"{w['required_facts']} · {w['required_bytes_median']} · {w['required_filtered']} / {w['fixed_runs']} · "
+               f"{w['fixed_filtered']} / {w['enough_ignored']} |"),
               (f"| Jev 호출 합 · Jev ms 중앙 · peek 바이트 중앙 · 순서 표 판 | {w['jev_calls']} · {w['jev_ms_median']} · "
                f"{w['peek_bytes_median']} · {' · '.join(w['order_table_sha'])} |")]
         c = w.get("cover34")

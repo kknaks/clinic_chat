@@ -386,6 +386,9 @@ def build_two(qs: list[str], before: dict, batches: dict[str, dict], before_desc
             ("목록 호출 · 바이트 중앙 · ms 중앙", lambda x: f"{x['list_calls']} · {x['list_bytes_median']} · {x['list_ms_median']}"),
             ("excluded · filtered_by_budget · peek 재사용 · by_unit", lambda x: f"{x['excluded']} · {x['filtered_by_budget']} · "
                                                                        f"{x['peek_reused']} · {x['by_unit_queued']}"),
+            ("필수 묶음 판 · fact · 바이트 중앙 · 뺌", lambda x: f"{x['required_runs']} · {x['required_facts']} · "
+                                                         f"{x['required_bytes_median']} · {x['required_filtered']}"),
+            ("고정 섹션 판 · 뺌 / 「충분」 무시", lambda x: f"{x['fixed_runs']} · {x['fixed_filtered']} / {x['enough_ignored']}"),
             ("Jev 호출 합 · Jev ms 중앙", lambda x: f"{x['jev_calls']} · {x['jev_ms_median']}")]
     w("| 칸 | 전 | " + " | ".join(f"후 {i + 1}" for i in range(len(names))) + " |")
     w("|---|---|" + "---|" * len(names))

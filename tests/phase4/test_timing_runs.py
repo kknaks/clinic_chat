@@ -44,7 +44,7 @@ WALK = {"start": "unit_procedure:U5-140", "nb": "unit_procedure:U5-102", "sec": 
 async def test_case3_stage_times(deps_factory):
     clk = FakeClock()
     fa = FakeAnthropic([Turn(first_ms=40, chunk_ms=5, text=["a", "b"])], clock=clk)
-    deps = deps_factory(anthropic=fa)
+    deps = deps_factory(anthropic=fa, walk_required_sections_csv="", walk_fixed_sections_by_intent="")  # v2.4 단계 순서만
     deps.jev = FakeJev(intent="I-03", choices=WALK).client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     c = Clock(now=clk.now)
@@ -99,11 +99,14 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
                                "max_budget_usd": None, "service_tier": None, "timeout_sec": None,
                                "input_cap_bytes": None, "mcp_result_max_chars": 200000,
                                "truncation_markers_sha": truncation_markers_sha(),
-                               "walk_max_steps": 4, "walk_byte_budget": 20000, "walk_enough_min": 0.5,
+                               "walk_max_steps": 4, "walk_byte_budget": 20000, "walk_enough_min": 0.8,
                                "walk_sections_per_step": 2, "walk_neighbors_max": 3, "walk_first_section_max": 1,
                                "walk_first_section_max_by_intent": "I-02:2,I-03:2,I-04:2,I-05:2",
                                "walk_full_byte_budget": 15000, "walk_full_facts_max": 64,
                                "order_table_sha": case3.order_table(deps.settings)[1],
+                               "walk_enough_bytes_ratio": 0.5, "walk_required_sections": "checks,site_caution",
+                               "walk_required_max": 3,
+                               "walk_fixed_sections_by_intent": deps.settings.walk_fixed_sections_by_intent,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:
         assert set(rec["cases"][c]) >= {"answer", "stop_reason", "loop_capped", "error", "timing", "tokens", "trace",
