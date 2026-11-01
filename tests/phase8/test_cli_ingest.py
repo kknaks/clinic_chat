@@ -48,7 +48,8 @@ async def test_claude_fields_and_summary(fake):  # noqa: F811
     c = {x["tool"]: x for x in r["trace"]["tool_calls"]}
     card, chk, res, rec, bash = c["procedure_card"], c["check_conditions"], c["resolve"], c["recommend"], c["Bash"]
     assert card["delivered_bytes"] == card["output_bytes"] == len(TOOL_RESULT.encode()) and card["truncated"] is False
-    assert chk["truncated"] is True and chk["delivered_bytes"] == len(PREVIEW.encode())
+    # Claude 마커는 비움(WP-0 실물에서 안 나옴 · F-3) — 미리보기 꼴 글도 마커로는 안 잡고 verify_runs 바이트 대조가 셈
+    assert chk["truncated"] is False and chk["delivered_bytes"] == len(PREVIEW.encode())
     assert card["intent_passed"] is True and chk["intent_passed"] is False  # 「none」 = 틀린 값
     assert rec["intent_passed"] is False  # 스키마에 intent 있는데 안 넘김
     assert res["intent_passed"] is None  # 스키마에 intent 없음
@@ -96,7 +97,7 @@ def test_sdk_marks_and_no_cap():
 
 def test_markers_constant():
     assert VALID_INTENTS == {f"I-{i:02d}" for i in range(1, 13)}
-    assert len(TRUNCATION_MARKERS["claude-cli"]) == 7 and len(TRUNCATION_MARKERS["codex-cli"]) == 5
+    assert TRUNCATION_MARKERS["claude-cli"] == () and len(TRUNCATION_MARKERS["codex-cli"]) == 5  # WP-0 · Codex 미확인
     assert len(truncation_markers_sha()) == 16
     assert json.dumps(TRUNCATION_MARKERS, ensure_ascii=False)  # 기록 가능한 꼴
 

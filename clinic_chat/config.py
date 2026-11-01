@@ -15,18 +15,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# 도구 결과 잘림 표시(SPEC-006 §3-5) — provider 별 문자열. 시작 값 = 바이너리 문자열(Claude 4 + 변형 3 · Codex 후보 5)
-# · WP-0 확인 시험이 실제로 나온 문자열로 고정한다. 기록 settings.truncation_markers_sha
+# 도구 결과 잘림 표시(SPEC-006 §3-5) — provider 별 문자열 · 기록 settings.truncation_markers_sha.
+# Claude: WP-0 확인 시험(11-01 · 실물 2회)에서 마커가 나오지 않아 비움(F-3 「안 나온 후보는 뺀다」 · 코디 결정 A) —
+#   허브 도구 meta(maxResultSizeChars 200,000)로 91k자 결과도 그대로 전달 · MAX_MCP_OUTPUT_TOKENS=1000 이어도 그대로.
+#   잘림은 verify_runs 바이트 대조(unknown 도 잘림으로 셈)로만 판정.
+# Codex: 이번 판 실물 호출 없음(사용자 결정 — Claude 만) → 바이너리 문자열 시작값 그대로(미확인).
 TRUNCATION_MARKERS: dict[str, tuple[str, ...]] = {
-    "claude-cli": (
-        "Output too large (",
-        "). Full output saved to:",
-        "exceeds maximum allowed tokens. Output has been saved to",
-        "Preview (first",
-        "The full output could not all be saved to",
-        "later output was discarded because this session writes no files",
-        "Output exceeded the persist limit; only the first",
-    ),
+    "claude-cli": (),
     "codex-cli": (
         "Warning: truncated output (original token count:",
         "<truncated omitted_approx_tokens=",
