@@ -52,6 +52,16 @@ INTENTS = [
     ("I-11", "추천 조합 · 패키지 구성", "같이 하면 좋은 거 있어요?"), ("I-12", "가격", "얼마예요?"),
 ]
 MENUS = ["처짐/탄력"]
+INTENT_SECTIONS = {  # SPEC-005 §5-14 의도 → 섹션 기본 묶음(허브 INTENT_SECTIONS 와 같은 값)
+    "I-01": (), "I-02": ("overview", "method", "ops"),
+    "I-03": ("aftercare", "recovery", "timeline", "emergency", "disclosure", "overview"),
+    "I-04": ("safety.side_effects", "safety.complications", "safety.management", "safety.pih", "emergency", "disclosure",
+             "overview", "timeline"),
+    "I-05": ("recovery", "timeline", "aftercare", "overview", "disclosure", "ops"),
+    "I-06": ("overview", "method", "recovery", "ops", "dose", "safety.pih", "checks", "disclosure"),
+    "I-07": ("checks",), "I-08": ("checks", "safety.side_effects"), "I-09": ("checks", "site_caution", "aftercare", "overview"),
+    "I-10": ("dose", "products", "market", "overview", "disclosure"), "I-11": ("products", "market"), "I-12": (),
+}
 TREATS = {"concern:P2": ["unit_procedure:U5-001"], "concern:P2-3": ["unit_procedure:U5-001"],
           "concern:P3": ["unit_procedure:U5-102", "unit_procedure:U5-140"],
           "concern:P9": [f"unit_procedure:U5-50{k}" for k in range(1, 6)]}
@@ -281,7 +291,8 @@ def vocab(kinds: list[str] | None = None, sections: list[str] | None = None, int
     out: dict[str, Any] = {}
     for k in ks:
         if k == "intent":
-            out[k] = [{"id": i, "name": n, "tool": None} for i, n, _e in INTENTS]  # 실물 허브처럼 예시 없음
+            out[k] = [{"id": i, "name": n, "tool": None, "sections": list(INTENT_SECTIONS.get(i, ()))}
+                      for i, n, _e in INTENTS]  # 실물 허브처럼 예시 없음 · 의도 묶음(SPEC-005 §5-14)
         elif k == "menu":
             out[k] = [{"id": f"menu:{m}", "label": m} for m in MENUS]
         elif k in all_kinds:

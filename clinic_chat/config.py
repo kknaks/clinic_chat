@@ -72,7 +72,10 @@ class Settings(BaseSettings):
     walk_max_steps: int = 4
     walk_byte_budget: int = 20_000
     walk_enough_min: float = 0.8  # 걷기 고침 2 ② (11-01 · 0.5 → 0.8)
-    walk_enough_bytes_ratio: float = 0.5  # 모은 바이트가 예산의 이 비율 미만이면 「충분」 멈춤 무시(고침 2 ②)
+    walk_enough_bytes_ratio: float = 0.8  # 모은 바이트가 예산의 이 비율 미만이면 「충분」 멈춤 무시(고침 2 ② 0.5 → 고침 3 ④ 0.8)
+    walk_jev_sections: bool = False  # 고침 3 ② — Jev 는 이웃만 고름(섹션 선택지 없음) · true 면 v2.4 처럼 섹션도
+    walk_base_bundle: bool = True  # 고침 3 ① — 걷는 노드마다 의도 → 섹션 기본 묶음(SPEC-005 §5-14 · 허브 vocab)
+    walk_fill: bool = True  # 고침 3 ③ — 걸음 뒤 남은 예산을 방문 노드의 안 받은 섹션으로 채움
     walk_required_sections_csv: str = "checks,site_caution"  # 필수 묶음(고침 2 ①) — 시술 노드마다 Jev 와 무관하게
     walk_required_max: int = 3  # 필수 묶음을 받을 시술 수(모은 줄 rank 순 위 · 시작 시술은 따로)
     # 의도별 고정 섹션(고침 2 ③) — 첫 시술 노드에서 Jev 고름에 더함 · 「의도:섹션+섹션,…」

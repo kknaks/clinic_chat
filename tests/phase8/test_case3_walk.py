@@ -38,12 +38,16 @@ def also(*names):
 
 # v2.4 규칙만 보는 시험 — 걷기 고침 2(필수 묶음 · 고정 섹션 · 「충분」 늦추기)를 끔(아래 fix2 시험이 켜고 봄)
 V24 = {"walk_required_sections_csv": "", "walk_fixed_sections_by_intent": "", "walk_enough_min": 0.5,
-       "walk_enough_bytes_ratio": 0.0}
+       "walk_enough_bytes_ratio": 0.0, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False}
+# 걷기 고침 2 판(필수 묶음 · 고정 섹션 · 「충분」 50%) — 고침 3(이웃만 · 의도 묶음 · 채우기)은 끔
+FIX2 = {"walk_enough_bytes_ratio": 0.5, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False}
+PROFILES = {"v24": V24, "fix2": FIX2, "fix3": {}}
 
 
-async def run(deps_factory, q, jev: FakeJev, seed=0, fix2=False, **kw):
+async def run(deps_factory, q, jev: FakeJev, seed=0, fix2=False, profile=None, **kw):
     fa = FakeAnthropic([Turn(text=["답변"])])
-    deps = deps_factory(anthropic=fa, **({} if fix2 else V24), **kw)
+    prof = PROFILES[profile or ("fix2" if fix2 else "v24")]
+    deps = deps_factory(anthropic=fa, **{**prof, **kw})
     deps.jev = jev.client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     r = await case3.run(deps, q, timer(), lambda t: None, seed=seed)
@@ -448,3 +452,62 @@ async def test_fix2_required_prefiltered_by_budget(deps_factory, hub):
     w = r["trace"]["walk"]
     assert [c["sections"] for c in w["required"]["calls"]] == [["checks"]] and w["required"]["filtered"] == [
         f"{U140}|site_caution"]
+
+
+# ── 걷기 고침 3(11-01 · phub-recommend-walk-fix3.md) — Jev 는 이웃만 · 의도 묶음 바닥 · 남은 예산 채우기 ─────────────
+I03 = ["aftercare", "recovery", "timeline", "emergency", "disclosure", "overview"]
+
+
+async def test_fix3_base_bundle_and_neighbors_only(deps_factory, hub):
+    jev = FakeJev(intent="I-03", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, fa, _ = await run(deps_factory, Q, jev, profile="fix3", walk_max_steps=2, walk_fill=False)
+    w = r["trace"]["walk"]
+    s1, s2 = w["steps"]
+    whys = [(c["sections"], c.get("why")) for c in s1["expand"]["calls"]]
+    assert whys[:2] == [(["checks"], "required"), (["site_caution"], "required")]
+    assert [x for x, why in whys if why == "bundle"] == [[x] for x in I03]  # §5-14 I-03 묶음 통째(묶음 순)
+    assert w["base_bundle"] == {"node": U140, "step": 1, "want": I03, "sections": I03, "filtered": []}
+    q1 = jev_qs(jev, 1)
+    assert "sec" not in q1 and not any(k.startswith("sec_also:") for k in q1)  # Jev 는 이웃만
+    assert all(not x.startswith("section:") for x in w["step1_options"])
+    assert [b["node"] for b in w["bundles"]] == [U140, U102]  # 고른 이웃도 그 의도 묶음
+    assert s2["expand"]["sections"] == I03
+    assert all(not k.startswith("section:") for k in jev_qs(jev, 2)["pick"]["criteria"])
+    assert w["fixed"]["sections"] == []  # I-03 고정(aftercare · recovery)은 묶음이 이미 받음
+    assert {f["section"] for f in sonnet_input(fa)["facts"]} >= set(I03) | {"checks", "site_caution"}
+
+
+async def test_fix3_base_bundle_at_first_procedure_node(deps_factory, hub):
+    """고민 S — 묶음 바닥은 처음 걷는 시술 노드(걸음 2)."""
+    jev = FakeJev(intent="I-05", choices={"start": "concern:P3", "nb": U140, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, "처짐 시술 회복 기간", jev, profile="fix3", walk_max_steps=2, walk_fill=False)
+    w = r["trace"]["walk"]
+    assert w["base_bundle"]["node"] == U140 and w["base_bundle"]["step"] == 2
+    assert w["base_bundle"]["sections"] == ["recovery", "timeline", "aftercare", "overview", "disclosure", "ops"]
+
+
+async def test_fix3_fill_until_budget(deps_factory, hub):
+    jev = FakeJev(intent="I-02", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, Q, jev, profile="fix3", walk_max_steps=2)
+    w = r["trace"]["walk"]
+    fl = w["fill"]
+    assert fl["sections"] and fl["bytes"] == sum(x["bytes"] for x in fl["sections"] if not x.get("excluded"))
+    assert w["bytes_total"] <= 20000
+    got = {(st["node"], x) for st in w["steps"] for x in (st.get("expand") or {}).get("sections") or []}
+    assert not got & {(x["node"], x["section"]) for x in fl["sections"]}  # 이미 받은 섹션은 다시 안 받음
+    first = fl["sections"][0]
+    assert first["section"] not in ("overview", "method", "ops") or first["node"] == U102  # 묶음 순 → 그 밖
+    stages = [x["name"] for x in r["timing"]["stages"]]
+    assert "hub_fill#1" in stages and stages.index("hub_fill#1") < stages.index("claude")
+    # 예산이 작으면 채우기가 예산에서 멈춤(넘는 섹션은 건너뜀)
+    jev = FakeJev(intent="I-02", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r2, _, _ = await run(deps_factory, Q, jev, profile="fix3", walk_max_steps=2, walk_byte_budget=w["bytes_total"] - 2000)
+    w2 = r2["trace"]["walk"]
+    assert w2["fill"]["skipped"] > 0 and w2["bytes_total"] <= w["bytes_total"] - 2000
+
+
+async def test_fix3_enough_ignored_until_80pct(deps_factory, hub):
+    jev = FakeJev(intent="I-01", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.9, 0.9, 0.9]})
+    r, _, _ = await run(deps_factory, Q, jev, profile="fix3", walk_fill=False)
+    w = r["trace"]["walk"]
+    assert w["bytes_total"] < 0.8 * 20000 and w["enough_ignored"] >= 1 and w["stop"] != "enough"

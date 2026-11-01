@@ -231,6 +231,16 @@ def walk_summary(runs: list[dict]) -> dict | None:
         "fixed_runs": sum(1 for w in walked if (w.get("fixed") or {}).get("sections")),
         "fixed_filtered": sum(len((w.get("fixed") or {}).get("filtered") or []) for w in walked),
         "enough_ignored": sum(w.get("enough_ignored") or 0 for _, w in ws),
+        # 걷기 고침 3 — 의도 묶음 바닥 · 남은 예산 채우기 · 판마다 받은 섹션 수(걸음 + 채우기)
+        "base_bundle_runs": sum(1 for w in walked if (w.get("base_bundle") or {}).get("sections")),
+        "bundle_sections": sum(len(b.get("sections") or []) for w in walked for b in w.get("bundles") or []),
+        "fill_runs": sum(1 for w in walked if (w.get("fill") or {}).get("sections")),
+        "fill_bytes_median": med([(w.get("fill") or {}).get("bytes") or 0 for w in walked if w.get("fill")]),
+        "fill_sections": sum(len((w.get("fill") or {}).get("sections") or []) for w in walked),
+        "sections_per_run_median": med([sum(len((st.get("expand") or {}).get("sections") or []) for st in w.get("steps") or [])
+                                        + len([x for x in (w.get("fill") or {}).get("sections") or [] if not x.get("excluded")])
+                                        + len([c for c in (w.get("required") or {}).get("calls") or [] if not c.get("excluded")])
+                                        for w in walked]),
     }
 
 
@@ -634,6 +644,9 @@ def render(J: dict) -> str:
               (f"| 필수 묶음 판 · fact · 바이트 중앙 · 예산으로 뺌 / 고정 섹션 판 · 뺌 / 「충분」 무시 | {w['required_runs']} · "
                f"{w['required_facts']} · {w['required_bytes_median']} · {w['required_filtered']} / {w['fixed_runs']} · "
                f"{w['fixed_filtered']} / {w['enough_ignored']} |"),
+              (f"| 의도 묶음 판 · 묶음 섹션 / 채우기 판 · 섹션 · 바이트 중앙 / 판마다 받은 섹션 중앙 | {w['base_bundle_runs']} · "
+               f"{w['bundle_sections']} / {w['fill_runs']} · {w['fill_sections']} · {w['fill_bytes_median']} / "
+               f"{w['sections_per_run_median']} |"),
               (f"| Jev 호출 합 · Jev ms 중앙 · peek 바이트 중앙 · 순서 표 판 | {w['jev_calls']} · {w['jev_ms_median']} · "
                f"{w['peek_bytes_median']} · {' · '.join(w['order_table_sha'])} |")]
         c = w.get("cover34")

@@ -781,21 +781,34 @@ class Walker:
         self.texts: dict[str, str] = {}  # ⑤ 로 받은 원문
         self.fixed_done = False  # 의도별 고정 섹션은 첫 시술 노드에서 한 번
         self.required_done: set[str] = set()
+        self.bundle_done: set[str] = set()
 
     def kind(self, node: str) -> str | None:
         return ((self.peeks.get(node) or ({},))[0].get("node") or {}).get("kind")
 
+    def bundle(self, intent: str | None) -> list[str]:
+        """의도 → 섹션 기본 묶음(SPEC-005 §5-14 — 허브 vocab `intent[].sections` 그대로 · 걷기 고침 3 ①)."""
+        v = (self.deps.vocab or {}).get("vocab", self.deps.vocab or {})
+        return list(next((i.get("sections") or [] for i in v.get("intent") or [] if i.get("id") == intent), []))
+
     async def extras(self, k: int, node: str, step: dict, peek: dict, intent: str | None) -> None:
-        """걷기 고침 2 ①③ — 시술 노드(단위 · 제품 · 계열)면 Jev 고름 전에: 시작 노드는 필수 묶음(checks · site_caution) ·
-        첫 시술 노드는 의도별 고정 섹션. 예산 먼저 차감 · 기록 walk.required · walk.fixed."""
-        if self.kind(node) not in PROC_NODE_KINDS:
-            return
+        """Jev 고름 전에 규칙으로 받는 섹션(예산 먼저 차감 · 하나씩 · 넘으면 미리 뺌):
+        ① 필수 묶음(고침 2 ①) — 시작 노드가 시술이면 checks · site_caution
+        ② 의도 묶음(고침 3 ① ② · WALK_BASE_BUNDLE) — 걷는 노드마다 그 의도의 §5-14 기본 섹션(시술 S · 첫 시술 노드 = 바닥)
+        ③ 의도별 고정 섹션(고침 2 ③) — 첫 시술 노드에서 한 번.
+        기록 walk.required · walk.base_bundle(첫 시술 노드) · walk.bundles[] · walk.fixed."""
+        proc = self.kind(node) in PROC_NODE_KINDS
         items: list[tuple[str, str]] = []
-        if node == self.start and node not in self.required_done:
+        if proc and node == self.start and node not in self.required_done:
             items += [(x, "required") for x in self.s.required_sections()]
             self.required_done.add(node)
+        bd = None
+        if self.s.walk_base_bundle and node not in self.bundle_done:
+            self.bundle_done.add(node)
+            bd = self.bundle(intent)
+            items += [(x, "bundle") for x in bd]
         fx = None
-        if not self.fixed_done and self.s.fixed_sections(intent):
+        if proc and not self.fixed_done and self.s.fixed_sections(intent):
             self.fixed_done = True
             fx = self.s.fixed_sections(intent)
             items += [(x, "fixed") for x in fx]
@@ -805,6 +818,12 @@ class Walker:
         if fx is not None:
             self.walk["fixed"] = {"node": node, "step": k, "want": fx, "sections": [x for x, w in plan if w == "fixed"],
                                   "filtered": [x for x in filt if x in fx]}
+        if bd:
+            row = {"node": node, "step": k, "want": bd, "sections": [x for x, w in plan if w == "bundle"],
+                   "filtered": [x for x in filt if x in bd]}
+            self.walk["bundles"].append(row)
+            if proc and self.walk["base_bundle"] is None:
+                self.walk["base_bundle"] = row
         if node == self.start and any(w == "required" for _, w in items):
             req = self.walk["required"]
             req["nodes"].append(node)
@@ -812,6 +831,37 @@ class Walker:
         if plan:
             got = await self.expand(k, node, step, peek, [], [], plan)
             self._note_required(node, step, got)
+
+    async def fill(self, intent: str | None) -> None:
+        """걷기 고침 3 ③ — 걸음 뒤 예산이 남으면 방문한 노드들의 아직 안 받은 섹션을 의도 순서(§5-14 묶음 순 → 그 밖은
+        peek 섹션 순) · 방문 순으로 남은 예산이 찰 때까지(1쪽 · 결정론 · 넘는 섹션은 건너뛰고 다음). 기록 walk.fill."""
+        order = self.bundle(intent)
+        visit = list(dict.fromkeys(st["node"] for st in self.walk["steps"] if st.get("node") in self.peeks))
+        cand = []
+        for vi, n in enumerate(visit):
+            secs = [x for x in self.peeks[n][0].get("sections") or [] if x.get("name") and x.get("n_facts", 1)]
+            for pi, x in enumerate(secs):
+                if x["name"] in self.taken.get(n, set()):
+                    continue
+                rank = (0, order.index(x["name"])) if x["name"] in order else (1, pi)
+                cand.append((rank, vi, n, x))
+        cand.sort(key=lambda t: (t[0], t[1]))
+        fl = self.walk["fill"]
+        j = 0
+        for _r, _vi, n, x in cand:
+            if not isinstance(x.get("bytes"), int) or x["bytes"] > self.left:
+                fl["skipped"] += 1
+                continue
+            j += 1
+            holder: dict[str, Any] = {}
+            k = next((st["k"] for st in self.walk["steps"] if st.get("node") == n), 0)
+            got = await self.expand(k, n, holder, self.peeks[n][0], [], [], [(x["name"], "fill")], stage=f"hub_fill#{j}")
+            c = (holder.get("expand") or {}).get("calls", [{}])[-1]
+            fl["sections"].append({"node": n, "section": x["name"], "bytes": c.get("bytes"),
+                                   **({"excluded": True} if c.get("excluded") else {})})
+            if not c.get("excluded"):
+                fl["bytes"] += c.get("bytes") or 0
+                fl["fact_ids"] += [f["id"] for f in got]
 
     def _note_required(self, node: str, holder: dict, got: list[dict]) -> None:
         req = self.walk["required"]
@@ -1061,7 +1111,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                             "steps_n": 0, "bytes_total": 0, "budget_hit": False, "neighbor_reached": 0,
                             "full": None, "more": {}, "fallback": False, "fallback_reason": None,
                             "required": {"nodes": [], "calls": [], "calls_ref": [], "bytes": 0, "fact_ids": [], "filtered": []},
-                            "fixed": None, "enough_ignored": 0,
+                            "fixed": None, "enough_ignored": 0, "base_bundle": None, "bundles": [],
+                            "fill": {"sections": [], "bytes": 0, "fact_ids": [], "skipped": 0},
                             "jev_calls": 0, "jev_ms_total": 0.0, "hub_calls": 0, "hub_ms_total": 0.0, "fact_ids": []}
     trace["walk"] = walk
     try:
@@ -1122,6 +1173,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
             await wk.extras(1, S, step, peek, intent)  # 필수 묶음 · 고정 섹션(예산 먼저)
             nb_opts, kind_of = await step1_neighbors(deps, timer, walk, S, peek, walk["order_kinds"])
             sec_opts, filt = section_options(peek, wk.taken.get(S, set()), wk.left)
+            if not s.walk_jev_sections:  # 고침 3 ② — Jev 는 이웃만(섹션 양은 규칙)
+                sec_opts, filt = {}, []
             walk["step1_options"] = list(nb_opts) + list(sec_opts)
             if nb_opts or sec_opts:
                 try:
@@ -1186,6 +1239,10 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                     walk["neighbor_reached"] += 1
                     n_before = -1
                 opts, kind_of, filt = walk_options(peek, wk.seen, taken, wk.left)
+                if not s.walk_jev_sections:  # 고침 3 ② — 이웃만
+                    opts = {x: d for x, d in opts.items() if kind_of.get(x) != "section"}
+                    kind_of = {x: kd for x, kd in kind_of.items() if x in opts}
+                    filt = []
                 if not opts:
                     step["jev"] = {"filtered_by_budget": filt, "options_n": 0} if filt else None
                     if filt:  # 남은 예산 < 가장 작은 섹션 · 이웃 선택지 없음
@@ -1229,6 +1286,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                 return res
         else:
             await wk.required_end()  # 고침 2 ① 필수 묶음(답에 나올 시술 위 3)
+            if s.walk_fill:
+                await wk.fill(intent)  # 고침 3 ③ 남은 예산 채우기
             walk["required"].pop("calls_ref", None)
             walk["fact_ids"] = [f["id"] for f in wk.facts]
             walk["full"] = await wk.full()  # ⑤ cut 줄 원문
