@@ -237,6 +237,10 @@ def walk_summary(runs: list[dict]) -> dict | None:
         "fill_runs": sum(1 for w in walked if (w.get("fill") or {}).get("sections")),
         "fill_bytes_median": med([(w.get("fill") or {}).get("bytes") or 0 for w in walked if w.get("fill")]),
         "fill_sections": sum(len((w.get("fill") or {}).get("sections") or []) for w in walked),
+        "safety_runs": sum(1 for w in walked if (w.get("safety_budget") or {}).get("bytes")),
+        "safety_bytes_median": med([(w.get("safety_budget") or {}).get("bytes") or 0 for w in walked if w.get("safety_budget")]),
+        "safety_sections": sum(len((w.get("safety_budget") or {}).get("sections") or []) for w in walked),
+        "safety_cut": sum(len((w.get("safety_budget") or {}).get("cut") or []) for w in walked),
         "sections_per_run_median": med([sum(len((st.get("expand") or {}).get("sections") or []) for st in w.get("steps") or [])
                                         + len([x for x in (w.get("fill") or {}).get("sections") or [] if not x.get("excluded")])
                                         + len([c for c in (w.get("required") or {}).get("calls") or [] if not c.get("excluded")])
@@ -269,7 +273,8 @@ def case_stats(runs: list[dict], case: str) -> dict:
             if w or hub.get("tool"):
                 n += 1
                 ok += int(iv in VALID_INTENTS)
-            tot = ((w.get("bytes_total") or 0) + sum((s.get("peek_bytes") or 0) for s in w.get("steps") or [])
+            tot = ((w.get("bytes_total") or 0) + ((w.get("safety_budget") or {}).get("bytes") or 0)
+                   + sum((s.get("peek_bytes") or 0) for s in w.get("steps") or [])
                    if w else (tr.get("hub") or {}).get("result_bytes"))
         if isinstance(tot, int):
             got.append(tot)
@@ -475,7 +480,7 @@ def verify(runs: list[dict], quality: list[dict], rp: Replay, hub_hash: str | No
         keys3: list[str] = []
         if w:
             peek_b = sum((s.get("peek_bytes") or 0) for s in w.get("steps") or [])
-            fair[("case3", prov)].append((w.get("bytes_total") or 0) + peek_b)
+            fair[("case3", prov)].append((w.get("bytes_total") or 0) + ((w.get("safety_budget") or {}).get("bytes") or 0) + peek_b)
             walk_rows.append({"run_id": rec["run_id"], "no": rec.get("question_no"), "provider": prov,
                               "steps_n": w.get("steps_n"), "bytes_total": w.get("bytes_total"), "stop": w.get("stop"),
                               "fallback": bool(w.get("fallback")), "fallback_reason": w.get("fallback_reason"),
@@ -647,6 +652,8 @@ def render(J: dict) -> str:
               (f"| 의도 묶음 판 · 묶음 섹션 / 채우기 판 · 섹션 · 바이트 중앙 / 판마다 받은 섹션 중앙 | {w['base_bundle_runs']} · "
                f"{w['bundle_sections']} / {w['fill_runs']} · {w['fill_sections']} · {w['fill_bytes_median']} / "
                f"{w['sections_per_run_median']} |"),
+              (f"| 안전 예산(고침 4) 판 · 바이트 중앙 · 섹션 · 자름 | {w['safety_runs']} · {w['safety_bytes_median']} · "
+               f"{w['safety_sections']} · {w['safety_cut']} |"),
               (f"| Jev 호출 합 · Jev ms 중앙 · peek 바이트 중앙 · 순서 표 판 | {w['jev_calls']} · {w['jev_ms_median']} · "
                f"{w['peek_bytes_median']} · {' · '.join(w['order_table_sha'])} |")]
         c = w.get("cover34")

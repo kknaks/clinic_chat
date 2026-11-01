@@ -38,10 +38,12 @@ def also(*names):
 
 # v2.4 규칙만 보는 시험 — 걷기 고침 2(필수 묶음 · 고정 섹션 · 「충분」 늦추기)를 끔(아래 fix2 시험이 켜고 봄)
 V24 = {"walk_required_sections_csv": "", "walk_fixed_sections_by_intent": "", "walk_enough_min": 0.5,
-       "walk_enough_bytes_ratio": 0.0, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False}
+       "walk_enough_bytes_ratio": 0.0, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False,
+       "walk_safety_budget": 0}
 # 걷기 고침 2 판(필수 묶음 · 고정 섹션 · 「충분」 50%) — 고침 3(이웃만 · 의도 묶음 · 채우기)은 끔
-FIX2 = {"walk_enough_bytes_ratio": 0.5, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False}
-PROFILES = {"v24": V24, "fix2": FIX2, "fix3": {}}
+FIX2 = {"walk_enough_bytes_ratio": 0.5, "walk_jev_sections": True, "walk_base_bundle": False, "walk_fill": False,
+        "walk_safety_budget": 0}
+PROFILES = {"v24": V24, "fix2": FIX2, "fix3": {"walk_safety_budget": 0}, "fix4": {}}
 
 
 async def run(deps_factory, q, jev: FakeJev, seed=0, fix2=False, profile=None, **kw):
@@ -511,3 +513,43 @@ async def test_fix3_enough_ignored_until_80pct(deps_factory, hub):
     r, _, _ = await run(deps_factory, Q, jev, profile="fix3", walk_fill=False)
     w = r["trace"]["walk"]
     assert w["bytes_total"] < 0.8 * 20000 and w["enough_ignored"] >= 1 and w["stop"] != "enough"
+
+
+# ── 걷기 고침 4(11-01 · phub-recommend-walk-fix4.md) — 안전 예산 따로(8KB · 20KB 밖) ───────────────────────────────
+SAFE = ["checks", "site_caution", "safety.side_effects", "safety.complications"]
+
+
+async def test_fix4_safety_pool_first_and_outside_general(deps_factory, hub):
+    jev = FakeJev(intent="I-03", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, fa, _ = await run(deps_factory, Q, jev, profile="fix4", walk_max_steps=2, walk_fill=False)
+    w = r["trace"]["walk"]
+    calls = w["steps"][0]["expand"]["calls"]
+    assert [c["sections"][0] for c in calls[:4]] == SAFE and all(c.get("pool") == "safety" for c in calls[:4])
+    sb = w["safety_budget"]
+    assert sb["budget"] == 8000 and sb["bytes"] == sum(x["bytes"] for x in sb["sections"]) <= 8000 and sb["cut"] == []
+    assert [(x["node"], x["section"]) for x in sb["sections"][:4]] == [(U140, x) for x in SAFE]
+    gen = sum(c["bytes"] for st in w["steps"] for c in (st.get("expand") or {}).get("calls") or []
+              if not c.get("excluded") and c.get("pool") != "safety")
+    assert w["bytes_total"] == gen  # 일반 예산(20KB)엔 안 셈
+    # 걸음 뒤 시술 위 3(U102) 도 안전 섹션 — 안전 예산에서
+    assert {(x["node"], x["section"]) for x in sb["sections"]} >= {(U102, x) for x in SAFE}
+    assert {"safety.side_effects", "safety.complications"} <= {f["section"] for f in sonnet_input(fa)["facts"]}
+
+
+async def test_fix4_safety_budget_cut_by_rank(deps_factory, hub):
+    deps = deps_factory()
+    p = await deps.hub_rest.peek(U140)
+    by = {x["name"]: x["bytes"] for x in p["sections"]}
+    budget = by["checks"] + by["site_caution"] + 3
+    jev = FakeJev(intent="I-01", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, Q, jev, profile="fix4", walk_max_steps=1, walk_fill=False, walk_safety_budget=budget)
+    sb = r["trace"]["walk"]["safety_budget"]
+    assert [x["section"] for x in sb["sections"]] == ["checks", "site_caution"] and sb["bytes"] <= budget
+    assert {(x["node"], x["section"]) for x in sb["cut"]} >= {(U140, "safety.side_effects"), (U140, "safety.complications")}
+
+
+async def test_fix4_i04_management_in_safety_pool(deps_factory, hub):
+    jev = FakeJev(intent="I-04", choices={"start": U140, "nb": U102, "pick": "없음(충분)"}, nouls={"enough": [0.1]})
+    r, _, _ = await run(deps_factory, "소프웨이브 부작용", jev, profile="fix4", walk_max_steps=1, walk_fill=False)
+    sb = r["trace"]["walk"]["safety_budget"]
+    assert (U140, "safety.management") in {(x["node"], x["section"]) for x in sb["sections"]}

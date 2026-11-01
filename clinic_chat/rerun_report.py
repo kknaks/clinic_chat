@@ -78,7 +78,8 @@ def hub_bytes(r: dict, c: str) -> int | None:
     if c == "case3":
         w = tr.get("walk")
         if w:  # 걸음 판 = 펼친 바이트 + peek 바이트(§4-4 공정성과 같은 셈)
-            return (w.get("bytes_total") or 0) + sum((s.get("peek_bytes") or 0) for s in w.get("steps") or [])
+            return ((w.get("bytes_total") or 0) + ((w.get("safety_budget") or {}).get("bytes") or 0)
+                    + sum((s.get("peek_bytes") or 0) for s in w.get("steps") or []))  # 안전 예산(고침 4) 포함
         return (tr.get("hub") or {}).get("result_bytes")
     calls = tr.get("tool_calls") or []
     bs = [x.get("delivered_bytes", x.get("output_bytes")) for x in calls]
@@ -392,6 +393,8 @@ def build_two(qs: list[str], before: dict, batches: dict[str, dict], before_desc
             ("의도 묶음 판 · 섹션 / 채우기 판 · 섹션 · 바이트 중앙", lambda x: f"{x['base_bundle_runs']} · {x['bundle_sections']} / "
                                                                  f"{x['fill_runs']} · {x['fill_sections']} · {x['fill_bytes_median']}"),
             ("판마다 받은 섹션 중앙", lambda x: f"{x['sections_per_run_median']}"),
+            ("안전 예산 판 · 바이트 중앙 · 섹션 · 자름", lambda x: f"{x['safety_runs']} · {x['safety_bytes_median']} · "
+                                                      f"{x['safety_sections']} · {x['safety_cut']}"),
             ("Jev 호출 합 · Jev ms 중앙", lambda x: f"{x['jev_calls']} · {x['jev_ms_median']}")]
     w("| 칸 | 전 | " + " | ".join(f"후 {i + 1}" for i in range(len(names))) + " |")
     w("|---|---|" + "---|" * len(names))

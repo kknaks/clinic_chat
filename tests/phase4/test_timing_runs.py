@@ -45,7 +45,8 @@ async def test_case3_stage_times(deps_factory):
     clk = FakeClock()
     fa = FakeAnthropic([Turn(first_ms=40, chunk_ms=5, text=["a", "b"])], clock=clk)
     deps = deps_factory(anthropic=fa, walk_required_sections_csv="", walk_fixed_sections_by_intent="",
-                        walk_jev_sections=True, walk_base_bundle=False, walk_fill=False)  # v2.4 단계 순서만
+                        walk_jev_sections=True, walk_base_bundle=False, walk_fill=False,
+                        walk_safety_budget=0)  # v2.4 단계 순서만
     deps.jev = FakeJev(intent="I-03", choices=WALK).client(deps.settings)
     deps.vocab = await deps.hub_rest.vocab()
     c = Clock(now=clk.now)
@@ -108,6 +109,7 @@ async def test_three_cases_same_t0_and_record(deps_factory, tmp_path, hub, monke
                                "walk_enough_bytes_ratio": 0.8, "walk_required_sections": "checks,site_caution",
                                "walk_required_max": 3,
                                "walk_fixed_sections_by_intent": deps.settings.walk_fixed_sections_by_intent,
+                               "walk_safety_budget": 8000, "walk_safety_sections": "safety.side_effects,safety.complications",
                                "walk_jev_sections": False, "walk_base_bundle": True, "walk_fill": True,
                                "jev_confidence_min": 0.3, "jev_option_order_seed": 3}
     for c in runner.CASES:

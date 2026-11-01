@@ -800,7 +800,7 @@ class Walker:
         proc = self.kind(node) in PROC_NODE_KINDS
         items: list[tuple[str, str]] = []
         if proc and node == self.start and node not in self.required_done:
-            items += [(x, "required") for x in self.s.required_sections()]
+            items += self.safety_items(intent)
             self.required_done.add(node)
         bd = None
         if self.s.walk_base_bundle and node not in self.bundle_done:
@@ -828,9 +828,35 @@ class Walker:
             req = self.walk["required"]
             req["nodes"].append(node)
             req["filtered"] += [f"{node}|{x}" for x in filt if x in self.s.required_sections()]
+        self._note_cut(node, [(x, w) for x, w in items if x in filt])
         if plan:
             got = await self.expand(k, node, step, peek, [], [], plan)
             self._note_required(node, step, got)
+
+    def safety_items(self, intent: str | None) -> list[tuple[str, str]]:
+        """필수 묶음(checks · site_caution · I-04 safety.management) + 안전 섹션(safety.side_effects · safety.complications —
+        고침 4 · 안전 예산이 있을 때만)."""
+        out = [(x, "required") for x in self.s.required_sections()]
+        if self.s.walk_safety_budget > 0:
+            if intent == "I-04":
+                out.append(("safety.management", "required"))
+            out += [(x, "safety") for x in self.s.safety_sections()]
+        return out
+
+    def pool(self, why: str) -> str:
+        """고침 4 — 필수 · 안전 섹션은 안전 예산(WALK_SAFETY_BUDGET · 20KB 밖) · 그 밖은 일반 예산."""
+        return "safety" if self.s.walk_safety_budget > 0 and why in ("required", "safety") else "general"
+
+    def left_of(self, pool: str) -> int:
+        if pool == "safety":
+            return self.s.walk_safety_budget - self.walk["safety_budget"]["bytes"]
+        return self.left
+
+    def _note_cut(self, node: str, items: list[tuple[str, str]], bytes_: int | None = None) -> None:
+        for x, why in items:
+            if self.pool(why) == "safety":
+                self.walk["safety_budget"]["cut"].append({"node": node, "section": x,
+                                                          **({"bytes": bytes_} if bytes_ is not None else {})})
 
     async def fill(self, intent: str | None) -> None:
         """걷기 고침 3 ③ — 걸음 뒤 예산이 남으면 방문한 노드들의 아직 안 받은 섹션을 의도 순서(§5-14 묶음 순 → 그 밖은
@@ -885,8 +911,10 @@ class Walker:
             if n in self.required_done:
                 continue
             self.required_done.add(n)
-            plan, filt = self.plan_extra(n, self.peeks[n][0], [(x, "required") for x in self.s.required_sections()])
+            items = self.safety_items(self.walk.get("intent"))
+            plan, filt = self.plan_extra(n, self.peeks[n][0], items)
             req["filtered"] += [f"{n}|{x}" for x in filt]
+            self._note_cut(n, [(x, w) for x, w in items if x in filt])
             if not plan:
                 continue
             k = next((st["k"] for st in self.walk["steps"] if st.get("node") == n), 0)
@@ -917,15 +945,17 @@ class Walker:
         peek bytes 가 남은 예산을 넘으면 미리 뺌(부르지 않음)."""
         have = {x.get("name"): x.get("bytes") for x in peek.get("sections") or [] if x.get("n_facts", 1)}
         taken = self.taken.get(node, set())
-        out, filt, left = [], [], self.left
+        out, filt = [], []
+        left = {"general": self.left, "safety": self.left_of("safety")}
         for x, why in items:
             if x not in have or x in taken or any(x == y for y, _ in out):
                 continue
             b = have[x] if isinstance(have[x], int) else 0
-            if b > left:
+            pl = self.pool(why)
+            if b > left[pl]:
                 filt.append(x)
                 continue
-            left -= b
+            left[pl] -= b
             out.append((x, why))
         return out, filt
 
@@ -959,11 +989,22 @@ class Walker:
                     call["peek_bytes"] = pb
                     self.walk["bytes_mismatch"] += 1
             calls.append(call)
-            if eb > self.left:  # 그 호출만 통째로 뺌(잘라 넣지 않음) · 다음 섹션은 계속
+            pl = self.pool(why)
+            if pl == "safety":
+                call["pool"] = "safety"
+            if eb > self.left_of(pl):  # 그 호출만 통째로 뺌(잘라 넣지 않음) · 다음 섹션은 계속
                 call["excluded"] = True
-                self.walk["budget_hit"] = True
+                if pl == "safety":
+                    self._note_cut(node, [(arg[0], why)], eb)
+                else:
+                    self.walk["budget_hit"] = True
                 continue
-            self.walk["bytes_total"] += eb
+            if pl == "safety":  # 고침 4 — 안전 예산(20KB 밖)
+                sb = self.walk["safety_budget"]
+                sb["bytes"] += eb
+                sb["sections"].append({"node": node, "section": arg[0], "bytes": eb})
+            else:
+                self.walk["bytes_total"] += eb
             rows = [f for f in ex.get("facts") or [] if isinstance(f, dict) and f.get("id")]
             call["fact_ids"] = [f["id"] for f in rows]
             for f in rows:
@@ -972,7 +1013,7 @@ class Walker:
                 self.fact_seen.add(f["id"])
                 line = f.get("line", f.get("text"))
                 row = {"id": f["id"], "line": line, "section": f.get("section"), "node": node, "step": k}
-                if why == "required":
+                if why in ("required", "safety"):
                     row["required"] = True
                 if f.get("cut"):
                     row["cut"] = True
@@ -1111,7 +1152,8 @@ async def run(deps: Deps, question: str, timer: CaseTimer, on_text: Callable[[st
                             "steps_n": 0, "bytes_total": 0, "budget_hit": False, "neighbor_reached": 0,
                             "full": None, "more": {}, "fallback": False, "fallback_reason": None,
                             "required": {"nodes": [], "calls": [], "calls_ref": [], "bytes": 0, "fact_ids": [], "filtered": []},
-                            "fixed": None, "enough_ignored": 0, "base_bundle": None, "bundles": [],
+                            "fixed": None, "enough_ignored": 0,
+                            "safety_budget": {"budget": s.walk_safety_budget, "bytes": 0, "sections": [], "cut": []}, "base_bundle": None, "bundles": [],
                             "fill": {"sections": [], "bytes": 0, "fact_ids": [], "skipped": 0},
                             "jev_calls": 0, "jev_ms_total": 0.0, "hub_calls": 0, "hub_ms_total": 0.0, "fact_ids": []}
     trace["walk"] = walk
