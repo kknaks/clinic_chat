@@ -1,0 +1,661 @@
+{
+ "rows": [
+  {
+   "i": 32,
+   "intent": "I-08",
+   "n_fact_hits": 6,
+   "no": "Q020",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "product",
+   "start": "product:auto-40-1774737181584",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 36,
+   "intent": "I-05",
+   "n_fact_hits": 1,
+   "no": "Q027",
+   "place": "0홉·2쪽+",
+   "sections": [
+    "timeline"
+   ],
+   "skind": "unit_procedure",
+   "start": "unit_procedure:U5-001",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 63,
+   "intent": "I-04",
+   "n_fact_hits": 1,
+   "no": "Q055",
+   "place": "0홉·1쪽",
+   "sections": [
+    "disclosure"
+   ],
+   "skind": "family",
+   "start": "family:M2",
+   "v22": true,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 65,
+   "intent": "I-07",
+   "n_fact_hits": 1,
+   "no": "Q056",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "family",
+   "start": "family:M2",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 71,
+   "intent": "I-07",
+   "n_fact_hits": 3,
+   "no": "Q064",
+   "place": "2홉+",
+   "skind": "family",
+   "start": "family:M4",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 85,
+   "intent": "I-09",
+   "kinds": [
+    "procedure_relation"
+   ],
+   "n_fact_hits": 6,
+   "no": "Q070",
+   "place": "1홉·2쪽+",
+   "skind": "family",
+   "start": "family:M4",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 97,
+   "intent": "I-02",
+   "n_fact_hits": 1,
+   "no": "Q078",
+   "place": "0홉·1쪽",
+   "sections": [
+    "overview"
+   ],
+   "skind": "family",
+   "start": "family:M9",
+   "v22": true,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 104,
+   "intent": "I-05",
+   "kinds": [
+    "key_family",
+    "procedure_relation",
+    "product_family"
+   ],
+   "n_fact_hits": 5,
+   "no": "Q083",
+   "place": "1홉·2쪽+",
+   "skind": "family",
+   "start": "family:M9",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 119,
+   "intent": "I-07",
+   "n_fact_hits": 6,
+   "no": "Q097",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "family",
+   "start": "family:M11",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 120,
+   "intent": "I-10",
+   "n_fact_hits": 1,
+   "no": "Q098",
+   "place": "0홉·1쪽",
+   "sections": [
+    "overview"
+   ],
+   "skind": "family",
+   "start": "family:M11",
+   "v22": true,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 122,
+   "intent": "I-09",
+   "n_fact_hits": 1,
+   "no": "Q099",
+   "place": "2홉+",
+   "skind": "concern",
+   "start": "concern:P9-2",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 127,
+   "intent": "I-06",
+   "kinds": [
+    "key_family"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q102",
+   "place": "1홉·2쪽+",
+   "skind": "family",
+   "start": "family:M8",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 144,
+   "intent": "I-06",
+   "kinds": [
+    "key_family"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q106",
+   "place": "1홉·1쪽",
+   "skind": "family",
+   "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-028"
+    ]
+   },
+   "v22": false,
+   "v23": false,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 148,
+   "intent": "I-07",
+   "n_fact_hits": 11,
+   "no": "Q112",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "family",
+   "start": "family:M8",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 155,
+   "intent": "I-07",
+   "kinds": [
+    "concern_avoid",
+    "concern_avoid_unit",
+    "treats",
+    "treats_unit"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q114",
+   "place": "1홉·1쪽",
+   "skind": "concern",
+   "start": "concern:P5-1",
+   "targets": {
+    "concern_avoid": [
+     "unit_procedure:U5-030"
+    ],
+    "concern_avoid_unit": [
+     "unit_procedure:U5-030"
+    ],
+    "treats": [
+     "unit_procedure:U5-023"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-023"
+    ]
+   },
+   "v22": false,
+   "v23": false,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 157,
+   "intent": "I-11",
+   "kinds": [
+    "anchors_combo"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q117",
+   "place": "1홉·2쪽+",
+   "skind": "concern",
+   "start": "concern:P6",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 168,
+   "intent": "I-01",
+   "kinds": [
+    "key_family"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q121",
+   "place": "1홉·1쪽",
+   "skind": "family",
+   "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-023"
+    ]
+   },
+   "v22": false,
+   "v23": false,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 180,
+   "intent": "I-04",
+   "kinds": [
+    "key_family",
+    "product_family"
+   ],
+   "n_fact_hits": 2,
+   "no": "Q124",
+   "place": "1홉·1쪽",
+   "skind": "family",
+   "start": "family:M8",
+   "targets": {
+    "key_family": [
+     "unit_procedure:U5-141"
+    ],
+    "product_family": [
+     "product:M8-4-1"
+    ]
+   },
+   "v22": false,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 188,
+   "intent": "I-05",
+   "kinds": [
+    "treats",
+    "treats_unit"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q131",
+   "place": "1홉·1쪽",
+   "skind": "concern",
+   "start": "concern:P6",
+   "targets": {
+    "treats": [
+     "unit_procedure:U5-048"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-048"
+    ]
+   },
+   "v22": false,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 190,
+   "intent": "I-06",
+   "n_fact_hits": 1,
+   "no": "Q133",
+   "place": "2홉+",
+   "skind": "concern",
+   "start": "concern:P9",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 197,
+   "intent": "I-03",
+   "kinds": [
+    "key_technique"
+   ],
+   "n_fact_hits": 2,
+   "no": "Q136",
+   "place": "1홉·2쪽+",
+   "skind": "technique",
+   "start": "technique:K04b",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 206,
+   "intent": "I-05",
+   "kinds": [
+    "key_family"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q140",
+   "place": "1홉·2쪽+",
+   "skind": "family",
+   "start": "family:M8",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 207,
+   "intent": "I-09",
+   "kinds": [
+    "treats"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q141",
+   "place": "1홉·2쪽+",
+   "skind": "concern",
+   "start": "concern:P9",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 237,
+   "intent": "I-09",
+   "kinds": [
+    "requires_check_unit"
+   ],
+   "n_fact_hits": 5,
+   "no": "Q161",
+   "place": "1홉·1쪽",
+   "skind": "check_condition",
+   "start": "check_condition:C-PREG",
+   "targets": {
+    "requires_check_unit": [
+     "unit_procedure:U5-023",
+     "unit_procedure:U5-024",
+     "unit_procedure:U5-025",
+     "unit_procedure:U5-026",
+     "unit_procedure:U5-027",
+     "unit_procedure:U5-028",
+     "unit_procedure:U5-029",
+     "unit_procedure:U5-030",
+     "unit_procedure:U5-031",
+     "unit_procedure:U5-039",
+     "unit_procedure:U5-043",
+     "unit_procedure:U5-049",
+     "unit_procedure:U5-050",
+     "unit_procedure:U5-090",
+     "unit_procedure:U5-099",
+     "unit_procedure:U5-100",
+     "unit_procedure:U5-101",
+     "unit_procedure:U5-131",
+     "unit_procedure:U5-137",
+     "unit_procedure:U5-138",
+     "unit_procedure:U5-141",
+     "unit_procedure:U5-144",
+     "unit_procedure:U5-145",
+     "unit_procedure:U5-146",
+     "unit_procedure:U5-147",
+     "unit_procedure:U5-148",
+     "unit_procedure:U5-149",
+     "unit_procedure:U5-150",
+     "unit_procedure:U5-151",
+     "unit_procedure:U5-155",
+     "unit_procedure:U5-156",
+     "unit_procedure:U5-157"
+    ]
+   },
+   "v22": false,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 259,
+   "intent": "I-09",
+   "kinds": [
+    "requires_check"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q169",
+   "place": "1홉·1쪽",
+   "skind": "family",
+   "start": "family:M15",
+   "targets": {
+    "requires_check": [
+     "check_condition:C-ISO"
+    ]
+   },
+   "v22": false,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 277,
+   "intent": "I-07",
+   "n_fact_hits": 2,
+   "no": "Q185",
+   "place": "2홉+",
+   "skind": "family",
+   "start": "family:M7",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 278,
+   "intent": "I-07",
+   "n_fact_hits": 3,
+   "no": "Q186",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "family",
+   "start": "family:M7",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 293,
+   "intent": "I-06",
+   "kinds": [
+    "treats",
+    "treats_unit"
+   ],
+   "n_fact_hits": 1,
+   "no": "Q198",
+   "place": "1홉·1쪽",
+   "skind": "concern",
+   "start": "concern:P14-3",
+   "targets": {
+    "treats": [
+     "unit_procedure:U5-153"
+    ],
+    "treats_unit": [
+     "unit_procedure:U5-153"
+    ]
+   },
+   "v22": false,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  },
+  {
+   "i": 295,
+   "intent": "I-07",
+   "n_fact_hits": 1,
+   "no": "Q200",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "product",
+   "start": "product:auto-40-1774737181584",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 298,
+   "intent": "I-07",
+   "n_fact_hits": 1,
+   "no": "Q201",
+   "owners": [
+    "procedure_relation"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "family",
+   "start": "family:M8",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 313,
+   "intent": "I-06",
+   "n_fact_hits": 1,
+   "no": "Q212",
+   "place": "2홉+",
+   "skind": "product",
+   "start": "product:M9-1-3",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 320,
+   "intent": "I-05",
+   "n_fact_hits": 1,
+   "no": "Q215",
+   "owners": [
+    "scope"
+   ],
+   "place": "받을 곳 없음",
+   "skind": "unit_procedure",
+   "start": "unit_procedure:U5-018",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 348,
+   "intent": "I-07",
+   "kinds": [
+    "key_family",
+    "procedure_relation"
+   ],
+   "n_fact_hits": 8,
+   "no": "Q233",
+   "place": "1홉·2쪽+",
+   "skind": "family",
+   "start": "family:M2",
+   "v22": false,
+   "v23": false,
+   "v24": false,
+   "v24_no_unit": false
+  },
+  {
+   "i": 358,
+   "intent": "I-04",
+   "n_fact_hits": 1,
+   "no": "Q239",
+   "place": "0홉·1쪽",
+   "sections": [
+    "safety.complications"
+   ],
+   "skind": "product",
+   "start": "product:M1-2-1",
+   "v22": true,
+   "v23": true,
+   "v24": true,
+   "v24_no_unit": true
+  }
+ ],
+ "source": "spec006-v24-recount.json cover34 (profile repo · build b031371c4c69cea1)",
+ "summary": {
+  "missed_1hop_p1": [],
+  "note": "34 행 문항은 461 행(표 근거)과 겹친다 — 표본 안 · 상한 참고",
+  "place": {
+   "0홉·1쪽": 4,
+   "0홉·2쪽+": 1,
+   "1홉·1쪽": 8,
+   "1홉·2쪽+": 8,
+   "2홉+": 5,
+   "받을 곳 없음": 8,
+   "이름·속성만": 0
+  },
+  "rows": 34,
+  "shown": {
+   "v22": 4,
+   "v23": 9,
+   "v24": 12,
+   "v24_no_unit": 12
+  },
+  "shown_1hop": {
+   "v22": 0,
+   "v23": 5,
+   "v24": 8,
+   "v24_no_unit": 8
+  },
+  "zero_hop_p1": 4,
+  "zero_hop_p1_in_section2_intents": 3
+ },
+ "targets_note": "1홉·1쪽 행의 targets{edge kind: [노드]} = 목표 fact 를 1쪽에 가진 S 의 이웃(같은 스크립트 place() 셈 · 출력만 다른 곳 · 원본 행 값은 그대로)"
+}

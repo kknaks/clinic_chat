@@ -4,3 +4,35 @@
 
 - 키 · 원장 · 실버 · 골드 데이터 · 실험 기록은 이 레포에 커밋하지 않는다. 값은 `.env`(git 제외)에만 둔다 — `.env.example` 참고.
 - 환자 정보를 질문에 넣지 않는다.
+
+## 데이터 · 키 규칙(공개 레포)
+
+- 레포에 넣지 않는 것: API 키 · `.env` · 원장 json 21 · `semantic.json` · 실버 · 골드 파일 · 실행 기록(`runs/` · `*.jsonl`) · 허브 응답 캐시(`.cache/`) · 사용자 홈 절대경로.
+- 경로 · 키는 `.env` 로만 받는다. `config.py`(pydantic-settings)가 레포 루트 `.env` 를 직접 읽는다 — `--env-file` 필요 없음. 환경 변수가 있으면 그것이 앞선다.
+- 서버는 키 값을 출력 · 기록하지 않는다(기동 줄에 「있음 · 없음」만). 키가 없으면 그 케이스만 「키 없음」으로 비활성.
+- 질문과 허브 노드 이름은 Jev(TypeSafe · 미국)로 나간다 — 환자 정보를 넣지 않는다.
+
+## 실행 절차
+
+전제: 허브(SPEC-005)가 `127.0.0.1:18005` 에 떠 있다 · 키는 `.env` 에 있다.
+
+```bash
+cp .env.example .env        # .env 가 이미 있으면 건너뜀 · ANTHROPIC_API_KEY · TYPESAFE_API_KEY · RAW_DIR · SEMANTIC_JSON 채움
+uv sync
+uv run python -m clinic_chat.server   # 127.0.0.1:18210
+open http://127.0.0.1:18210
+```
+
+- 첫 질문: 환자 정보 없는 일반 질문 하나 → [보내기]. 세 열(case1 원장 MCP · case2 골드 MCP · case3 골드 + Jev)이 같이 흐르고, 셋 다 끝나면 ① 단어 검사 → ② Opus 채점이 붙고, 기록 목록에 한 줄이 생긴다.
+- 기동 확인 줄: `.env` · 키(있음 · 없음) · 허브 골드 · 원장 MCP 연결 · vocab 캐시 셈 · 모델 id.
+- 모의 판(키 · 허브 없이): `uv run python -m tests.mock_server` — 모의 허브 · 모의 Anthropic · 모의 Jev 로 같은 화면을 18210 에 띄운다.
+- 기록 검증(SPEC-006 v2 §4-4): `uv run python -m clinic_chat.verify_runs --batch <배치 id>` — 잘림(허브 재호출 대조) · intent 전달 · 격리 밖 도구 · case3 걸음 · 공정성 바이트 · C 비율을 판단 없이 셈. 출력은 레포 밖(RUNS_DIR 옆 `build-out/verify-<배치>.{md,json}`) · 두 번 돌리면 같음.
+- case3 걸음(SPEC-006 v2.4 §3-4): 걸음 1 은 이웃 먼저(의도별 edge kind 순서 표 `clinic_chat/cases/walk_order.json` · 계열 S 는 `key_family` · 제품 S 는 `product_unit` 늘 더함 · 앞 4 밖은 `expand(neighbor_kinds)` 목록) + 섹션(I-02~I-05 는 2 · 그 밖 1) · 섹션은 허브 짧은 fact 한 줄로 받고 40자 넘어 잘린 줄만 마지막에 `fact_ids` 로 원문을 받는다(`WALK_FULL_BYTE_BUDGET`). 바이트는 허브 REST 와 같은 compact 직렬화로 세고 걸음 경로 호출엔 `intent` 를 안 넘긴다(peek `bytes` 와 차 0). env: `WALK_SECTIONS_PER_STEP` · `WALK_NEIGHBORS_MAX` · `WALK_FIRST_SECTION_MAX`(`_BY_INTENT`) · `WALK_FULL_BYTE_BUDGET` · `WALK_FULL_FACTS_MAX` · `WALK_ORDER_TABLE`.
+- 비교 규칙(§4-5): 판 사이 통과율을 그대로 빼서 결론 내지 않는다 — 같은 배치 안 「case1 대비 차」 와 같은 판 2회 평균 · 두 회 차 · 뒤집힘 비율로 본다. case3 만 돌리는 배치: `uv run python -m clinic_chat.batch --cases case3 --label <라벨>-r1`(같은 판으로 `-r2` 한 번 더) → `uv run python -m clinic_chat.rerun_report --questions-file <목록> --batches <배치1>,<배치2> --before-batch <전 배치>`.
+
+## 시험
+
+```bash
+uv run pytest -q
+uv run ruff check .
+```
