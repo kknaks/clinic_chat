@@ -1,0 +1,2 @@
+<!-- 0.6 값 고르기 Noul `value_{i}`(VP1) — 값 종류가 required 인데 값 입구가 없을 때만 · `candidates[i]` = 읽은 행 안의 값(gold 이름). KD8: 이름을 글자로 함께 -->
+Does `question` talk about the value "{name}" (`candidates[{i}]`, {id}) itself, including colloquial wording, a paraphrase, or a description of it? Answer yes only if the question actually points to this value; do not answer yes just because it is a possible value for the asked target.

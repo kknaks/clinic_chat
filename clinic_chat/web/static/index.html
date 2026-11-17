@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>clinic_chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="pin" class="pin">
+    <span id="pin-prompts" class="badge bad" hidden></span>
+    <span id="pin-reasoning" class="badge"></span>
+    <span id="pin-gold" class="badge"></span>
+    <span class="badge">동시 실행</span>
+  </div>
+
+  <nav class="tabs">
+    <button type="button" class="tab on" data-tab="acc">정확도</button>
+    <button type="button" class="tab" data-tab="speed">속도</button>
+  </nav>
+
+  <div id="tab-acc">
+  <header>
+    <form id="ask" class="askrow">
+      <input id="q" class="qin" type="text" maxlength="2000" autocomplete="off">
+      <select id="set-id" class="setsel" title="세트 문항">
+        <option value="">세트 문항</option>
+      </select>
+      <button type="submit" id="send">보내기</button>
+    </form>
+    <div class="pick">
+      <label><input type="checkbox" name="col" value="a" checked> A</label>
+      <label><input type="checkbox" name="col" value="b" checked> B</label>
+      <label><input type="checkbox" name="col" value="c" checked> C</label>
+      <label><input type="checkbox" id="b-on"> B 켬</label>
+    </div>
+  </header>
+
+  <p id="current" class="current"></p>
+  <main id="cols" class="cols"></main>
+
+  <section>
+    <h2>질문 기록</h2>
+    <div class="table-wrap">
+      <table id="runs">
+        <thead><tr><th>run_id</th><th>시각</th><th>세트 문항</th><th>질문</th>
+          <th>A</th><th>B</th><th>B 켬</th><th>C</th><th>채점</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div id="tab-speed" hidden>
+  <header>
+    <form id="s-ask" class="askrow">
+      <input id="s-q" class="qin" type="text" maxlength="2000" autocomplete="off">
+      <select id="s-set-id" class="setsel" title="세트 문항">
+        <option value="">세트 문항</option>
+      </select>
+      <button type="submit" id="s-send">보내기</button>
+    </form>
+    <div class="pick">
+      <label><input type="checkbox" id="s-b"> B 전체</label>
+      <label>effort <select id="s-effort" class="setsel" title="effort">
+        <option value="low" selected>low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select></label>
+    </div>
+  </header>
+
+  <p id="s-current" class="current"></p>
+  <main id="s-cols" class="cols"></main>
+
+  <section>
+    <h2>세트 몇 문항 한꺼번에</h2>
+    <div class="askrow multirow">
+      <select id="s-multi" class="setsel" multiple size="8" title="세트 문항"></select>
+      <button type="button" id="s-batch">보내기</button>
+    </div>
+    <p id="s-batch-current" class="current"></p>
+    <div class="table-wrap"><table id="s-table"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+  </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/speed.js"></script>
+</body>
+</html>
