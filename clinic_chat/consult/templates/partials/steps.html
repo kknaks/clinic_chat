@@ -1,0 +1,9 @@
+{#- 단계 줄(수정 1 · 4번) — 진행 중 = 스피너 + 문구 · 끝남 = 체크. 문구는 prompts/consult.json `steps`(앱 코드 0) -#}
+<ol class="cs-steps">
+  {%- for it in items %}
+  <li class="cs-steps__item is-{{ it.state }}" data-step="{{ it.key }}" data-state="{{ it.state }}">
+    {%- if it.state == "active" %}<span class="cs-spin cs-spin--s" aria-hidden="true"></span>{% else %}<span class="cs-tick" aria-hidden="true"></span>{% endif -%}
+    <span class="cs-steps__label">{{ labels.get(it.key, "") }}</span>
+  </li>
+  {%- endfor %}
+</ol>

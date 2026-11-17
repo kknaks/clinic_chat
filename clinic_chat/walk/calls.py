@@ -56,7 +56,7 @@ class Entry:
     table: str
     code: str
     name: str = ""
-    by: str = "rule"  # rule | target | named | uncertain_kept | noul(①-4 입구 고르기 확정) | set
+    by: str = "rule"  # rule | target | named | uncertain_kept | noul(①-4 입구 고르기 확정) | set | carried(상담 이어 묻기)
     read_as: dict | None = None  # {by: "entry_pick" | "TG2" | "TG3", table, code} — 답이 밝힐 표지(프롬프트 낱말)
     via: str | None = None  # TG2 경유
     span: str | None = None  # resolve `matched.span`(B 단계 ① 만 — 키 · 깊이 입구는 None)

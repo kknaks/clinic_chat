@@ -72,6 +72,7 @@ class FrontResult:
     links: dict[str, dict[str, str]] = field(default_factory=dict)  # 대상 → {scope 의 holder 노드: role}(PR1 (ii) · SD1)
     group_visited: list[dict] = field(default_factory=list)  # 무리 판정 `scope` — 방문 장부 `visited` 에만(W-4)
     group_by: dict[int, str | None] = field(default_factory=dict)
+    carried: list[dict] = field(default_factory=list)  # 상담 이어 묻기(SPEC-004 CR1 ~ CR6) — {table, code, from_turn, noul, decision}
 
     def read_as_by_node(self) -> dict[str, dict]:
         return {e.node: e.read_as for e in self.entries if e.read_as}
@@ -155,6 +156,11 @@ async def _offer_name_cover(question: str, hub: HubRest, phrases: list[str], con
     return out
 
 
+def _from_key(c: dict) -> str:
+    """든 후보의 출처 칸 이름 — 상담 0.2 걸린 선택지(`origin` = option)는 `option_from` · 그 밖은 지금 글자(`carried_from`)."""
+    return "option_from" if c.get("origin") == "option" else "carried_from"
+
+
 def _decide(v: float, s: Settings) -> str:
     return "yes" if v >= s.jev_noul_yes_at else ("no" if v <= s.jev_noul_no_at else "between")
 
@@ -193,7 +199,11 @@ def _ranges_for(pairs) -> list[str]:
     return out
 
 
-async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None) -> FrontResult:
+async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, *, carry: list[dict] | None = None,
+                instr: dict[str, str] | None = None) -> FrontResult:
+    """`carry`(상담 이어 묻기 · 기본 없음 = 지금 동작) = 앞 턴 대상 `{table, code, name, from_turn}` — resolve 후보 **뒤에**
+    붙여 같은 요청으로 묻고 yes 일 때만 대상(`by` = `carried`). 겹침 묶음 · 상품 이름 덮임 · 입구 고르기 재료에 넣지 않는다
+    (검수 W-1). `instr`(기본 없음 = `prompts/jev/front.md`) = 맨 앞 판단 지시 절(상담은 `prompts/consult.json`)."""
     out = FrontResult()
 
     def stage(name: str):
@@ -214,18 +224,30 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None) 
         concepts.append({"id": cid, "table": c.get("entity_table"), "code": c.get("entity_code"),
                          "name": c.get("entity_name") or c.get("text") or "", "span": m.get("span"),
                          "start": m.get("start"), "covered_by": m.get("covered_by"), "raw": c})
+    ids = {c["id"] for c in concepts}
+    carried = []  # CR2 — 이번 글에서 맞은 것과 같은 (표, 코드)는 다시 넣지 않는다
+    for x in carry or []:
+        cid = f"{x['table']}:{x['code']}"
+        if cid not in ids and not any(c["id"] == cid for c in carried):
+            carried.append({"id": cid, "table": x["table"], "code": x["code"], "name": x.get("name") or "",
+                            "from_turn": x.get("from_turn"), "origin": x.get("origin")})  # 상담 0.2 걸린 선택지 = "option"
     with stage("coverage"):
-        out.coverage, cb = await _coverage(hub, [c["id"] for c in concepts])
+        out.coverage, cb = await _coverage(hub, [c["id"] for c in concepts] + [c["id"] for c in carried])
     out.build = out.build or cb
 
     # ①-2 Jev 한 요청
-    instr = prompts.jev_sections("front")
+    instr = instr or prompts.jev_sections("front")
     catalog = [{"code": k.code, "name": k.name} for k in KINDS]
     cand_state = [{"id": c["id"], "name": c["name"], "table": c["table"], "matched": c["span"],
                    "rows": nonzero_rows(out.coverage.get(c["id"], {}))} for c in concepts]
+    cand_state += [{"id": c["id"], "name": c["name"], "table": c["table"], "matched": None,
+                    _from_key(c): c["from_turn"], "rows": nonzero_rows(out.coverage.get(c["id"], {}))}
+                   for c in carried]  # CR3 · 걸린 선택지는 `option_from`(SPEC-005 UP4 · ST3)
     with stage("jev"):
         t_noul, k_noul, gap, n_req, models = await ask_front(jev, base_state(question, out.build), cand_state,
                                                              catalog, instr, s.jev_batch_size)
+    c_noul = t_noul[len(concepts):]
+    t_noul = t_noul[:len(concepts)]
     out.jev_requests += n_req
     out.jev_models |= models
     kv = dict(zip(KIND_CODES, k_noul, strict=True))
@@ -242,8 +264,24 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None) 
     dropped: list[dict] = []
     entries: list[Entry] = []
     entry_by = "rule"
+    carried_entries: list[Entry] = []
+    for c, v in zip(carried, c_noul, strict=True):  # CR4 — yes 일 때만 대상(TG2 · TG3 를 걸지 않는다)
+        dec = "carried" if _decide(v, s) == "yes" else "dropped"
+        out.carried.append({"table": c["table"], "code": c["code"], "from_turn": c["from_turn"], "noul": v,
+                            "decision": dec, **({"origin": c["origin"]} if c["origin"] else {})})
+        targets_tr.append({"id": c["id"], "name": c["name"], "noul": v, "decision": dec, "covered_by": None,
+                           _from_key(c): c["from_turn"]})
+        if dec == "dropped":
+            dropped.append({"id": c["id"], "noul": v, "covered_by": None, _from_key(c): c["from_turn"]})
+        else:
+            carried_entries.append(Entry(c["table"], c["code"], c["name"], "carried",
+                                         read_as={"by": "carry", "from_turn": c["from_turn"], "table": c["table"],
+                                                  "code": c["code"]}))
 
-    if not concepts:  # CD4 · TG4 — ①-4 입구 고르기
+    if not concepts and carried_entries:  # CR6 — 이번 글의 후보 0 · 든 후보만 yes
+        entries = carried_entries
+        entry_by = "noul"
+    elif not concepts:  # CD4 · TG4 — ①-4 입구 고르기
         if by:
             rs = [r for k in by for r in RANGE_OF[k].values() if r != ATTR_START]
         elif gap_yes:
@@ -320,6 +358,7 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None) 
                                      via="TG2" if dec == "uncertain_kept" else None,
                                      span=c["span"], covered_by=c["covered_by"], start=c["start"],
                                      norm=(c["raw"] or {}).get("norm")))
+        entries.extend(carried_entries)
         entry_by = "noul"
 
     if not entries:  # 후보는 있었는데 남은 대상 0 — 가장 긴 일치는 덮이지 않으므로 생기지 않는 꼴(지어내지 않는다)

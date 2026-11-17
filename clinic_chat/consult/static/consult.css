@@ -1,0 +1,128 @@
+/* 상담 화면 — 세 칸 배치 · 말풍선 · 점. 색은 medikit 토큰(--ms-*)만 참조한다(새 색 0).
+ * 치수는 이 파일의 :root 토큰 블록에만 둔다. medikit.css 는 고치지 않는다(벤더링). */
+
+@font-face {
+  font-family: "Pretendard";
+  src: url("PretendardVariable.woff2") format("woff2");
+  font-weight: 45 920;
+  font-display: swap;
+}
+
+:root {
+  --cs-gap: 16px;
+  --cs-pad: 16px;
+  --cs-left-w: 420px;
+  --cs-face-h: 46vh;
+  --cs-radius: 12px;
+  --cs-bubble-max: 78%;
+  --cs-line: 2px;
+  --cs-label-gap: 6px;
+  --cs-turn-gap: 28px;
+  --cs-spin: 20px;
+  --cs-spin-s: 14px;
+  --cs-input-max: 200px;
+}
+
+body { background: var(--ms-gray-100); }
+
+.cs-app {
+  display: grid;
+  grid-template-columns: var(--cs-left-w) 1fr;
+  gap: var(--cs-gap);
+  height: 100vh;
+  padding: var(--cs-pad);
+}
+.cs-left { display: grid; grid-template-rows: auto 1fr; gap: var(--cs-gap); min-height: 0; }
+.cs-face, .cs-list-card, .cs-chat { min-height: 0; display: flex; flex-direction: column; }
+
+/* 얼굴 — 선 그림 위에 점 층(같은 viewBox) · 라벨은 그림 아래 */
+.cs-face__canvas { position: relative; height: var(--cs-face-h); display: flex; flex-direction: column; align-items: center; }
+.cs-face__svg { height: 100%; width: auto; }
+.cs-face__lines path { fill: none; stroke: var(--ms-gray-600); stroke-width: var(--cs-line); stroke-linecap: round; stroke-linejoin: round; }
+.cs-marks { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+.cs-marks__svg { height: 100%; width: auto; }
+.cs-dot { fill: var(--ms-primary); stroke: var(--ms-white); stroke-width: var(--cs-line); }
+.cs-dot__code { fill: var(--ms-gray-800); font-size: 14px; }
+.cs-labels { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: var(--cs-label-gap); justify-content: center; }
+.cs-face--check .cs-face__canvas { height: 96vh; }
+.cs-check { padding: var(--cs-pad); }
+
+/* 시술 리스트 */
+.cs-list { overflow: auto; flex: 1; }
+.cs-concern + .cs-concern { margin-top: var(--cs-gap); }
+.cs-concern__name { margin: 0; font-size: 16px; font-weight: 600; color: var(--ms-black); }
+.cs-concern__from { margin: 0; color: var(--ms-text-secondary); }
+.cs-mod__name, .cs-extra__head { margin: 12px 0 4px; font-size: 14px; font-weight: 600; color: var(--ms-text-secondary); }
+.cs-procs, .cs-extra__items { list-style: none; margin: 0; padding: 0; }
+.cs-proc { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 0; border-bottom: 1px solid var(--ms-gray-200); }
+.cs-proc__name { font-weight: 500; color: var(--ms-black); margin-right: 4px; }
+.cs-extra__items li { padding: 2px 0; color: var(--ms-text-secondary); }
+
+/* 채팅 — 손님 말 = 오른쪽 말풍선 · 답 = 왼쪽 본문(말풍선 없이 넓게) · 입력창은 칸 아래 고정 */
+.cs-chat { padding-bottom: var(--cs-pad); }
+.cs-chat__head:has(> :empty) { display: none; }
+.cs-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--cs-turn-gap); padding: var(--cs-pad) var(--cs-pad) var(--cs-gap); }
+.cs-turn { display: flex; flex-direction: column; gap: var(--cs-gap); }
+.cs-bubble { max-width: var(--cs-bubble-max); padding: 10px 14px; border-radius: var(--cs-radius); word-break: break-word; }
+.cs-bubble--me { white-space: pre-wrap; align-self: flex-end; background: var(--ms-primary-100); color: var(--ms-black); }
+.cs-bot { align-self: stretch; color: var(--ms-text); line-height: 1.7; word-break: break-word; }
+.cs-answer { min-height: 24px; }
+.cs-answer--error { color: var(--ms-red); }
+
+/* 마크다운 본문 */
+.cs-md > :first-child { margin-top: 0; }
+.cs-md > :last-child { margin-bottom: 0; }
+.cs-md p, .cs-md ul, .cs-md ol, .cs-md pre, .cs-md table, .cs-md blockquote { margin: 0 0 12px; }
+.cs-md h1, .cs-md h2, .cs-md h3, .cs-md h4 { margin: 18px 0 8px; font-size: 16px; font-weight: 700; color: var(--ms-black); }
+.cs-md ul, .cs-md ol { padding-left: 22px; }
+.cs-md li + li { margin-top: 4px; }
+.cs-md strong { font-weight: 700; color: var(--ms-black); }
+.cs-md code { padding: 1px 5px; border-radius: 4px; background: var(--ms-gray-100); font-size: 0.92em; }
+.cs-md pre { padding: 12px; border-radius: 8px; background: var(--ms-gray-100); overflow: auto; }
+.cs-md pre code { padding: 0; background: none; }
+.cs-md blockquote { padding-left: 12px; border-left: 3px solid var(--ms-gray-300); color: var(--ms-text-secondary); }
+.cs-md table { border-collapse: collapse; }
+.cs-md th, .cs-md td { padding: 6px 10px; border: 1px solid var(--ms-gray-300); text-align: left; }
+.cs-md a { color: var(--ms-primary); }
+
+/* 스피너(medikit 에 없어 CSS 만) · 체크 */
+.cs-spin { display: inline-block; width: var(--cs-spin); height: var(--cs-spin); border: 2px solid var(--ms-gray-300); border-top-color: var(--ms-primary); border-radius: 50%; animation: cs-spin 0.8s linear infinite; vertical-align: middle; }
+.cs-spin--s { width: var(--cs-spin-s); height: var(--cs-spin-s); }
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cs-spin { animation-duration: 2.4s; } }
+.cs-tick { display: inline-block; width: var(--cs-spin-s); height: var(--cs-spin-s); position: relative; vertical-align: middle; }
+.cs-tick::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--ms-primary); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+/* 단계 줄 */
+.cs-step:empty { display: none; }
+.cs-step { margin-bottom: 8px; }
+.cs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ms-gray-600); }
+.cs-steps__item { display: flex; align-items: center; gap: 8px; }
+.cs-steps__item.is-active { color: var(--ms-text); }
+
+/* 입력창 */
+.cs-form { padding: 0 var(--cs-pad); }
+.cs-form__box { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 14px; border: 1px solid var(--ms-gray-300); border-radius: var(--cs-radius); background: var(--ms-white); }
+.cs-form__box:focus-within { border-color: var(--ms-primary); }
+.cs-form__input { flex: 1; min-height: 24px; max-height: var(--cs-input-max); resize: none; border: 0; outline: 0; padding: 4px 0; font: inherit; line-height: 1.5; color: var(--ms-text); background: transparent; field-sizing: content; }
+.cs-form__send { flex: none; width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.cs-form__icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.cs-form.is-busy .cs-form__send { opacity: 0.4; pointer-events: none; }
+.cs-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cs-empty { color: var(--ms-gray-600); }
+
+/* 0.2 묶음 ①(관심) · ③(시너지) · 표지(관심 · 추정 · 같은 날 제약) — 꼴만 · 색은 --ms-* 토큰(새 색 0) · 글은 빈 자리(data-slot) */
+.cs-interest, .cs-synergy { margin-bottom: var(--cs-gap); }
+.cs-synergy { margin-top: var(--cs-gap); }
+.cs-interest__head, .cs-synergy__head { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--ms-text-secondary); }
+.cs-interest__items, .cs-synergy__items { list-style: none; margin: 0; padding: 0; }
+.cs-interest__item, .cs-synergy__item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 0; border-bottom: 1px solid var(--ms-gray-200); }
+.cs-interest__name, .cs-synergy__name { font-weight: 500; color: var(--ms-black); margin-right: 4px; }
+.cs-synergy__with { margin: 8px 0 4px; font-size: 14px; font-weight: 600; color: var(--ms-black); }
+.cs-synergy__outside { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; color: var(--ms-text-secondary); }
+.cs-mod[data-interest] > .cs-mod__name, .cs-proc[data-interest] { background: var(--ms-gray-100); }
+.cs-mod[data-synergy] > .cs-mod__name, .cs-proc[data-synergy] .cs-proc__name { text-decoration: underline; text-decoration-color: var(--ms-primary); }
+.cs-mark { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 2px; vertical-align: middle; }
+.cs-mark--interest { background: var(--ms-primary); }
+.cs-mark--guess { border: 1px dashed var(--ms-gray-600); }
+.cs-mark--caution { border: 2px solid var(--ms-gray-800); }

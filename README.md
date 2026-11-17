@@ -59,3 +59,49 @@
 - 프롬프트를 사용자가 확인하기 전에는 결과에 「프롬프트 미확정(사용자 확인 전)」 이 찍힌다.
 
 검증: `uv sync` · `uv run ruff check .` · `uv run pytest -q`(모의만 — 키 · 허브 · 구독 없이 통과 · skip 1 = 아래 데이터 env 판). 데이터 env 판: `GOLD_CSV_DIR=<로컬 gold CSV 폴더> uv run pytest -q tests/test_walk_ranges.py` — 「LLM 에 싣는 칸」(§3-2a) 이 gold CSV 헤더에 다 있는지 본다(env 가 없으면 이 시험 하나가 skip).
+
+## 상담 화면(SPEC-004 0.1.0 · WORK-011)
+
+여러 턴 상담 1판 — 왼쪽 위 얼굴(부위 점) · 왼쪽 아래 시술 리스트 · 오른쪽 채팅. 걷기는 시험 앱 B 와 같은 `walk()` 이고, 리스트 · 점은 LLM 답보다 먼저 그린다. 화면 문구는 아직 없다(빈 자리 `data-slot` — 사용자가 채운다).
+
+| 하고 싶은 것 | 명령 | 결과를 보는 곳 |
+|---|---|---|
+| 상담 화면(`http://127.0.0.1:18222`) | `uv run python -m clinic_chat.consult`(다른 포트 `--port N`) | 화면 — 새 대화 `/`(→ `303 /c/<새 id>` · 새로 고침 · 서버 재시작 뒤에도 같은 대화) · 그 대화 `/c/<conv_id>` |
+| 좌표 확인 | 같은 서버의 `/face-check` | 좌표표의 점 전부 + 부위 코드(어긋난 코드를 알려 주면 그 코드의 좌표만 고친다) |
+| 빈 화면 확인(외부 호출 0) | `CHAT_FAKE_TURN=1 uv run python -m clinic_chat.consult --port <빈 포트>` | 가짜 턴 — `step` → `list` → `sites` → `delta` → `done`(질문에 `error` 가 들면 `turn_error`) |
+| CLI 실측(판을 올릴 때마다) | `uv run python -m clinic_chat.consult.probe --e1` · `--e2` · `--e3` | 터미널 JSON · `CHAT_DIR/probe/<시각>.json` |
+
+- **전제**: 허브가 `HUB_REST_URL`(기본 `127.0.0.1:18105`)에 떠 있다 · `.env` 에 Jev 키 · `claude` CLI 가 **구독**으로 로그인돼 있다.
+- **대화 글은 사용자 홈의 Claude CLI 세션 파일(CLI 설정 폴더의 프로젝트 기록 — `CLAUDE_CONFIG_DIR` 를 쓰면 그 아래)에 평문으로 남는다. 앱은 그 파일을 지우지 않는다.** CLI 는 레포 밖 고정 폴더(`CHAT_CLI_CWD` — 기본 = 사용자 캐시 폴더 아래 `clinic-chat/consult-cli`)에서 뜬다.
+- **프롬프트(`prompts/consult.json` — `version` 이 `-draft` 로 끝나면 사용자 확인 전)를 고쳤으면 새 대화로 본다.** 대화는 시작할 때 읽은 프롬프트 보관본(`CHAT_DIR/prompts/<sha256>.json`)으로 끝까지 돈다 — 장부 `prompts.changed` 가 고친 것을 표지만 한다.
+- 장부 = `CHAT_DIR/turns.jsonl`(기본 `runs/consult/` — gitignore) · 턴마다 시작 줄 · 맺는 줄. 맺는 줄 없는 턴이 있는 대화 · 세션이 깨진 대화 · 허브 `gold_hash` 가 바뀐 대화 · 턴 한도(`CHAT_MAX_TURNS`)에 닿은 대화는 더 받지 않는다(새 대화).
+- 고민 부위 점은 허브가 `concern_candidates` 머리에 부위 칸을 낼 때 켜진다(SPEC-001 0.7 — 칸 이름은 `clinic_chat/consult/sites.py` 의 `SITES_FIELD` 한 줄). 그 전에는 점 0 · 라벨 0 으로 돈다.
+
+### 상담 0.2 — 상담 객체(SPEC-005 0.1.0 · WORK-012)
+
+대화마다 「상담 객체」(고민 · 부위 · 관심 대상 · 닿는 시술 · 바람 · 보여 준 것 · 물은 것)를 두고 턴마다 갱신한다. 객체의 빈 칸 하나를 답 끝의 질문 하나로 잇고(선택지는 전부 허브 응답의 값), 관심 대상과 고민이 둘 다 잡히면 시너지(`g_pair` 「보완」)를 묻지 않아도 리스트 칸에 보인다.
+
+| 손잡이(env) | 기본 | 뜻 |
+|---|---|---|
+| `CHAT_STATE` | `off` | `on` 이면 상담 객체로 돈다 · `off` = 0.1 그대로. **`.env` 에 두지 말고 프로세스 env 로만 켠다** — `CHAT_STATE=on uv run python -m clinic_chat.consult` |
+| `CHAT_ASK_MAX` | `2` | 같은 빈 칸(종류 + 대상)을 주는 횟수 한도 |
+| `CHAT_SYNERGY` | `on` | 시너지 먼저(켠 대화에서만) |
+| `CHAT_RETRACT` | `on` | 거둠 판단(「그건 아니고」 — Jev 요청 하나를 걷기와 함께 · 켠 대화에서만) |
+
+- **대화의 켠 / 끈 상태는 첫 턴의 값으로 끝까지 간다**(장부 시작 줄 `consult_state`). 서버를 다른 값으로 다시 띄워도 이미 시작한 대화는 그대로이고, 그 칸이 없는 대화(0.1 로 쓴 대화)는 끈 상태로 돈다. 켠 대화는 `prompts/consult.json` 에 0.2 키(`system_state` · `jev_front.target_option` · `jev_state.retract` · `turn_headers.consult`)가 다 있어야 시작한다.
+- 프롬프트를 고쳤으면 새 대화로 본다(0.1 그대로 — 보관본으로 끝까지).
+- 장부 맺는 줄의 `consult` 칸: `diff`(이번 턴 객체 변화) · `after`(턴 뒤 객체 전체 — 서버를 다시 띄우면 마지막 성공 줄의 이것으로 객체를 세운다) · `blanks` · `ask` · `options_carried`(걸린 선택지의 Jev 판정) · `retract`(거둠 판정 · `retract_ms`) · `queries`(객체 기준 조회 — `rule` · `total` · `ms` · `skipped: "walk"`). 끈 대화의 줄에는 `consult` 칸이 없다.
+- 실측기: `CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e5 [--only ex1,ex2]` — 입력 글은 `clinic_chat/consult/e5_inputs.json` · 장부 `CHAT_DIR/e5/turns.jsonl` · 결과 `CHAT_DIR/probe/<시각>.json`.
+- 서버에 한글을 `curl` 로 보낼 때는 `curl --data-urlencode "text=…"` 를 쓴다(`-d` 로 그대로 보내면 글자가 깨진다) · 보낸 뒤 장부 시작 줄의 `question` 이 보낸 글과 같은지 본다.
+
+벤더링한 파일(`clinic_chat/consult/static/` — 고치지 않는다 · CENTURION_DAY `backend/day/static/` dev `c5045a99` 사본):
+
+| 파일 | 판 | 라이선스 | sha256 |
+|---|---|---|---|
+| `htmx.min.js` | htmx 2.0.4(본 `base.html` 의 `?v=2.0.4`) | MIT — `HTMX-LICENSE.txt` | `e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447` |
+| `htmx-ext-sse.js` | htmx SSE 확장 2.2.4(파일 안에 판이 없다 — 본 `base.html` 의 `?v=2.2.4`) | BSD Zero Clause — `HTMX-EXT-SSE-LICENSE.txt` | `3b5992a541619babefc4c169505af474df5c3039da51e59b96ccf9241ecd61d2` |
+| `PretendardVariable.woff2` | Pretendard Variable | SIL OFL 1.1 — `PRETENDARD-LICENSE.txt` | `9599f12fd42fc0bce1cd50b47a0c022e108d7aa64dd0d1bb0ed44f3282d900b4` |
+| `medikit.css` | medikit × HTMX 키트(파일 머리: medikit 1.3.0 값) | `MEDIKIT-NOTICE.txt`(디자이너 전체 공개 배포 — 사용자 확인 2026-11-17) | `37ee05c8d6331facdb9ffe46689cbaaf14a54f6bc5cbab68946c3aa00514c772` |
+| `medikit.js` | medikit × HTMX 공통 동작 | 같음 | `bf63fd2490b104a726fa232caf9827975771edf0acb8220cbd1d637bf8ecae40` |
+
+라이선스 파일 sha256: `HTMX-LICENSE.txt` `23410c2d962ac773ec1bf4137debd7cd0d914a3bb654aff9250dde7c278c3da1` · `HTMX-EXT-SSE-LICENSE.txt` `a17d224ce9afdc21ec9491b76a2f5d036d19aa641ac4f85ca29c21f9f7e54fdf` · `PRETENDARD-LICENSE.txt` `b04538c9abec39a3db75108cf0af0fd9c77032fe8aa2cf38345b4d250e98e38e`.

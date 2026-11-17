@@ -1,0 +1,11 @@
+medikit x HTMX kit — vendored files: medikit.css, medikit.js
+
+Source: CENTURION_DAY copy (backend/day/static/, branch dev, commit c5045a99)
+Version: medikit 1.3.0 values (stated in the medikit.css file header)
+Copied: 2026-11-17
+sha256:
+  medikit.css  37ee05c8d6331facdb9ffe46689cbaaf14a54f6bc5cbab68946c3aa00514c772
+  medikit.js   bf63fd2490b104a726fa232caf9827975771edf0acb8220cbd1d637bf8ecae40
+Distribution: published openly by the designer (confirmed by the user, 2026-11-17).
+No license text was found next to the source copy. If the distributor's license text is provided, it replaces this notice.
+The vendored files are not modified.

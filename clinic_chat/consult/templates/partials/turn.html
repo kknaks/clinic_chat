@@ -1,0 +1,21 @@
+{#- 한 턴 — 손님 말 = 오른쪽 말풍선 · 답 = 왼쪽 본문(말풍선 없이). 도는 턴(t.live)만 줄기에 붙는다(이벤트 이름마다
+    받는 자리 — DAY board.html 꼴). 답 자리는 첫 글자가 오기 전까지 스피너 · `delta` = 지금까지의 답 전체(마크다운)로 바꾼다.
+    줄기는 `close` 이벤트에서 닫힌다(done · turn_error 뒤에 서버가 보낸다) -#}
+<div class="cs-turn" id="turn-{{ t.n }}" data-turn="{{ t.n }}">
+  <div class="cs-bubble cs-bubble--me">{{ t.question }}</div>
+  {%- if t.live %}
+  <div class="cs-bot" hx-ext="sse" sse-connect="/c/{{ conv_id }}/turns/{{ t.n }}/events" sse-close="close" data-cs-live>
+    <div class="cs-step" id="step-{{ t.n }}" sse-swap="step" hx-swap="innerHTML"></div>
+    <div class="cs-answer" id="answer-{{ t.n }}" sse-swap="delta" hx-swap="innerHTML"><span class="cs-spin" data-cs-spinner aria-hidden="true"></span></div>
+    <div hidden sse-swap="done" hx-target="#answer-{{ t.n }}" hx-swap="outerHTML"></div>
+    <div hidden sse-swap="turn_error" hx-target="#answer-{{ t.n }}" hx-swap="outerHTML"></div>
+    <div hidden sse-swap="list" hx-target="#procedure-list" hx-swap="outerHTML"></div>
+    <div hidden sse-swap="sites" hx-target="#face-marks" hx-swap="outerHTML"></div>
+  </div>
+  {%- else %}
+  <div class="cs-bot">
+    {%- if t.error_kind %}{% set kind = t.error_kind %}{% set n = t.n %}{% include "partials/error.html" %}
+    {%- else %}{% set n = t.n %}{% set body = t.answer %}{% set end_state = t.end_state %}{% include "partials/answer.html" %}{% endif %}
+  </div>
+  {%- endif %}
+</div>

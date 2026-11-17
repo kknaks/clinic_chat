@@ -1,0 +1,18 @@
+{#- 부품 매크로 — DAY ui.html 의 꼴만(ms-* 클래스만 · day-* 변형 · 한글 기본값 없음) -#}
+{%- set _btn_variant = {"primary": "ms-btn--primary", "outline": "ms-btn--outline", "gray": "ms-btn--gray", "text": "ms-btn--text"} -%}
+{%- set _btn_size = {"l": "ms-btn--l", "m": "", "input": "ms-btn--input", "s": "ms-btn--s", "ss": "ms-btn--ss"} -%}
+{%- macro btn(variant="primary", size="m", extra="") -%}
+ms-btn {{ _btn_variant[variant] }} {{ _btn_size[size] }} {{ extra }}
+{%- endmacro -%}
+{%- macro input_box(size="l", extra="") -%}
+ms-input {{ {"l": "", "m": "ms-input--m"}[size] }} {{ extra }}
+{%- endmacro -%}
+{%- macro badge(variant="neutral", size="md") -%}
+ms-badge {{ {"neutral": "", "primary": "ms-badge--primary", "warning": "ms-badge--warning", "danger": "ms-badge--danger", "purple": "ms-badge--purple"}[variant] }} {{ "ms-badge--sm" if size == "sm" }}
+{%- endmacro -%}
+{%- macro chip(active=false) -%}
+ms-chip{{ " is-active" if active }}
+{%- endmacro -%}
+{%- set card = "ms-card" -%}
+{%- set card_head = "ms-card__head" -%}
+{%- set card_title = "ms-card__title" -%}

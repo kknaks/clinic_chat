@@ -61,6 +61,16 @@ async def ask_nouls(jev: Jev, state_base: dict, items: list[dict], prefix: str, 
     return values, extra_vals, n_req
 
 
+def _target_instr(instr: dict[str, str], item: dict) -> str:
+    """든 후보(상담 이어 묻기 — `carried_from` 이 있음)는 `target_carried` 절 · 걸린 선택지(상담 0.2 — `option_from`)는
+    `target_option` 절 · 절이 없으면 `target`(지금 동작)."""
+    if item.get("option_from") is not None and instr.get("target_option"):
+        return instr["target_option"]
+    if item.get("carried_from") is not None and instr.get("target_carried"):
+        return instr["target_carried"]
+    return instr["target"]
+
+
 async def ask_front(jev: Jev, state_base: dict, candidates: list[dict], catalog: list[dict],
                     instr: dict[str, str], batch: int) -> tuple[list[float], list[float], float, int, set[str]]:
     """단계 ①-2 — **한 요청** = `target_{i}`(후보 수) + `kind_{k}`(14) + `gap`(1). 후보가 `batch` 를 넘으면 둘째 요청부터
@@ -75,7 +85,7 @@ async def ask_front(jev: Jev, state_base: dict, candidates: list[dict], catalog:
         state = dict(state_base)
         if part:
             state["candidates"] = part
-        qs = {f"target_{i}": noul(fill(instr["target"], i, it)) for i, it in enumerate(part)}
+        qs = {f"target_{i}": noul(fill(_target_instr(instr, it), i, it)) for i, it in enumerate(part)}
         if j == 0:
             state["kinds_catalog"] = catalog
             for k, it in enumerate(catalog):

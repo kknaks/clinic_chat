@@ -25,11 +25,32 @@ if argv[:2] == ["auth", "status"]:
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai" if sub else "apiKey", "apiProvider": "firstParty"}))
     sys.exit(0)
 route = os.environ.get("FAKE_CLI_ROUTE")
+# 상담(SPEC-004) 가지 — 더하기만: `--session-id` · `--resume` 값을 init 줄의 session_id 로 되돌림(FAKE_CLI_SESSION_ID 면 그 값) ·
+# FAKE_CLI_DIE_AFTER=N 줄 뒤 종료 코드 1 · FAKE_CLI_SLEEP 초 뒤 시작 · 지금 시험이 쓰는 동작은 그대로
+sid = None
+for flag in ("--session-id", "--resume"):
+    if flag in argv:
+        sid = argv[argv.index(flag) + 1]
+sid = os.environ.get("FAKE_CLI_SESSION_ID") or sid
+if os.environ.get("FAKE_CLI_SLEEP"):
+    import time
+
+    time.sleep(float(os.environ["FAKE_CLI_SLEEP"]))
+die = int(os.environ["FAKE_CLI_DIE_AFTER"]) if os.environ.get("FAKE_CLI_DIE_AFTER") else None
 if route:
     name = "judge.jsonl" if "--json-schema" in argv else ("tools.jsonl" if "--mcp-config" in argv else "answer.jsonl")
     p = Path(route) / name
     if p.is_file():
+        k = 0
         for ln in p.read_text(encoding="utf-8").splitlines():
             if ln.strip():
+                if sid is not None and '"init"' in ln:
+                    ev = json.loads(ln)
+                    if ev.get("subtype") == "init":
+                        ev["session_id"] = sid
+                        ln = json.dumps(ev, ensure_ascii=False)
+                if die is not None and k >= die:
+                    sys.exit(1)
                 print(ln, flush=True)
+                k += 1
 sys.exit(int(os.environ.get("FAKE_CLI_EXIT", "0")))

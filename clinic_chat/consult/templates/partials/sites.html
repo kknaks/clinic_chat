@@ -1,0 +1,19 @@
+{#- 점 층 + 얼굴 아래 라벨 — `sites` 이벤트가 #face-marks 통째를 바꾼다(EV3 — SVG 를 감싼 div 통째). 점 옆 글 없음 -#}
+<div id="face-marks" class="cs-marks">
+  <svg class="cs-marks__svg" viewBox="0 0 590 1060" aria-hidden="true">
+    {%- for d in (sites.dots if sites else []) %}
+    {%- for pt in d.points %}
+    <circle class="cs-dot" data-site-code="{{ d.site_code }}" cx="{{ (pt[0] * 590)|round(1) }}" cy="{{ (pt[1] * 1060)|round(1) }}" r="11"></circle>
+    {%- if show_codes %}<text class="cs-dot__code" x="{{ (pt[0] * 590 + 14)|round(1) }}" y="{{ (pt[1] * 1060 + 5)|round(1) }}">{{ d.site_code }}</text>{% endif %}
+    {%- endfor %}
+    {%- endfor %}
+  </svg>
+  <div class="cs-labels">
+    {%- if sites and sites.labels %}
+    <span class="cs-labels__head" data-slot="label-area-title"></span>
+    {%- for l in sites.labels %}<span class="ms-chip cs-label" data-site-code="{{ l.site_code }}" data-why="{{ l.why }}">{{ l.site_code if show_codes else l.site_name }}</span>{% endfor %}
+    {%- elif not sites or not sites.dots %}
+    <span class="cs-empty" data-slot="face-empty"></span>
+    {%- endif %}
+  </div>
+</div>

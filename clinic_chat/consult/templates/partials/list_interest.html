@@ -1,0 +1,14 @@
+{#- 0.2 묶음 ① 관심 대상(SPEC-005 SC2 · 검수 §3-2 ①-a) — subjects[] 의 이름 · 표 · 닿는 시술. 머리 글은 빈 자리 -#}
+{%- import "ui.html" as ui -%}
+  <section class="cs-interest" data-slot-section="interest">
+    <h3 class="cs-interest__head" data-slot="list-section-interest"></h3>
+    <ul class="cs-interest__items">
+      {%- for x in lst.interest %}
+      <li class="cs-interest__item" data-subject="{{ x.table }}:{{ x.code }}" data-table="{{ x.table }}" data-state="{{ x.state }}">
+        <span class="cs-interest__name">{{ x.name }}</span>
+        {%- if x.state == "guess" %}<span class="cs-mark cs-mark--guess" data-slot="mark-guess"></span>{% endif %}
+        {%- for p in x.procedures %}<span class="{{ ui.badge('neutral', 'sm') }}" data-procedure-code="{{ p.code }}">{{ p.name }}</span>{% endfor %}
+      </li>
+      {%- endfor %}
+    </ul>
+  </section>
