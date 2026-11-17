@@ -1,0 +1,14 @@
+{#- 0.3 지난 대화 목록(SPEC-006 SV3 · SV5 · SV6) — 마지막 턴 시각 내림차순 · 항목 = 첫 질문 · 시각 · /c/<id>.
+    상태는 data-conv-state 로만(글 없음) · 지금 대화에 aria-current. `GET /convs` 가 이 조각만 낸다 -#}
+<ul id="conv-drawer-list" class="cs-drawer__list" data-current="{{ current or '' }}">
+  {%- for x in convs %}
+  <li class="cs-drawer__item" data-conv-state="{{ x.state }}">
+    <a class="cs-drawer__link" href="/c/{{ x.conv_id }}" data-conv-id="{{ x.conv_id }}"{% if x.conv_id == current %} aria-current="page"{% endif %}>
+      <span class="cs-drawer__q">{{ x.first_question }}</span>
+      <time class="cs-drawer__at" datetime="{{ x.last_asked_at }}">{{ x.last_asked_at[5:16]|replace("T", " ") }}</time>
+    </a>
+  </li>
+  {%- else %}
+  <li class="cs-empty" data-slot="drawer-empty"></li>
+  {%- endfor %}
+</ul>

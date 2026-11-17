@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     chat_ask_max: int = 2  # NQ4 — 같은 빈 칸(slot + about)을 주는 횟수 한도
     chat_synergy: Literal["on", "off"] = "on"  # §7 시너지 먼저(켠 상태에서만 돈다)
     chat_retract: Literal["on", "off"] = "on"  # RV2 거둠 Noul(켠 상태에서만 돈다)
+    # 상담 0.3(SPEC-006 §10-2 · WORK-014 §6) — 켠 상태(rev 3)에서만 뜻이 있다
+    chat_turn_kind: Literal["on", "off"] = "on"  # TK — off 면 모든 턴 new · 걷기는 기본 인자(0.2 호출 순서)
+    chat_talk_max: int = 3  # TT6 — 잇단 talk 한도
+    chat_alt_max: int = 3  # EM3 — alt 로 주는 계열 수
+    chat_voice_check: Literal["on", "off"] = "on"  # VO10 — 금지 낱말 검사(기록만)
+    chat_debug_panel: Literal["on", "off"] = "off"  # SV7 — 상담 객체 패널(개발용)
+    chat_drawer_max: int = 50  # SV3 — 드로어에 그리는 지난 대화 수
 
     @property
     def has_typesafe_key(self) -> bool:

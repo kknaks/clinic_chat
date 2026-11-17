@@ -1,9 +1,14 @@
-{#- 점 층 + 얼굴 아래 라벨 — `sites` 이벤트가 #face-marks 통째를 바꾼다(EV3 — SVG 를 감싼 div 통째). 점 옆 글 없음 -#}
+{#- 점 층 + 얼굴 아래 라벨 — `sites` 이벤트가 #face-marks 통째를 바꾼다(EV3 — SVG 를 감싼 div 통째). 점 옆 글 없음.
+    0.3 FD2 · FD4 · FD10: 고민 코드가 실린 점 · 라벨(켠 상태)은 data-concern-codes · data-match · data-focus 를 달고, 누르면 htmx 로
+    그 고민의 리스트 조각을 #procedure-list 에 갈아 끼운다(consult.js 는 누른 표시 · 다음 턴 viewing 만) -#}
+{%- macro hx(x) -%}
+{%- if conv_id and x.asked_codes is defined and x.concern_codes %} data-concern-codes="{{ x.concern_codes|join(',') }}" data-asked-codes="{{ x.asked_codes|join(',') }}" data-match="{{ x.match|join(',') }}"{% if x.focus %} data-focus{% endif %} data-cs-pick hx-get="/c/{{ conv_id }}/list?{% for c in x.concern_codes %}concern={{ c|urlencode }}{% if not loop.last %}&amp;{% endif %}{% endfor %}" hx-target="#procedure-list" hx-swap="outerHTML" aria-pressed="false" role="button" tabindex="0"{% endif %}
+{%- endmacro -%}
 <div id="face-marks" class="cs-marks">
   <svg class="cs-marks__svg" viewBox="0 0 590 1060" aria-hidden="true">
     {%- for d in (sites.dots if sites else []) %}
     {%- for pt in d.points %}
-    <circle class="cs-dot" data-site-code="{{ d.site_code }}" cx="{{ (pt[0] * 590)|round(1) }}" cy="{{ (pt[1] * 1060)|round(1) }}" r="11"></circle>
+    <circle class="cs-dot" data-site-code="{{ d.site_code }}"{{ hx(d) }} cx="{{ (pt[0] * 590)|round(1) }}" cy="{{ (pt[1] * 1060)|round(1) }}" r="11"></circle>
     {%- if show_codes %}<text class="cs-dot__code" x="{{ (pt[0] * 590 + 14)|round(1) }}" y="{{ (pt[1] * 1060 + 5)|round(1) }}">{{ d.site_code }}</text>{% endif %}
     {%- endfor %}
     {%- endfor %}
@@ -11,7 +16,7 @@
   <div class="cs-labels">
     {%- if sites and sites.labels %}
     <span class="cs-labels__head" data-slot="label-area-title"></span>
-    {%- for l in sites.labels %}<span class="ms-chip cs-label" data-site-code="{{ l.site_code }}" data-why="{{ l.why }}">{{ l.site_code if show_codes else l.site_name }}</span>{% endfor %}
+    {%- for l in sites.labels %}<span class="ms-chip cs-label" data-site-code="{{ l.site_code }}" data-why="{{ l.why }}"{{ hx(l) }}>{{ l.site_code if show_codes else l.site_name }}</span>{% endfor %}
     {%- elif not sites or not sites.dots %}
     <span class="cs-empty" data-slot="face-empty"></span>
     {%- endif %}

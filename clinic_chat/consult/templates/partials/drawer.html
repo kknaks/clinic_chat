@@ -1,0 +1,15 @@
+{#- 0.3 드로어(SPEC-006 SV2 · SV5 · SV10) — 「새 대화」 = GET /(새 conv_id · 새 세션) · 지난 대화 목록 = GET /convs 조각.
+    기본 열림 · 접기 · 펴기는 consult.js(이벤트 위임). 글은 빈 자리(data-slot)와 값(첫 질문 · 시각)만 -#}
+<nav id="conv-drawer" class="cs-drawer" data-cs-drawer>
+  <div class="cs-drawer__head">
+    <button type="button" class="ms-btn ms-btn--text ms-btn--s cs-drawer__toggle" aria-controls="conv-drawer-body" aria-expanded="true" data-cs-drawer-toggle>
+      <span class="cs-sr" data-slot="drawer-toggle-label"></span>
+      <svg class="cs-drawer__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <a class="ms-btn ms-btn--outline ms-btn--s cs-drawer__new" href="/" data-slot="drawer-new-label"></a>
+  </div>
+  <div id="conv-drawer-body" class="cs-drawer__body">
+    <h2 class="cs-drawer__title" data-slot="drawer-list-title"></h2>
+    {%- include "partials/drawer_list.html" %}
+  </div>
+</nav>

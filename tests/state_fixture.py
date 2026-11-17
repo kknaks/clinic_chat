@@ -132,7 +132,7 @@ def state_hub(*, sites: dict[str, list[dict]] | None = None) -> FakeHub:
         body = {"groups": CC.get(code, []), "modality_only": [], "unreached": [], "ledger_check": [],
                 "inherited_from": None, "counts": {"rows": len(CC.get(code, []))}}
         if sites and code in sites:
-            body["concern_sites"] = sites[code]
+            body["sites"] = sites[code]  # 0.3 — SPEC-001 0.7 의 칸 이름(검수 N-2)
         return body
 
     def facets_fn(p):

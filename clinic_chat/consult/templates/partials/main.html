@@ -1,5 +1,7 @@
 {%- import "ui.html" as ui -%}
-<main id="consult" class="cs-app" data-conv-id="{{ conv_id }}">
+{#- 0.3 A8(SPEC-006 SV1) — 네 칸: 드로어 | 얼굴 · 리스트 | 채팅 | 상담 객체 패널(CHAT_DEBUG_PANEL=on 일 때만) -#}
+<main id="consult" class="cs-app{{ ' cs-app--panel' if panel }}" data-conv-id="{{ conv_id }}" data-cs-app>
+  {%- include "partials/drawer.html" %}
   <section class="cs-left">
     <div class="{{ ui.card }} cs-face">
       <div class="{{ ui.card_head }}"><h2 class="{{ ui.card_title }}" data-slot="face-title"></h2></div>
@@ -15,6 +17,9 @@
   </section>
   <section class="{{ ui.card }} cs-chat">
     <div class="{{ ui.card_head }} cs-chat__head"><h2 class="{{ ui.card_title }}" data-slot="chat-title"></h2></div>
+    {%- if outdated %}
+    <div class="cs-outdated" data-conv-outdated><span data-slot="conv-outdated"></span><a class="ms-btn ms-btn--outline ms-btn--s cs-new" href="/" data-slot="error-new-conversation"></a></div>
+    {%- endif %}
     <div id="chat-log" class="cs-log" data-cs-scroll>
       {%- for t in turns %}
       {%- include "partials/turn.html" %}
@@ -22,6 +27,7 @@
     </div>
     <form class="cs-form" hx-post="/c/{{ conv_id }}/turns" hx-target="#chat-log" hx-swap="beforeend" data-cs-form>
       <div class="cs-form__box">
+        <input type="hidden" name="viewing" value="" data-cs-viewing>
         <textarea class="cs-form__input" name="text" rows="1" autocomplete="off" placeholder="" data-slot="input-placeholder" data-cs-input autofocus></textarea>
         <button type="submit" class="{{ ui.btn('primary', 's', 'cs-form__send') }}" data-cs-send>
           <span class="cs-sr" data-slot="send-label"></span>
@@ -30,4 +36,7 @@
       </div>
     </form>
   </section>
+  {%- if panel %}
+  {%- include "partials/state.html" %}
+  {%- endif %}
 </main>

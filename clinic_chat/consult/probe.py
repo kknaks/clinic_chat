@@ -4,6 +4,7 @@
     uv run python -m clinic_chat.consult.probe --e2   # 세션 C — 답 중 끊은 뒤 resume
     uv run python -m clinic_chat.consult.probe --e3   # 서버 없이 실물 한 턴 흐름 세 번(허브 · Jev · CLI)
     CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e5 [--only ex1,ex2]   # 0.2 실측 E5-1 ~ E5-4(켠 상태만)
+    CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e6 [--only c1_e3f90]  # 0.3 실측 E6-1 ~ E6-5(켠 상태만)
 
 글은 회사 자료 · 시술 자료가 없는 짧은 영어다(E1 · E2). 결과 = 터미널 JSON 한 덩이 + `CHAT_DIR/probe/<시각>.json`.
 세션 파일은 「있음 / 없음」 만 적는다(경로를 적지 않는다) · 지우지 않는다(CL9-2).
@@ -158,6 +159,10 @@ async def amain(args: argparse.Namespace) -> dict:
         from clinic_chat.consult.e5 import run_e5
 
         out["e5"] = await run_e5(s, [x for x in (args.only or "").split(",") if x] or None)
+    if getattr(args, "e6", False):
+        from clinic_chat.consult.e6 import run_e6
+
+        out["e6"] = await run_e6(s, [x for x in (args.only or "").split(",") if x] or None)
     out["ran"] = True
     out["saved"] = save(s, out).name
     return out
@@ -169,9 +174,10 @@ def main() -> None:
     ap.add_argument("--e2", action="store_true")
     ap.add_argument("--e3", action="store_true")
     ap.add_argument("--e5", action="store_true", help="0.2 E5 (needs CHAT_STATE=on in the process env)")
-    ap.add_argument("--only", default="", help="--e5 conversation ids, comma separated")
+    ap.add_argument("--e6", action="store_true", help="0.3 E6 (needs CHAT_STATE=on in the process env)")
+    ap.add_argument("--only", default="", help="--e5 / --e6 conversation ids, comma separated")
     args = ap.parse_args()
-    if not (args.e1 or args.e2 or args.e3 or args.e5):
+    if not (args.e1 or args.e2 or args.e3 or args.e5 or args.e6):
         ap.print_help()
         return
     print(json.dumps(asyncio.run(amain(args)), ensure_ascii=False, indent=2))

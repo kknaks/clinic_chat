@@ -61,8 +61,12 @@ def count(obj: dict, plan, list_shown: bool) -> list[dict]:
             out.append(b3 or b4)
         elif not subjects and list_shown:  # BK1(W-4 — BK3 · BK4 가 서면 그 턴 빈 칸이 아니다)
             out.append(_blank("BK1", "interest", about, [], _born(f), _asked_n(obj, "interest", about)))
+    focus_sites = {x["code"] for x in obj.get("concern_sites") or []
+                   if obj.get("focus") and obj.get("focus") in (x.get("concern_code"), x.get("asked"))}
     for s in ("concerns", "sites", "subjects"):  # BK5
         for x in obj[s]:
+            if s == "sites" and x.get("code") in focus_sites:  # 0.3 CS7 — focus 고민의 고민 부위면 빈 칸 아님
+                continue
             if x.get("state") == "guess":
                 out.append(_blank("BK5", "confirm", st.node(x), [_opt(x)], _born(x), _asked_n(obj, "confirm", st.node(x))))
     return out

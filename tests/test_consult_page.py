@@ -46,7 +46,9 @@ def test_t24_full_page_vs_fragment(tmp_path):
     assert "<head>" not in frag and 'id="consult"' in frag
     for slot in SLOTS:
         assert f'data-slot="{slot}"' in full, slot
-    assert len(re.findall(r'data-slot="', full)) == len(SLOTS) + 0  # 빈 대화 = 기본 자리 수(라벨 · 묶음 머리는 값이 올 때)
+    # 빈 대화 = 기본 자리 수(라벨 · 묶음 머리는 값이 올 때) + 0.3 A8 드로어 빈 자리 넷(new-label · toggle-label ·
+    # list-title · empty — 코디 W-2: 사용자 결정 A8 로 바뀌는 예외)
+    assert len(re.findall(r'data-slot="', full)) == len(SLOTS) + 4
     assert 'allowEval":false' in full and 'allowScriptTags":false' in full
     cid = re.search(r'data-conv-id="([^"]+)"', full).group(1)
     assert "<head>" not in c.get(f"/c/{cid}", headers={"HX-Request": "true"}).text

@@ -56,7 +56,7 @@ def test_s5_t1_slots_closed_lists():
     assert set(st.WISH_KINDS) <= set(st.KIND_CODES_14) and all(set(x) == {"kind", "state", "source", "history"}
                                                                  for x in kinds)  # N-6
     assert [x["code"] for x in obj["wishes"] if x.get("table")] == ["ZZE-1"]
-    assert set(st.HOWS) == {"text", "option", "derived", "carried"}  # 검수 N-5
+    assert set(st.HOWS) == {"text", "option", "derived", "carried", "view"}  # 검수 N-5 · 0.3 B-2(누른 하위 고민 how = view)
 
 
 def test_s5_t2_t17_certainty_named_not_in_object():

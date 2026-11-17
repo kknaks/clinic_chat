@@ -1,5 +1,6 @@
 {#- 시술 리스트(SPEC-004 §6-1) — 값만 그린다(시술 · 계열 이름 · 층 값). 묶음 머리 글은 빈 자리 -#}
 {#- 0.2(SPEC-005 SC2 · SC4 · SC6 · U5-4 (a1)): 켠 상태의 꼴에만 있는 칸(interest · synergy · 표지)은 있을 때만 그린다 — 끈 상태 출력은 0.1 그대로 -#}
+{#- 0.3(SPEC-006 LS1 ~ LS5): 고민 묶음에 `hidden` 칸이 있으면(켠 상태 rev 3) list_v3.html 로 그린다 -#}
 {%- import "ui.html" as ui -%}
 <div id="procedure-list" class="cs-list">
   {%- if not lst or not (lst.concerns or lst.interest or lst.synergy) %}
@@ -9,6 +10,9 @@
   {%- include "partials/list_interest.html" %}
   {%- endif %}
   {%- for c in lst.concerns %}
+  {%- if c.hidden is defined %}
+  {%- include "partials/list_v3.html" %}
+  {%- else %}
   <section class="cs-concern" data-concern-code="{{ c.concern_code }}">
     <h3 class="cs-concern__name">{{ c.concern_name }}</h3>
     {%- if c.inherited_from %}
@@ -45,6 +49,7 @@
     </div>
     {%- endif %}
   </section>
+  {%- endif %}
   {%- endfor %}
   {%- if lst.synergy %}
   {%- include "partials/list_synergy.html" %}

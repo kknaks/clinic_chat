@@ -21,13 +21,16 @@
   --cs-spin: 20px;
   --cs-spin-s: 14px;
   --cs-input-max: 200px;
+  --cs-drawer-w: 240px;
+  --cs-drawer-closed-w: 48px;
+  --cs-panel-w: 360px;
 }
 
 body { background: var(--ms-gray-100); }
 
 .cs-app {
   display: grid;
-  grid-template-columns: var(--cs-left-w) 1fr;
+  grid-template-columns: var(--cs-drawer-w) var(--cs-left-w) 1fr;
   gap: var(--cs-gap);
   height: 100vh;
   padding: var(--cs-pad);
@@ -126,3 +129,41 @@ body { background: var(--ms-gray-100); }
 .cs-mark--interest { background: var(--ms-primary); }
 .cs-mark--guess { border: 1px dashed var(--ms-gray-600); }
 .cs-mark--caution { border: 2px solid var(--ms-gray-800); }
+
+/* 0.3 A8 — 네 칸(드로어 | 얼굴 · 리스트 | 채팅 | 객체 패널) · 꼴만 · 색은 --ms-* 토큰 · 글은 빈 자리(data-slot) */
+.cs-app--panel { grid-template-columns: var(--cs-drawer-w) var(--cs-left-w) 1fr var(--cs-panel-w); }
+.cs-app.is-drawer-closed { grid-template-columns: var(--cs-drawer-closed-w) var(--cs-left-w) 1fr; }
+.cs-app--panel.is-drawer-closed { grid-template-columns: var(--cs-drawer-closed-w) var(--cs-left-w) 1fr var(--cs-panel-w); }
+.cs-drawer { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.cs-drawer__head { display: flex; align-items: center; gap: 8px; }
+.cs-drawer__toggle { flex: none; width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.cs-drawer__icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cs-drawer__new { flex: 1; }
+.cs-drawer__body { min-height: 0; overflow: auto; flex: 1; }
+.cs-drawer__title { margin: 4px 0; font-size: 13px; font-weight: 600; color: var(--ms-text-secondary); }
+.cs-drawer__title:empty { display: none; }
+.cs-drawer__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cs-drawer__link { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; color: var(--ms-text); text-decoration: none; }
+.cs-drawer__link:hover { background: var(--ms-gray-200); }
+.cs-drawer__link[aria-current="page"] { background: var(--ms-primary-100); }
+.cs-drawer__q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.cs-drawer__at { font-size: 12px; color: var(--ms-gray-600); }
+.cs-drawer__item[data-conv-state="broken"] .cs-drawer__q,
+.cs-drawer__item[data-conv-state="outdated"] .cs-drawer__q,
+.cs-drawer__item[data-conv-state="build_changed"] .cs-drawer__q { color: var(--ms-gray-600); }
+.cs-app.is-drawer-closed .cs-drawer__new, .cs-app.is-drawer-closed .cs-drawer__body { display: none; }
+.cs-state { min-height: 0; display: flex; flex-direction: column; overflow: auto; font-size: 12px; }
+.cs-state__turns:has(.cs-state__turn) + .cs-state__empty { display: none; }
+.cs-state__turn { border-bottom: 1px solid var(--ms-gray-200); padding: 4px 0; }
+.cs-state__sum { cursor: pointer; font-weight: 600; color: var(--ms-text-secondary); }
+.cs-state__fields { margin: 4px 0 0; }
+.cs-state__key { font-weight: 600; color: var(--ms-gray-800); }
+.cs-state__val { margin: 0 0 6px; }
+.cs-state__val pre { margin: 0; padding: 6px; border-radius: 6px; background: var(--ms-gray-100); overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.cs-outdated { display: flex; align-items: center; gap: 8px; padding: 8px var(--cs-pad); color: var(--ms-text-secondary); }
+.cs-mark--prefer { background: var(--ms-gray-800); }
+.cs-mark--level { font-weight: 600; }
+.cs-mod--descended .cs-proc__name { font-weight: 400; }
+.cs-marks__svg [data-cs-pick], .cs-labels [data-cs-pick] { pointer-events: auto; cursor: pointer; }
+.cs-dot[data-focus] { stroke: var(--ms-gray-800); }
+.cs-dot[aria-pressed="true"], .cs-label[aria-pressed="true"] { fill: var(--ms-gray-800); outline: 2px solid var(--ms-primary); }

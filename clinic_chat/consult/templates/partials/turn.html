@@ -11,6 +11,9 @@
     <div hidden sse-swap="turn_error" hx-target="#answer-{{ t.n }}" hx-swap="outerHTML"></div>
     <div hidden sse-swap="list" hx-target="#procedure-list" hx-swap="outerHTML"></div>
     <div hidden sse-swap="sites" hx-target="#face-marks" hx-swap="outerHTML"></div>
+    {%- if panel %}
+    <div hidden sse-swap="state" hx-target="#consult-state-turns" hx-swap="afterbegin"></div>
+    {%- endif %}
   </div>
   {%- else %}
   <div class="cs-bot">

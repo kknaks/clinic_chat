@@ -55,3 +55,18 @@ def with_options(carried: list[dict], asked: list[dict], turn: int) -> list[dict
         idx[key] = x
         out.append(x)
     return out
+
+
+def alive_in_object(carried: list[dict], obj: dict, slot_of: dict[str, str]) -> list[dict]:
+    """0.3 TW7 · 코디 W-3 — 켠 상태의 든 후보: 객체 칸에 드는 표의 것만 객체의 생사로 거른다(객체에 없거나 `withdrawn` 이면
+    뺀다) · 그 밖의 표(package · adverse · condition · anatomy · offer)는 0.1 CR1 그대로 싣는다."""
+    out = []
+    for x in carried:
+        slot = slot_of.get(x.get("table") or "")
+        if slot is None:
+            out.append(x)
+            continue
+        it = next((y for y in obj.get(slot) or [] if y.get("table") == x["table"] and y.get("code") == x["code"]), None)
+        if it is not None and it.get("state") != "withdrawn":
+            out.append(x)
+    return out

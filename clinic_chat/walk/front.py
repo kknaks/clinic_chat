@@ -199,11 +199,23 @@ def _ranges_for(pairs) -> list[str]:
     return out
 
 
+ABBR = "\uc904\uc784"  # 허브 `matched.how` 값 「줄임」(SPEC-001 0.7 §4-1 NM — 앱 문장 아님)
+ABBR_CARRY = "abbr+carry"  # 0.3 검수 W-3 ⓐ — 앞 대상과 같은 줄임 후보(상담만)
+
+
+def _abbr(c: dict) -> bool:
+    return ((c["raw"] or {}).get("matched") or {}).get("how") == ABBR
+
+
 async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, *, carry: list[dict] | None = None,
-                instr: dict[str, str] | None = None) -> FrontResult:
+                instr: dict[str, str] | None = None, entry_pick: bool = True,
+                abbr_yes_only: bool = False) -> FrontResult:
     """`carry`(상담 이어 묻기 · 기본 없음 = 지금 동작) = 앞 턴 대상 `{table, code, name, from_turn}` — resolve 후보 **뒤에**
     붙여 같은 요청으로 묻고 yes 일 때만 대상(`by` = `carried`). 겹침 묶음 · 상품 이름 덮임 · 입구 고르기 재료에 넣지 않는다
-    (검수 W-1). `instr`(기본 없음 = `prompts/jev/front.md`) = 맨 앞 판단 지시 절(상담은 `prompts/consult.json`)."""
+    (검수 W-1). `instr`(기본 없음 = `prompts/jev/front.md`) = 맨 앞 판단 지시 절(상담은 `prompts/consult.json`).
+    상담 0.3(SPEC-006 TW2 · TW4 · TW8 · WORK-014 §8 — 셋 다 안 주면 지금과 글자 그대로): `entry_pick=False` = 이번 글의 후보 0 ·
+    든 후보 yes 0 이면 입구 고르기 없이 곧바로 「입구 없음」 · `abbr_yes_only=True` = `matched.how` 「줄임」 후보는 yes 일 때만
+    대상 · 든 후보 `origin` = `follow` = Noul 과 무관하게 대상."""
     out = FrontResult()
 
     def stage(name: str):
@@ -239,7 +251,9 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, 
     instr = instr or prompts.jev_sections("front")
     catalog = [{"code": k.code, "name": k.name} for k in KINDS]
     cand_state = [{"id": c["id"], "name": c["name"], "table": c["table"], "matched": c["span"],
-                   "rows": nonzero_rows(out.coverage.get(c["id"], {}))} for c in concepts]
+                   "rows": nonzero_rows(out.coverage.get(c["id"], {})),
+                   **({"abbreviated": True} if abbr_yes_only and _abbr(c) else {})}  # 0.3 W-3 ⓑ — 상담만
+                  for c in concepts]
     cand_state += [{"id": c["id"], "name": c["name"], "table": c["table"], "matched": None,
                     _from_key(c): c["from_turn"], "rows": nonzero_rows(out.coverage.get(c["id"], {}))}
                    for c in carried]  # CR3 · 걸린 선택지는 `option_from`(SPEC-005 UP4 · ST3)
@@ -266,7 +280,7 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, 
     entry_by = "rule"
     carried_entries: list[Entry] = []
     for c, v in zip(carried, c_noul, strict=True):  # CR4 — yes 일 때만 대상(TG2 · TG3 를 걸지 않는다)
-        dec = "carried" if _decide(v, s) == "yes" else "dropped"
+        dec = "carried" if c["origin"] == "follow" or _decide(v, s) == "yes" else "dropped"  # 0.3 TW4 — follow 는 대상
         out.carried.append({"table": c["table"], "code": c["code"], "from_turn": c["from_turn"], "noul": v,
                             "decision": dec, **({"origin": c["origin"]} if c["origin"] else {})})
         targets_tr.append({"id": c["id"], "name": c["name"], "noul": v, "decision": dec, "covered_by": None,
@@ -281,6 +295,12 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, 
     if not concepts and carried_entries:  # CR6 — 이번 글의 후보 0 · 든 후보만 yes
         entries = carried_entries
         entry_by = "noul"
+    elif not concepts and not entry_pick:  # 0.3 TW2 — 입구 고르기 없이 곧바로 「입구 없음」(상담 둘째 턴부터의 첫 걷기)
+        out.end = END_NO_ENTRY
+        out.trace_entry_pick = {"skipped": True}
+        out.trace_front = _front_trace(out, s, kv, by, gap, targets_tr, dropped, [], {}, "jev")
+        out.trace_entry = {"resolve_candidates": [], "picked": [], "by": "noul", "overlaps": [], "unused": []}
+        return out
     elif not concepts:  # CD4 · TG4 — ①-4 입구 고르기
         if by:
             rs = [r for k in by for r in RANGE_OF[k].values() if r != ATTR_START]
@@ -334,13 +354,20 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, 
                         lost.add(c["id"])
                 overlaps.append({"span": span, "concepts": [c["id"] for c in group], "by": "rule",
                                  "picked": [keep["id"]], "ranges": rs})
+        carry_ids = {f"{x['table']}:{x['code']}" for x in carry or []} if abbr_yes_only else set()
         for c in concepts:
             v = tv[c["id"]]
             d = _decide(v, s)
+            abbr_carry = False
             if c["id"] in lost:
                 dec = "overlap"
             elif d == "yes":
                 dec = "target"
+            elif abbr_yes_only and _abbr(c) and d == "between" and c["id"] in carry_ids:
+                dec = "target"  # 0.3 TW8 보탬(검수 W-3 ⓐ) — 앞 대상(든 후보)과 같은 (표, 코드)의 줄임은 사이 값이어도 대상
+                abbr_carry = True
+            elif abbr_yes_only and _abbr(c):
+                dec = "dropped"  # 0.3 TW8 — 줄임 후보는 yes 일 때만(TG2 · TG3 를 걸지 않는다)
             elif c["covered_by"] is not None:
                 dec = "dropped"  # 덮인 조각은 yes 일 때만 대상 — 사이 값 · no 는 뺀다(_RESUME §2 11-17 「덮인 조각 규칙」)
             elif d == "between":
@@ -348,12 +375,14 @@ async def front(question: str, hub: HubRest, jev: Jev, s: Settings, timer=None, 
             else:
                 dec = "named"  # TG3 — 이름이 글에 통째로 들었다(덮이지 않은 일치 · no 이하)
             targets_tr.append({"id": c["id"], "name": c["name"], "noul": v, "decision": dec,
-                               "covered_by": c["covered_by"]})
+                               "covered_by": c["covered_by"], **({"by": ABBR_CARRY} if abbr_carry else {})})
             if dec == "dropped":
                 dropped.append({"id": c["id"], "noul": v, "covered_by": c["covered_by"]})
             if dec in ("target", "uncertain_kept", "named"):
                 ra = {"uncertain_kept": {"by": "TG2", "table": c["table"], "code": c["code"]},
                       "named": {"by": "TG3", "table": c["table"], "code": c["code"]}}.get(dec)
+                if abbr_carry:
+                    ra = {"by": ABBR_CARRY, "table": c["table"], "code": c["code"]}
                 entries.append(Entry(c["table"], c["code"], c["name"], dec, read_as=ra,
                                      via="TG2" if dec == "uncertain_kept" else None,
                                      span=c["span"], covered_by=c["covered_by"], start=c["start"],

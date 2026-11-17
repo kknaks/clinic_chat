@@ -162,7 +162,8 @@ def concern_sites_of(reads: list[Read]) -> list[dict]:
     pairs: list[dict] = []
     for r in reads:
         if r.call.tool == "concern_candidates":
-            pairs.extend(from_response(r.ra.as_response()))
+            asked = str(r.call.request.get("concern_code") or "")
+            pairs.extend({**x, "asked": asked} for x in from_response(r.ra.as_response()))
     seen, out = set(), []
     for p in pairs:
         k = (p["concern_code"], p["site_code"])
@@ -170,6 +171,23 @@ def concern_sites_of(reads: list[Read]) -> list[dict]:
             seen.add(k)
             out.append(p)
     return out
+
+
+def cc_reads_of(code: str, memo: dict, extra: list[Read] | None = None) -> list[Read]:
+    """0.3 FD1 · FD4 — 그 고민을 물은 `concern_candidates` 응답(이번 턴 읽기 → 대화 메모 · 부위 거르개 무관 · 허브 0)."""
+    for r in extra or []:
+        if r.call.tool == "concern_candidates" and str(r.call.request.get("concern_code") or "") == code:
+            return [r]
+    for rs in memo.values():
+        for r in rs or []:
+            if r.call.tool == "concern_candidates" and str(r.call.request.get("concern_code") or "") == code:
+                return [r]
+    return []
+
+
+def qy1_plain(code: str) -> Call:
+    """QY1 꼴(부위 거르개 없음) — 점 재료 · 누르기에서 메모에 없을 때만."""
+    return Call("concern_candidates", {"concern_code": code}, ("indication",), ("concern",))
 
 
 async def run(obj: dict, reader: Reader) -> Plan:
@@ -186,6 +204,10 @@ async def run(obj: dict, reader: Reader) -> Plan:
     if f:
         for c in qy1_calls(obj):  # QY1 · QY5
             out.lists.extend(await reader.get(c, "QY5" if c.request.get("site") else "QY1"))
+    for c in concerns:  # 0.3 FD1 — 점 = 객체 고민 전부의 고민 부위(focus 가 아닌 고민은 메모 · 없으면 QY1 꼴)
+        if c["code"] != f and not cc_reads_of(c["code"], reader.memo, list(reader.walk.values())):
+            await reader.get(qy1_plain(c["code"]), "QY1")
+    if f:
         out.sub_concerns = sub_concerns(out.lists, f)
         pairs = concern_sites_of(out.lists)
         subs = {x["code"] for x in out.sub_concerns}
@@ -227,9 +249,28 @@ def derive(obj: dict, memo: dict, plan: Plan | None = None) -> None:
     obj["procedures"] = procs
     cs: list[dict] = []
     f = obj.get("focus")
-    if f:
-        reads = plan.lists if plan is not None else [r for c in qy1_calls(obj) for r in memo.get(c.key()) or []]
+    seen: set[tuple[str, str]] = set()
+    for c in st.axis_items(obj, "concerns"):  # 0.3 FD1 — said · confirmed 고민 전부(guess · 거둔 것 빼고)
+        if c["code"] == f and plan is not None:
+            reads = plan.lists
+        elif c["code"] == f:
+            reads = [r for q in qy1_calls(obj) for r in memo.get(q.key()) or []]
+        else:
+            reads = cc_reads_of(c["code"], memo)
         for p in concern_sites_of(reads):
+            if (p["concern_code"], p["site_code"]) in seen:
+                continue
+            seen.add((p["concern_code"], p["site_code"]))
             cs.append({"table": "site", "code": p["site_code"], "name": p["site_name"], "concern_code": p["concern_code"],
-                       "csi_id": p["csi_id"], "state": "derived", "source": {"how": "derived"}})
+                       "csi_id": p["csi_id"], "asked": c["code"], "match": p.get("match"), "state": "derived",
+                       "source": {"how": "derived"}})
     obj["concern_sites"] = cs
+
+
+def concern_name_in(memo: dict, code: str) -> str:
+    """0.3 B-2 — 하위 고민 이름(이미 읽은 응답 행의 `concern_name` · 없으면 "")."""
+    for rs in memo.values():
+        for x in cc_rows(rs or []):
+            if x.get("concern_code") == code and x.get("concern_name"):
+                return str(x["concern_name"])
+    return ""

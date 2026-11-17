@@ -68,6 +68,8 @@ def _target_instr(instr: dict[str, str], item: dict) -> str:
         return instr["target_option"]
     if item.get("carried_from") is not None and instr.get("target_carried"):
         return instr["target_carried"]
+    if item.get("abbreviated") and instr.get("target_abbr"):  # 상담 0.3 검수 W-3 ⓑ — 줄임 후보(상담만 싣는 칸)
+        return instr["target_abbr"]
     return instr["target"]
 
 

@@ -159,14 +159,15 @@ async def _coverage_of(d: Deps):
 
 
 async def walk(question: str, d: Deps, *, read_kinds: list[str] | None = None, carry: list[dict] | None = None,
-               instr: dict[str, str] | None = None) -> Walk:
+               instr: dict[str, str] | None = None, entry_pick: bool = True, abbr_yes_only: bool = False) -> Walk:
     s = d.settings
     w = Walk()
     t = w.timer
     aborted = None
     try:
         progress.emit("step", step="①", stage="front")
-        w.front = await front(question, d.hub, d.jev, s, timer=t, carry=carry, instr=instr)  # 상담만 carry · instr
+        opt = {**({} if entry_pick else {"entry_pick": False}), **({"abbr_yes_only": True} if abbr_yes_only else {})}
+        w.front = await front(question, d.hub, d.jev, s, timer=t, carry=carry, instr=instr, **opt)  # 상담만(0.3 §8)
         f = w.front
         if read_kinds is not None and not f.end:  # b_full — 그 대상의 표에 있는 종류 전부
             f.kinds = [k for k in KIND_CODES if k in read_kinds

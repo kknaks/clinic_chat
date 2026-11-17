@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -13,6 +14,7 @@ from markdown_it import MarkdownIt
 from markupsafe import Markup
 
 TEMPLATES = Path(__file__).parent / "templates"
+STATE_KEYS = ("after", "diff", "blanks", "ask", "turn_kind", "close")  # 0.3 SV8 · SV9 — 패널에 그리는 장부 `consult.*` 칸
 
 _MD = MarkdownIt("commonmark", {"html": False, "linkify": False, "breaks": True}).enable("table").disable("image")
 
@@ -21,19 +23,45 @@ def md(text: str | None) -> Markup:
     return Markup(_MD.render(text or ""))
 
 
+def state_view(row: dict, *, open_: bool = False) -> dict:
+    """0.3 SV8 · SV9 — 한 턴 장부 줄 → 패널 묶음(값은 장부 글자 그대로 · 없는 칸은 안 그림 · 끈 상태 · 오류 턴은 빈 묶음)."""
+    c = row.get("consult") or {}
+    ok = row.get("error") is None and c.get("after") is not None
+    fields = [(k, json.dumps(c[k], ensure_ascii=False, indent=1)) for k in STATE_KEYS if ok and k in c]
+    view = [{"code": x.get("code"), "name": x.get("name"), "state": x.get("state")}
+            for x in ((c.get("after") or {}).get("concerns") or []) if (x.get("source") or {}).get("how") == "view"]
+    if ok and view:  # 검수 W-5 — 누르기로 든 고민(`how=view`)을 손님이 말한 것과 갈라 보인다
+        fields.append(("how=view", json.dumps(view, ensure_ascii=False, indent=1)))
+    if ok and c.get("viewing"):
+        fields.append(("viewing", json.dumps(c["viewing"], ensure_ascii=False, indent=1)))
+    return {"turn": row.get("turn"), "fields": fields, "open": open_}
+
+
 class Render:
-    def __init__(self, step_labels: dict[str, str] | None = None) -> None:
+    def __init__(self, step_labels: dict[str, str] | None = None, *, panel: bool = False,
+                 slots: dict[str, str] | None = None) -> None:
         self.env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=True, trim_blocks=False,
                                lstrip_blocks=False)
         self.env.filters["md"] = md
+        self.env.globals["panel"] = panel  # 0.3 SV7 — 객체 패널 칸 · `state` 받는 자리
+        self.env.globals["slots"] = dict(slots or {})  # 0.3 W-10 — 빈 자리의 정해진 문구 값(prompts/consult.json `slots`)
         self.step_labels = dict(step_labels or {})
+        self.panel = panel
 
     def _t(self, name: str, **kw) -> str:
         return self.env.get_template(name).render(**kw).strip()
 
-    def page(self, conv_id: str, turns: list[dict], lst: dict | None, sites: dict | None, *, fragment: bool) -> str:
+    def page(self, conv_id: str, turns: list[dict], lst: dict | None, sites: dict | None, *, fragment: bool,
+             convs: list[dict] | None = None, states: list[dict] | None = None, outdated: bool = False) -> str:
         name = "partials/main.html" if fragment else "page.html"
-        return self._t(name, conv_id=conv_id, turns=turns, lst=lst, sites=sites, show_codes=False)
+        return self._t(name, conv_id=conv_id, turns=turns, lst=lst, sites=sites, show_codes=False,
+                       convs=convs or [], current=conv_id, states=states or [], outdated=outdated)
+
+    def drawer_list(self, convs: list[dict], current: str | None) -> str:
+        return self._t("partials/drawer_list.html", convs=convs, current=current)
+
+    def state_turn(self, st: dict) -> str:
+        return self._t("partials/state_turn.html", st=st)
 
     def face_check(self, sites: dict) -> str:
         return self._t("face_check.html", sites=sites, show_codes=True)
@@ -64,5 +92,5 @@ class Render:
     def list(self, lst: dict | None) -> str:
         return self._t("partials/list.html", lst=lst)
 
-    def sites(self, sites: dict | None) -> str:
-        return self._t("partials/sites.html", sites=sites, show_codes=False)
+    def sites(self, sites: dict | None, conv_id: str | None = None) -> str:
+        return self._t("partials/sites.html", sites=sites, show_codes=False, conv_id=conv_id)

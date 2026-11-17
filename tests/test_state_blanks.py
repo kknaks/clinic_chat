@@ -89,7 +89,7 @@ def test_s5_t10_options_are_hub_rows_and_llm_gets_names(tmp_path, fake_cli):
     codes = {x["concern_code"] for x in INDICATION["product:ZZR-1"]}
     assert row["consult"]["ask"]["options"] and {o["code"] for o in row["consult"]["ask"]["options"]} <= codes
     j = json.loads(row["llm_user_message"].split("\n")[1])
-    assert j["ask"]["slot"] == "concern" and all(set(o) <= {"name", "layer", "n"} for o in j["ask"]["options"])
+    assert j["ask"]["slot"] == "concern" and all(set(o) <= {"name", "holder", "n"} for o in j["ask"]["options"])  # 0.3 달리 받음 ④ — layer → holder
     assert "ZZC-" not in row["llm_user_message"]  # NQ8 — 코드는 장부에만
     ns = [o["n"] for o in j["ask"]["options"]]
     assert ns and all(any(x["n"] == n and x.get("rule") == "QY3" for x in row["material"]["new_lines"]) for n in ns)
@@ -107,7 +107,7 @@ def test_s5_t19_system_texts_and_loader(tmp_path, fake_cli):
     assert all(i_screen < on.index(h) < i_mat for h in heads) and p.state_ready
     assert tuple(x["id"] for x in json.loads(PROMPT.read_text(encoding="utf-8"))["system_state"]) == STATE_SECTION_IDS
     d = json.loads(PROMPT.read_text(encoding="utf-8"))
-    d.pop("system_state")
+    d.pop("system_v3")  # 0.3 달리 받음 ③(WORK-014 §15) — 켠 대화의 시작 조건은 `system_v3`(VO1)
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
     assert not parse(bad.read_bytes()).state_ready

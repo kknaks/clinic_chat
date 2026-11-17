@@ -7,6 +7,10 @@
   요약 줄의 `gids[]` 는 근거 되짚기용이다 — 「실은 gid」 에 넣지 않는다(W-2). 같은 요약(고민 · 계열 · gid 집합)은 다시
   싣지 않고 그 줄 번호를 `seen_lines` 로(B-6).
 - 이름 목록은 싣지 않는다(AP7). 한 턴 메시지가 `ANSWER_INPUT_MAX_TOKENS` 를 넘으면 `FT5`(AP8 — 부르는 쪽이 판단).
+- 0.3(SPEC-006 §3-3 · S6-T9 · WORK-014 §9): 켠 상태(rev 3)의 「앱 판정」 은 `judgement_v3` — `read_as[]` · `offered[].rows` ·
+  `unresolved[]` 를 빼고 `offered` 는 종류 이름(`kind_labels`)만 · `ask.options[].layer` 대신 `holder` · `turn_kind` · `empty[]` ·
+  `site` 를 더한다. 끝맺음 · 앞 턴은 「앱 판정」 안의 블록(`turn_headers.close` · `turn_headers.prev`)으로 싣는다(`message_v3`).
+  끈 상태는 0.1 그대로(`col_b.judgement` 는 안 고친다).
 """
 
 from __future__ import annotations
@@ -68,8 +72,10 @@ def _profiles(reads) -> dict[str, list[dict]]:
     return out
 
 
-def summaries(reads, only: set[str]) -> list[dict]:
-    """고민마다 묶음 하나 — 계열마다 한 줄 `{modality_name, procedures, reach[], concern_match[], mechanism_name[], gids[]}`."""
+def summaries(reads, only: set[str], v3: bool = False) -> list[dict]:
+    """고민마다 묶음 하나 — 계열마다 한 줄 `{modality_name, procedures, reach[], concern_match[], mechanism_name[], gids[]}`.
+    0.3 LS6(`v3`): 내려온 행(`descended[].from[].gid`)은 그 계열 묶음의 줄로 모은다(`modality_level` 참 · 시술 수 = 그 계열의
+    내려온 시술 수) — 줄에서 `reach` · `concern_match` 를 뺀 꼴은 `renumber` 가 짓는다."""
     prof = _profiles(reads)
     out: list[dict] = []
     by_concern: dict[str, dict] = {}
@@ -86,11 +92,18 @@ def summaries(reads, only: set[str]) -> list[dict]:
         blk["inherited_from"] = blk["inherited_from"] or resp.get("inherited_from")
         seen = {g for m in blk["mods"].values() for g in m["gids"]}
 
-        def mod(name: str, blk: dict = blk) -> dict:
-            if name not in blk["mods"]:
-                blk["mods"][name] = {"modality_name": name, "procs": [], "reach": [], "concern_match": [],
-                                     "mechanism_name": [], "gids": []}
-            return blk["mods"][name]
+        def mod(name: str, blk: dict = blk, level: bool = False) -> dict:
+            key = ("\x00" if level else "") + name
+            if key not in blk["mods"]:
+                blk["mods"][key] = {"modality_name": name, "procs": [], "reach": [], "concern_match": [],
+                                    "mechanism_name": [], "gids": [], "modality_level": level}
+            return blk["mods"][key]
+
+        desc_of: dict[str, dict] = {}
+        if v3:
+            for dd in resp.get("descended") or []:
+                for fr in dd.get("from") or []:
+                    desc_of.setdefault(str(fr.get("gid")), dd)
 
         for g in resp.get("groups") or []:
             node = f"{g.get('candidate_table')}:{g.get('candidate_code')}"
@@ -117,7 +130,13 @@ def summaries(reads, only: set[str]) -> list[dict]:
                 if gid not in only or gid in seen:
                     continue
                 seen.add(gid)
-                m = mod(str(x.get("candidate_name") or "") if by_name else "")
+                dd = desc_of.get(gid)
+                if dd is not None:  # LS6 — 내려온 계열 묶음 줄
+                    m = mod(str(dd.get("modality_name") or ""), level=True)
+                    m["procs"].extend(str(pr.get("procedure_code")) for pr in dd.get("procedures") or []
+                                      if not pr.get("in_groups"))
+                else:
+                    m = mod(str(x.get("candidate_name") or "") if by_name else "")
                 m["gids"].append(gid)
                 m["reach"].append(x.get("reach"))
                 m["concern_match"].append(x.get("concern_match"))
@@ -125,7 +144,8 @@ def summaries(reads, only: set[str]) -> list[dict]:
     for blk in out:
         blk["lines"] = [{"modality_name": m["modality_name"], "procedures": len(_uniq(m["procs"])),
                          "reach": _uniq(m["reach"]), "concern_match": _uniq(m["concern_match"]),
-                         "mechanism_name": _uniq(m["mechanism_name"]), "gids": m["gids"]}
+                         "mechanism_name": _uniq(m["mechanism_name"]), "gids": m["gids"],
+                         "modality_level": m["modality_level"]}
                         for m in blk.pop("mods").values() if m["gids"]]
     return [b for b in out if b["lines"]]
 
@@ -135,8 +155,12 @@ def summary_key(concern_code: str, modality_name: str, gids: list[str]) -> str:
     return f"{concern_code}|{modality_name}|{h}"
 
 
-def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: int) -> TurnMaterial:
-    """걷기 결과 → 이번 턴에 새로 싣는 것(대화 번호)."""
+V3_SUMMARY = ("modality_name", "procedures", "mechanism_name", "modality_level")  # 0.3 LS6 — reach · concern_match 뺌
+V1_SUMMARY = ("modality_name", "procedures", "reach", "concern_match", "mechanism_name")
+
+
+def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: int, v3: bool = False) -> TurnMaterial:
+    """걷기 결과 → 이번 턴에 새로 싣는 것(대화 번호). `v3`(0.3 켠 상태) = 요약 줄 꼴 LS6."""
     out = TurnMaterial(next_n=next_n)
     local_gid = {x["n"]: x["gid"] for x in w.material.lines}
     line_of = {x["gid"]: x for x in w.material.lines}
@@ -184,7 +208,7 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
         out.new_lines.append({"n": n, "gid": gid, **{c: ln.get(c) for c in (
             "gold_table", "silver_table", "silver_id", "evidence_kind", "kind", "range", "layer")}})
     # ② 목록 요약 줄
-    for blk in summaries(w.reads, only):
+    for blk in summaries(w.reads, only, v3):
         rows = []
         for ln in blk["lines"]:
             key = summary_key(blk["concern_code"], ln["modality_name"], ln["gids"])
@@ -193,8 +217,7 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
                 continue
             n = out.next_n
             out.next_n += 1
-            rows.append({"n": n, "summary": True, **{c: ln[c] for c in (
-                "modality_name", "procedures", "reach", "concern_match", "mechanism_name")}})
+            rows.append({"n": n, "summary": True, **{c: ln[c] for c in (V3_SUMMARY if v3 else V1_SUMMARY)}})
             out.new_lines.append({"n": n, "summary": True, "key": key, "concern_code": blk["concern_code"],
                                   "modality_name": ln["modality_name"], "gids": ln["gids"]})
         if rows:
@@ -217,6 +240,42 @@ def judgement_of(w, tm: TurnMaterial, turn: int, consult: dict | None = None) ->
         out["ask"] = consult.get("ask")
         out["synergy_lines"] = consult.get("synergy_lines") or []
     return out
+
+
+V3_DROP = ("read_as", "unresolved")  # 0.3 S6-T9 — 켠 상태 「앱 판정」 에서 빼는 칸(`offered[].rows` 는 아래에서)
+
+
+def judgement_v3(w, tm: TurnMaterial, turn: int, *, kind_labels: dict[str, str], extra: dict) -> dict:
+    """0.3 켠 상태 「앱 판정」 — 0.1 판정에서 VO7 · EM4 의 칸을 빼고 `extra`(turn_kind · ask · synergy_lines · empty · site)를 더한다."""
+    base = judgement_of(w, tm, turn)
+    for k in V3_DROP:
+        base.pop(k, None)
+    f = w.front
+    offered = [] if not f or w.end_state in _no_b_on() else f.offered
+    base["offered"] = [{"kind": kind_labels.get(o.get("code"), "")} for o in offered]  # EM4 — 행 수 없음
+    base.update(extra)
+    return base
+
+
+def _no_b_on():
+    from clinic_chat.columns.col_b import NO_B_ON
+
+    return NO_B_ON
+
+
+def message_v3(prompt: ConsultPrompt, judgement: dict, close: dict, prev: dict | None, tm: TurnMaterial, question: str,
+               consult: dict) -> str:
+    """0.3 턴 메시지 — 앱 판정(JSON) · 그 안의 끝맺음 블록(· `talk` 턴은 앞 턴 블록) → 상담 상태 → 자료 → 질문."""
+    h = prompt.turn_headers
+    head = h["judgement"] + "\n" + json.dumps(judgement, ensure_ascii=False) + "\n"
+    head += h["close"] + "\n" + json.dumps(close, ensure_ascii=False) + "\n"
+    if prev is not None:
+        head += h["prev"] + "\n" + json.dumps(prev, ensure_ascii=False) + "\n"
+    head += "\n" + h["consult"] + "\n" + json.dumps(consult, ensure_ascii=False) + "\n\n"
+    q = h["question"] + "\n" + question + "\n"
+    if tm.empty:
+        return head + h["material"] + "\n" + h["empty"] + "\n\n" + q
+    return head + h["material"] + "\n" + to_lines(tm.groups + tm.summary_groups) + "\n\n" + q
 
 
 def add_summaries(tm: TurnMaterial, rule: str, same: dict, rows: list[tuple[str, list[str], dict]],

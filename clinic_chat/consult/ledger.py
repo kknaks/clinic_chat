@@ -9,6 +9,8 @@
 - 키 · 홈 경로 · 세션 파일 경로 · cwd 경로를 적지 않는다(LG5) — 줄을 쓰기 전에 홈 경로를 `~` 로 바꾼다.
 - 0.2(SPEC-005 §10-1 · WORK-012 §6 · B-2): 시작 줄에 `consult_state`(대화 첫 턴의 값 — 그 대화는 끝까지 그 값) · 그 칸이
   없는 대화(0.1 로 쓴 줄)는 끈 상태로 끝까지. 객체(`Conv.consult`)는 `error` 가 없는 맺는 줄의 `consult.after` 로만 선다(RV9).
+- 0.3(SPEC-006 FX3 · WORK-014 §6): 켠 대화의 시작 줄에 `consult_rev`(이 판 = `CONSULT_REV`) — 첫 턴에 정하고 끝까지.
+  끈 대화의 시작 줄은 0.2 그대로(칸 없음). 되읽기는 첫 시작 줄에서 세운다(없으면 `None`).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clinic_chat.consult.drawer import DrawerIndex
 from clinic_chat.consult.prompt import ConsultPrompt
 from clinic_chat.llm.chat import ChatConv
 from clinic_chat.runs import now_iso
@@ -26,6 +29,7 @@ TURNS_FILE = "turns.jsonl"
 # LG3 의 굵은 칸 여섯(턴 · session_id · 고른 대상 · 읽은 재료 id · 답 · 시간)
 BOLD = ("turn", "llm.session_id", "targets", "material.new_lines", "answer", "timing")
 END_KINDS = ("broken", "build_changed")  # 맺는 줄의 `conv_end` — 그 대화는 끝
+CONSULT_REV = 3  # 0.3 — 켠 대화의 판(SPEC-006 FX3)
 
 
 def _scrub_home(text: str) -> str:
@@ -49,6 +53,7 @@ class Conv:
     consult_state: str | None = None  # 0.2 — "on" | "off"(첫 턴 시작 줄의 값 · 없으면 "off")
     consult: dict | None = None  # 0.2 — 상담 객체(마지막 성공 줄의 `consult.after`)
     memo: dict = field(default_factory=dict)  # 0.2 — 객체 조회 응답(Call.key → Read 목록 · 메모리만 · B-10)
+    consult_rev: int | None = None  # 0.3 — 켠 대화의 판(첫 시작 줄의 값 · 없으면 None)
 
     @property
     def n_started(self) -> int:
@@ -73,6 +78,7 @@ class Ledger:
     def __init__(self, chat_dir: Path) -> None:
         self.dir = Path(chat_dir)
         self.convs: dict[str, Conv] = {}
+        self.index = DrawerIndex.scan(self.file)  # 0.3 W-11 — 뜰 때 한 번 훑고 줄을 쓸 때 함께 고친다
 
     @property
     def file(self) -> Path:
@@ -117,6 +123,7 @@ class Ledger:
                 c.starts[int(r["turn"])] = r
                 if c.consult_state is None:
                     c.consult_state = r.get("consult_state") or "off"  # B-2 — 칸 없는 대화는 끈 상태로 끝까지
+                    c.consult_rev = r.get("consult_rev")  # 0.3 FX3 — 첫 시작 줄의 값
                 c.prompt_sha = c.prompt_sha or (r.get("prompts") or {}).get("consult_at_start")
                 sid = (r.get("llm") or {}).get("session_id")
                 if sid:
@@ -133,17 +140,23 @@ class Ledger:
         n = conv.n_started + 1
         if conv.consult_state is None:
             conv.consult_state = state_at_start(conv, consult_state)
+            if conv.consult_state == "on" and not conv.starts:  # 0.3 FX3 — 켠 새 대화만 · 첫 턴에 정함
+                conv.consult_rev = CONSULT_REV
         row = {"conv_id": conv.conv_id, "turn": n, "phase": "start", "asked_at": now_iso(), "question": question,
                "llm": {"session_id": conv.chat.session_id, "mode": "new" if conv.chat.state == "new" else "resume"},
                "prompts": {"consult_at_start": conv.prompt_sha}, "consult_state": conv.consult_state}
+        if conv.consult_rev is not None:
+            row["consult_rev"] = conv.consult_rev
         conv.starts[n] = row
         conv.running = n
         self._append(row)
+        self.index.on_start(row)
         return row
 
     def end(self, conv: Conv, row: dict) -> dict:
         row = {"conv_id": conv.conv_id, "phase": "end", **row}
         self._append(row)
+        self.index.on_end(row)
         self._apply_end(conv, row)
         conv.running = None
         return row
@@ -192,6 +205,8 @@ def blocked(conv: Conv, max_turns: int) -> str | None:
     """TF1 — 받지 않는 까닭(오류 종류 코드) · 받으면 None."""
     if conv.ended:
         return conv.ended
+    if conv.starts and conv.consult_state == "on" and (conv.consult_rev or 0) < CONSULT_REV:
+        return "rev_changed"  # 0.3 FX4 — 0.2 로 시작한 켠 대화는 끝난 대화(줄을 쓰지 않는다 — B-5)
     if conv.running is not None or conv.chat.running:
         return "busy"
     if conv.answered() >= max_turns:

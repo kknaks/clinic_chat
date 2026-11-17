@@ -13,17 +13,22 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, Form, Header, Response
+from fastapi import FastAPI, Form, Header, Query, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from clinic_chat.clients.hub_rest import HubError
 from clinic_chat.columns.base import Deps
 from clinic_chat.config import Settings, load_settings
+from clinic_chat.consult import plan as plan_mod
 from clinic_chat.consult import prompt as prompt_mod
-from clinic_chat.consult.ledger import Conv, Ledger, blocked, state_at_start
+from clinic_chat.consult.drawer import outdated as is_outdated
+from clinic_chat.consult.ledger import CONSULT_REV, Conv, Ledger, blocked, state_at_start
+from clinic_chat.consult.listing import view_codes, view_list
 from clinic_chat.consult.live import Live, resume_from, stream
-from clinic_chat.consult.render import Render
+from clinic_chat.consult.render import Render, state_view
 from clinic_chat.consult.sites import all_dots
 from clinic_chat.consult.turn import Ctx, run_turn
 from clinic_chat.llm.chat import ChatLLM
@@ -55,7 +60,8 @@ def turn_view(conv: Conv, live: dict[tuple[str, int], Live]) -> list[dict]:
 def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = None, llm: ChatLLM | None = None,
                deps_factory: Callable[[Settings], Deps] = Deps.from_settings) -> FastAPI:
     s = settings or load_settings()
-    labels = prompt_mod.load(s.chat_prompt_path()).steps  # 꼴이 틀리면 시작 실패(T19) · 단계 문구는 지금 파일 것
+    p0 = prompt_mod.load(s.chat_prompt_path())  # 꼴이 틀리면 시작 실패(T19) · 단계 문구 · 빈 자리 값은 지금 파일 것
+    labels = p0.steps
     if turn_fn is None:
         if s.chat_fake_turn:
             from clinic_chat.consult.fake_turn import make
@@ -63,7 +69,8 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
             turn_fn = make()
         else:
             turn_fn = run_turn
-    ctx = Ctx(s, Ledger(s.chat_dir_path()), Render(labels), llm or ChatCli(ChatCliSpec.from_settings(s)), deps_factory)
+    render = Render(labels, panel=s.chat_debug_panel == "on", slots=p0.slots)
+    ctx = Ctx(s, Ledger(s.chat_dir_path()), render, llm or ChatCli(ChatCliSpec.from_settings(s)), deps_factory)
     live: dict[tuple[str, int], Live] = {}
     tasks: set[asyncio.Task] = set()
     app = FastAPI(title="clinic_chat consult")
@@ -84,14 +91,28 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
             c.prompt = prompt_mod.keep(s.chat_prompt_path(), s.chat_dir_path())
             c.prompt_sha = c.prompt.sha256
 
+    def convs() -> list[dict]:
+        """0.3 SV3 · W-11 — 메모리 색인만(장부 파일을 다시 읽지 않는다)."""
+        return ctx.ledger.index.listing(s.chat_drawer_max, server_state=s.chat_state, server_rev=CONSULT_REV,
+                                        max_turns=s.chat_max_turns)
+
+    def outdated(c: Conv) -> bool:
+        """0.3 FX3 — 서버 값과 대화 값이 다르다(대화가 아직 시작 전이면 아님)."""
+        return bool(c.starts) and is_outdated(c.consult_state, c.consult_rev, server_state=s.chat_state,
+                                              server_rev=CONSULT_REV)
+
     def page(c: Conv, hx: bool) -> HTMLResponse:
-        html = ctx.render.page(c.conv_id, turn_view(c, live), c.last_list(), c.last_sites(), fragment=hx)  # 0.2 꼴도 같은 길
+        states = ([state_view(t) for t in reversed(c.turns) if t.get("error") is None]
+                  if s.chat_debug_panel == "on" else [])
+        html = ctx.render.page(c.conv_id, turn_view(c, live), c.last_list(), c.last_sites(), fragment=hx,
+                               convs=convs(), states=states, outdated=outdated(c))  # 0.2 꼴도 같은 길
         return HTMLResponse(html)
 
-    async def drive(c: Conv, n: int, question: str, clicked_at: float) -> None:
+    async def drive(c: Conv, n: int, question: str, clicked_at: float, viewing: str | None = None) -> None:
         lv = live[(c.conv_id, n)]
         try:
-            await turn_fn(ctx, c, n, question, lv.push, clicked_at=clicked_at)
+            kw = {"viewing": viewing} if viewing else {}  # 0.3 FD6 — 가짜 턴 · 옛 turn_fn 은 안 받는다
+            await turn_fn(ctx, c, n, question, lv.push, clicked_at=clicked_at, **kw)
         except Exception as e:  # noqa: BLE001 — 그 턴만 오류
             lv.push("turn_error", ctx.render.error(n, "internal"))
             if c.running == n:
@@ -116,7 +137,7 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
         return page(conv_of(conv_id), bool(hx_request))
 
     @app.post("/c/{conv_id}/turns", response_class=HTMLResponse)
-    async def post_turn(conv_id: str, text: str = Form("")) -> HTMLResponse:
+    async def post_turn(conv_id: str, text: str = Form(""), viewing: str = Form("")) -> HTMLResponse:
         clicked_at = time.perf_counter()
         c = conv_of(conv_id)
         q = (text or "").strip()
@@ -134,7 +155,7 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
             return HTMLResponse(ctx.render.rejected("prompt", q))
         n = ctx.ledger.start(c, q, state)["turn"]
         live[(c.conv_id, n)] = Live()
-        t = asyncio.create_task(drive(c, n, q, clicked_at))
+        t = asyncio.create_task(drive(c, n, q, clicked_at, viewing.strip() or None))
         tasks.add(t)
         t.add_done_callback(tasks.discard)
         return HTMLResponse(ctx.render.turn(c.conv_id, {"n": n, "question": q, "live": True}))
@@ -146,6 +167,34 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
             return Response(status_code=204)  # 없는 줄기 — 브라우저가 다시 붙지 않는다
         return StreamingResponse(stream(lv, resume_from(last_event_id)), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/convs", response_class=HTMLResponse)
+    async def conv_list(current: str | None = Query(None)) -> HTMLResponse:
+        """0.3 SV6 — 드로어 목록 조각(→ #conv-drawer-list)."""
+        return HTMLResponse(ctx.render.drawer_list(convs(), current))
+
+    @app.get("/c/{conv_id}/list", response_class=HTMLResponse)
+    async def concern_list(conv_id: str, concern: Annotated[list[str] | None, Query()] = None) -> HTMLResponse:
+        """0.3 FD4 · FD5 · FD7 · N-9 — 점 · 라벨 누르기 → 그 고민의 리스트 조각(#procedure-list). 허브만(Jev · LLM 0 · 장부 줄 0).
+        재료 = 그 대화가 이미 읽은 응답(메모) · 없으면 QY1 꼴 조회(메모에 넣는다 — N-6). 받지 않는 코드는 4xx 조각."""
+        c = ctx.ledger.get(conv_id)
+        codes = list(dict.fromkeys(x for x in concern or [] if x))
+        if c is None or c.consult is None or not codes:
+            return HTMLResponse(ctx.render.error("x", "view_rejected"), status_code=404)
+        ok = view_codes(c.consult)
+        if any(x not in ok for x in codes):
+            return HTMLResponse(ctx.render.error("x", "view_rejected"), status_code=422)
+        d = ctx.deps_factory(s)
+        reader = plan_mod.Reader(d.hub, c.memo, [], [])
+        reads = []
+        try:
+            for code in codes:  # FD5 — 고민마다 차례로
+                got = plan_mod.cc_reads_of(code, c.memo)
+                reads.extend(got or await reader.get(plan_mod.qy1_plain(code), "QY1"))
+        except HubError:  # 검수 N-4 — 허브 오류는 500 이 아니라 오류 조각
+            return HTMLResponse(ctx.render.error("x", "hub"), status_code=502)
+        lst = view_list(c.consult, reads, codes, c.last_list())
+        return HTMLResponse(ctx.render.list(lst))
 
     @app.get("/face-check", response_class=HTMLResponse)
     async def face_check() -> HTMLResponse:

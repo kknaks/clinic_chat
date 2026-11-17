@@ -94,6 +94,26 @@
 - 실측기: `CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e5 [--only ex1,ex2]` — 입력 글은 `clinic_chat/consult/e5_inputs.json` · 장부 `CHAT_DIR/e5/turns.jsonl` · 결과 `CHAT_DIR/probe/<시각>.json`.
 - 서버에 한글을 `curl` 로 보낼 때는 `curl --data-urlencode "text=…"` 를 쓴다(`-d` 로 그대로 보내면 글자가 깨진다) · 보낸 뒤 장부 시작 줄의 `question` 이 보낸 글과 같은지 본다.
 
+### 상담 0.3 — 턴 종류 · 상담 말투 · 끝맺음 하나 · 화면 네 칸(SPEC-006 0.1.0 · WORK-014)
+
+켠 대화(장부 시작 줄 `consult_rev: 3`)는 0.3 판으로 돈다 — 둘째 턴부터 걷기와 함께 턴 종류(`new` · `follow` · `talk`)를 Jev 로 가르고, `talk`(되물음 · 불만 · 맞장구)는 검색 없이 앞 대화로 답한다. 시스템 글은 `prompts/consult.json` 의 `system_v3`(초안)이고 답 끝은 앱이 고른 `close` 하나다. 끈 대화는 0.1 그대로 돈다. **0.2 로 시작한 켠 대화(`consult_rev` 없음)는 0.3 서버에서 끝난 대화다** — 열면 표지(`conv-outdated`)와 새 대화 길이 보이고 새 턴은 받지 않는다(장부 줄을 쓰지 않는다).
+
+| 손잡이(env) | 기본 | 뜻 |
+|---|---|---|
+| `CHAT_TURN_KIND` | `on` | `off` = 가르지 않는다(모든 턴 `new` · 걷기는 0.2 와 같은 호출 순서) |
+| `CHAT_TALK_MAX` | `3` | 잇단 `talk` 한도 — 넘으면 다음 턴은 가르지 않고 `new` |
+| `CHAT_ALT_MAX` | `3` | 없다고 말한 뒤 잇는 다른 계열 수(`close.by` = `alt`) |
+| `CHAT_VOICE_CHECK` | `on` | 금지 낱말 검사(`voice_check[]` — 장부 `consult.voice` 에 기록만 · 답은 안 고침) |
+| `CHAT_DEBUG_PANEL` | `off` | 상담 객체 패널(개발용 — 턴마다 장부 `consult.after` · `diff` · `blanks` · `ask` · `turn_kind` · `close` 값 그대로) |
+| `CHAT_DRAWER_MAX` | `50` | 드로어에 그리는 지난 대화 수 |
+
+- 화면 = 네 칸: 드로어(기본 열림 · 「새 대화」 = `/` · 지난 대화 목록 = 마지막 턴 시각 내림차순 · `GET /convs` 조각) | 얼굴 + 점(위) · 시술 리스트(아래) | 채팅 | 객체 패널(`CHAT_DEBUG_PANEL=on` 일 때만). 드로어 목록은 서버가 뜰 때 장부를 한 번 훑은 메모리 색인이다.
+- 얼굴 점 = 대화에 나온 고민 전부의 고민 부위(누적). 점 · 라벨을 누르면 `GET /c/<id>/list?concern=<코드>` 로 그 고민의 리스트 조각을 받고(허브만 · 장부 줄 없음), 다음 턴은 그 고민을 기준으로 답한다(폼 값 `viewing` · 한 턴만).
+- 리스트는 고민 · 계열 · 시술 이름만 그린다 — 층 배지 · 「그 밖」 · 메뉴 · 패키지 이름은 장부 `list.hidden` 에만. 허브가 내려 준 시술(`descended[]`)은 계열 묶음 머리에 표지(`prompts/consult.json` `slots.mark-modality-level`)로 묶는다. 부위로 거르지 않은 응답(`site_applied` = `prefer`)이면 표지 시술을 앞에 둔다.
+- 장부 맺는 줄 `consult` 칸에 더함: `turn_kind{kind, nouls, rule, requests, ms, error, walks[]}` · `follow_target` · `empty[]` · `close{by, alt, offered, said}` · `voice` · `viewing`. 답 꼬리의 `close: <답 줄>` 한 줄은 장부 `close.said` 로만 간다(화면 0).
+- 실측기: `CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e6 [--only c1_e3f90,sp_cheek]` — 입력 글은 `clinic_chat/consult/e6_inputs.json` · 장부 `CHAT_DIR/e6/turns.jsonl` · 결과 `CHAT_DIR/probe/<시각>.json`.
+- 이 판은 **로컬 한 사람 전제**다 — 드로어에 손님 질문 원문이 보인다. 여러 사람이 쓰기 전에 대화의 주인을 가르는 길이 먼저 서야 한다.
+
 벤더링한 파일(`clinic_chat/consult/static/` — 고치지 않는다 · CENTURION_DAY `backend/day/static/` dev `c5045a99` 사본):
 
 | 파일 | 판 | 라이선스 | sha256 |

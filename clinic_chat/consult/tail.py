@@ -58,3 +58,24 @@ class TailFilter:
         out = self.buf[:len(self.buf) - keep]
         self.buf = self.buf[len(self.buf) - keep:]
         return {**ev, "text": out} if out else None
+
+
+CLOSE_LINE = re.compile(r"^\s*close\s*[:：]\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def split_close(text: str, mark: str) -> tuple[str, int | None]:
+    """0.3 CS5 — 꼬리(표식 아래)의 `close: <답 줄>` 한 줄을 떼어 (나머지 글, 줄 번호 | None). 꼬리 · 줄이 없으면 None.
+    떼고 남은 글은 `split_tail` 이 0.1 꼴 그대로 읽는다."""
+    i = text.find(mark)
+    if i < 0:
+        return text, None
+    head, tail = text[:i + len(mark)], text[i + len(mark):]
+    said = None
+    keep = []
+    for ln in tail.splitlines(keepends=True):
+        m = CLOSE_LINE.match(ln.strip("\r\n"))
+        if m and said is None:
+            said = int(m.group(1))
+            continue
+        keep.append(ln)
+    return head + "".join(keep), said

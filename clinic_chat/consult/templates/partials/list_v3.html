@@ -1,0 +1,39 @@
+{#- 0.3 고민 묶음 ②(SPEC-006 LS1 ~ LS5 · WORK-014 §12 SP) — 글로 그리는 것은 고민 · 계열 · 시술 이름뿐. 층 값은 data-* 로만.
+    「그 밖」 · 「계열 층만」 묶음 · 메뉴 · 패키지 이름은 그리지 않는다(장부 list.hidden). 내려온 시술은 계열 묶음 머리에
+    표지(data-modality-level · 빈 자리 mark-modality-level 의 정해진 값) · 시술 행은 data-descended 만. SP 표지 = data-site-prefer
+    + 빈 자리 mark-site-prefer(문구 사용자) -#}
+  <section class="cs-concern" data-concern-code="{{ c.concern_code }}"{% if c.site %} data-site-applied="{{ c.site.applied }}"{% endif %}>
+    <h3 class="cs-concern__name">{{ c.concern_name }}</h3>
+    {%- if c.inherited_from %}
+    <p class="cs-concern__from" data-inherited-from="{{ c.inherited_from.concern_code }}" data-steps="{{ c.inherited_from.steps }}">{{ c.inherited_from.concern_name }}</p>
+    {%- endif %}
+    {%- for m in c.modalities %}
+    <div class="cs-mod"{% if m.modality_code %} data-modality-code="{{ m.modality_code }}"{% endif %}{% if m.interest %} data-interest{% endif %}{% if m.synergy %} data-synergy{% endif %}{% if m.caution %} data-caution{% endif %}{% if m.site_prefer %} data-site-prefer{% endif %}>
+      <h4 class="cs-mod__name">{{ m.modality_name }}
+        {%- if m.interest %}<span class="cs-mark cs-mark--interest" data-slot="mark-interest"></span>{% endif %}
+        {%- if m.caution %}<span class="cs-mark cs-mark--caution" data-slot="mark-caution"></span>{% endif %}</h4>
+      <ul class="cs-procs">
+        {%- for p in m.procedures %}
+        <li class="cs-proc" data-procedure-code="{{ p.procedure_code }}"{% if p.interest %} data-interest{% endif %}{% if p.synergy %} data-synergy{% endif %}{% if p.caution %} data-caution{% endif %}{% if p.site_prefer %} data-site-prefer{% endif %} data-reach="{{ p.reach|join('|') }}" data-concern-match="{{ p.concern_match|join('|') }}">
+          <span class="cs-proc__name">{{ p.procedure_name }}</span>
+          {%- if p.site_prefer %}<span class="cs-mark cs-mark--prefer" data-slot="mark-site-prefer"></span>{% endif %}
+          {%- if p.interest %}<span class="cs-mark cs-mark--interest" data-slot="mark-interest"></span>{% endif %}
+          {%- if p.caution %}<span class="cs-mark cs-mark--caution" data-slot="mark-caution"></span>{% endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+    </div>
+    {%- endfor %}
+    {%- for m in c.descended %}
+    <div class="cs-mod cs-mod--descended" data-modality-code="{{ m.modality_code }}" data-unit="{{ m.unit or '' }}" data-modality-level{% if m.interest %} data-interest{% endif %}{% if m.synergy %} data-synergy{% endif %}>
+      <h4 class="cs-mod__name"><span class="cs-mark--level" data-slot="mark-modality-level">{{ (slots.get("mark-modality-level") or "").replace("{name}", m.modality_name) }}</span></h4>
+      <ul class="cs-procs">
+        {%- for p in m.procedures %}
+        <li class="cs-proc" data-procedure-code="{{ p.procedure_code }}" data-descended{% if p.interest %} data-interest{% endif %}{% if p.synergy %} data-synergy{% endif %}>
+          <span class="cs-proc__name">{{ p.procedure_name }}</span>
+        </li>
+        {%- endfor %}
+      </ul>
+    </div>
+    {%- endfor %}
+  </section>

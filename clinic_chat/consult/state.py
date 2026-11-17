@@ -25,11 +25,12 @@ SLOT_OF = {"concern": "concerns", "site": "sites", "modality": "subjects", "proc
            "procedure_case": "subjects", "product": "subjects", "effect": "wishes", "method": "wishes",
            "material": "wishes"}  # UP2 — 그 밖의 표(adverse · condition · anatomy · offer · package)는 넣지 않는다
 ITEM_SLOTS = ("concerns", "sites", "subjects", "wishes")
+KEEP = "keep"  # 0.3 검수 W-3 ⓐ — 관찰 급 「그대로」(객체 칸의 state 를 안 바꾼다 · 객체에 적히지 않는 값)
 WISH_KINDS = ("recovery", "outcome")  # §2-3 이 바람으로 둔 정보 종류(B-3)
 KIND_CODES_14 = ("overview", "mechanism", "indication", "outcome", "lineup", "adverse", "recovery", "contraindication",
                  "avoid", "combo", "same_day", "order_interval", "package", "offer")  # SPEC-001 §5-8(N-6 닫힌 목록)
 STATES = ("said", "guess", "confirmed", "withdrawn")
-HOWS = ("text", "option", "derived", "carried")
+HOWS = ("text", "option", "derived", "carried", "view")  # 0.3 B-2 — 누른 하위 고민(손님이 말한 것이 아니다)
 AXIS = ("said", "confirmed")
 DIFF_OPS = ("add", "state", "withdraw", "focus", "shown", "asked")
 TERMINAL = (es.OUT, es.NO_ENTRY, es.ABORTED)  # 세 종료 상태(코디 W-6)
@@ -69,6 +70,8 @@ def filter_sites(obj: dict) -> list[dict]:
 
 def _decision_state(t: dict) -> tuple[str, str] | None:
     dec = t.get("decision")
+    if dec == "target" and t.get("by") == "abbr+carry":
+        return KEEP, "abbr_carry"  # 0.3 검수 W-3 ⓐ — 앞 대상의 줄임: 객체 칸의 원래 급 그대로
     if dec == "target":
         return "said", "text"
     if dec == "uncertain_kept":
@@ -116,9 +119,15 @@ def _new_item(o: dict, turn: int) -> dict:
 
 
 def _again(old: str, seen: str) -> str:
-    """UP6 — 다시 나옴: guess · said → confirmed · withdrawn → 다시 말함 = said(추정이면 guess)."""
+    """UP6 — 다시 나옴: said → confirmed · withdrawn → 다시 말함 = said(추정이면 guess).
+    0.3 FX1(SPEC-006 · 0.2 검수 W-1): guess → confirmed 는 다시 나온 관찰이 `said` 급(`target` · 걸린 선택지 yes · BK5 답 yes)
+    일 때만 — `guess` 급으로 다시 나오면 `state` 그대로(`history` 에 턴만 더한다)."""
+    if seen == KEEP:  # 0.3 검수 W-3 ⓐ — 줄임으로 다시 부른 앞 대상은 급을 바꾸지 않는다
+        return old
     if old == "withdrawn":
         return seen
+    if old == "guess" and seen != "said":
+        return "guess"
     return "confirmed"
 
 
@@ -133,6 +142,8 @@ def update(obj: dict, obs: list[dict], wish_kinds: list[str], turn: int, retract
         it = find(obj, o["table"], o["code"])
         slot = SLOT_OF[o["table"]]
         if it is None:
+            if o["state"] == KEEP:  # 객체에 없는 앞 대상(생기지 않는 꼴) — 추정으로 둔다
+                o = {**o, "state": "guess"}
             it = _new_item(o, turn)
             obj[slot].append(it)
             diff.append({"op": "add", "slot": slot, "table": o["table"], "code": o["code"], "from": None,
@@ -247,19 +258,29 @@ def has_items(obj: dict) -> bool:
                for s in ("concerns", "sites", "subjects", "wishes") for x in obj[s])
 
 
-async def retract(question: str, obj: dict, d, instr: str, *, yes_at: float) -> dict:
-    """RV2 — 거둠용 `resolve` 한 번(N-5 · 객체 조회 셈 밖) + Jev 요청 하나(32 를 넘으면 묶음 수만큼). 실패하면 거둠 0(B-5)."""
+async def retract(question: str, obj: dict, d, instr: str, *, yes_at: float, extra: dict[str, str] | None = None,
+                  state_extra: dict | None = None, items_on: bool = True) -> dict:
+    """RV2 — 거둠용 `resolve` 한 번(N-5 · 객체 조회 셈 밖) + Jev 요청 하나(32 를 넘으면 묶음 수만큼). 실패하면 거둠 0(B-5).
+
+    0.3(SPEC-006 TK3 · 검수 N-3): `extra`(턴 종류 Noul 셋)는 **첫 묶음에만** 싣는다 — 거둠 항목이 0 이어도 묻는다(요청 하나).
+    `state_extra` = Jev state 에 더할 칸(`prev` · `consult`) · `items_on=False` = 거둠은 묻지 않고 `extra` 만.
+    반환 `extra` = 그 값(오류면 None)."""
     t0 = time.perf_counter()
-    out: dict = {"items": [], "requests": 0, "resolve_ms": None, "ms": None, "error": None}
+    out: dict = {"items": [], "requests": 0, "resolve_ms": None, "ms": None, "error": None, "extra": None}
     try:
         t1 = time.perf_counter()
         res = await d.hub.resolve(question)
         out["resolve_ms"] = round((time.perf_counter() - t1) * 1000, 1)
-        items = retract_items(obj, res.get("candidates") or [])
-        if items:
-            vals, _, n_req = await ask_nouls(d.jev, base_state(question, res.get("build")), items, "retract", instr,
-                                             d.settings.jev_batch_size)
+        items = retract_items(obj, res.get("candidates") or []) if items_on else []
+        if items or extra:
+            b = d.settings.jev_batch_size
+            state0 = base_state(question, res.get("build"), **(state_extra or {}))
+            vals, ev, n_req = await ask_nouls(d.jev, state0, items[:b], "retract", instr, b, extra or None)
+            if len(items) > b:
+                v2, _, n2 = await ask_nouls(d.jev, state0, items[b:], "retract", instr, b)
+                vals, n_req = vals + v2, n_req + n2
             out["requests"] = n_req
+            out["extra"] = ev if extra else None
             for it, v in zip(items, vals, strict=True):
                 table, _, code = it["id"].partition(":")
                 out["items"].append({"table": table, "code": code, "noul": v,

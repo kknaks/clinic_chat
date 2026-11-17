@@ -40,7 +40,10 @@ def test_s5_t11_complement_lines_inside_only_once(run):
     lines = _syn_lines(row2)
     assert [x["name"] for x in lines] == ["가짜계열", "가짜시술둘"]  # 리스트 안 상대만 · 허브 순서(밖 상대 ZZM-8 은 줄 없음)
     assert lines[0]["same_day"] == [] and lines[1]["same_day"] == ["가능"]  # 빈칸은 같은 날 값 없음(SY3)
-    assert lines[0]["rows"] == 2  # 상대마다 한 줄(행 둘)
+    assert "rows" not in lines[0]  # 0.3 EM4 — LLM 에 행 수를 주지 않는다(달리 받음 ④ · 검수 W-2)
+    assert [q["total"] for q in pq if q["rule"] == "QY4"] == [4]  # 행 수는 장부 `queries` 로 센다
+    by_n = {x["n"]: x for x in row2["material"]["new_lines"] if x.get("summary")}
+    assert len(by_n[lines[0]["n"]]["gids"]) == 2  # 상대마다 한 줄(행 둘 — 장부 gid)
     j = json.loads(row2["llm_user_message"].split("\n")[1])
     assert j["synergy_lines"] == [x["n"] for x in lines]
     bundle = row2["list"]["synergy"][0]

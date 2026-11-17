@@ -212,7 +212,7 @@ def test_prompt_changed_marked_and_kept_copy_used(tmp_path, fake_cli):
     mine.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
     turn(c, cid, "가짜시술둘 개요", 2)
     r2 = rows(tmp_path)[1]
-    assert r2["prompts"]["changed"] is True and r2["prompts"]["version"] == "0.1.0-draft"  # 그 대화는 시작 판으로
+    assert r2["prompts"]["changed"] is True and r2["prompts"]["version"] == json.loads(src.read_text(encoding="utf-8"))["version"]  # 그 대화는 시작 판으로(0.3 코디 답 — VO1 version 0.3.0-draft)
 
 
 def test_t12_flow_second_turn_carries_previous_target(tmp_path, fake_cli):
