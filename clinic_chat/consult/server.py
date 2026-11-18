@@ -34,6 +34,7 @@ from clinic_chat.consult.turn import Ctx, run_turn
 from clinic_chat.llm.chat import ChatLLM
 from clinic_chat.llm.chat_cli import ChatCli, ChatCliSpec
 
+SERVER_STATE = "on"  # 0.4 CP1 — 새 대화는 늘 켠 상태(`CHAT_STATE` 값과 무관)
 HOST = "127.0.0.1"
 STATIC = Path(__file__).parent / "static"
 
@@ -93,19 +94,23 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
 
     def convs() -> list[dict]:
         """0.3 SV3 · W-11 — 메모리 색인만(장부 파일을 다시 읽지 않는다)."""
-        return ctx.ledger.index.listing(s.chat_drawer_max, server_state=s.chat_state, server_rev=CONSULT_REV,
+        return ctx.ledger.index.listing(s.chat_drawer_max, server_state=SERVER_STATE, server_rev=CONSULT_REV,
                                         max_turns=s.chat_max_turns)
 
     def outdated(c: Conv) -> bool:
-        """0.3 FX3 — 서버 값과 대화 값이 다르다(대화가 아직 시작 전이면 아님)."""
-        return bool(c.starts) and is_outdated(c.consult_state, c.consult_rev, server_state=s.chat_state,
-                                              server_rev=CONSULT_REV)
+        """0.3 FX3 — 서버 값과 대화 값이 다르다(대화가 아직 시작 전이면 아님) · 0.4 — 옛 끈 대화는 `off_closed` 자리로 따로."""
+        return bool(c.starts) and c.consult_state == "on" and is_outdated(
+            c.consult_state, c.consult_rev, server_state=SERVER_STATE, server_rev=CONSULT_REV)
+
+    def off_closed(c: Conv) -> bool:
+        """0.4 CP7 — 옛 끈 대화(시작 줄의 `consult_state` = `off`)는 읽기만 · 새 턴을 받지 않는 자리(빈 `data-slot` 하나)."""
+        return bool(c.starts) and c.consult_state == "off"
 
     def page(c: Conv, hx: bool) -> HTMLResponse:
         states = ([state_view(t) for t in reversed(c.turns) if t.get("error") is None]
                   if s.chat_debug_panel == "on" else [])
         html = ctx.render.page(c.conv_id, turn_view(c, live), c.last_list(), c.last_sites(), fragment=hx,
-                               convs=convs(), states=states, outdated=outdated(c))  # 0.2 꼴도 같은 길
+                               convs=convs(), states=states, outdated=outdated(c), off_closed=off_closed(c))
         return HTMLResponse(html)
 
     async def drive(c: Conv, n: int, question: str, clicked_at: float, viewing: str | None = None) -> None:

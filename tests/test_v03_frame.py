@@ -10,11 +10,15 @@ from fastapi.testclient import TestClient
 
 from clinic_chat.consult.drawer import DrawerIndex
 from clinic_chat.consult.fake_turn import make
-from clinic_chat.consult.ledger import TURNS_FILE, Ledger
+from clinic_chat.consult.ledger import CONSULT_REV, TURNS_FILE, Ledger
 from clinic_chat.consult.render import TEMPLATES
 from clinic_chat.consult.server import create_app
 from tests.conftest import make_settings, read_log
 from tests.state_fixture import Run
+from tests.v04_fixture import out, set_map
+
+UMAP = {"가짜고민": out([("concern", "ZZC-1")], kinds=["indication"]),
+        "가짜시술": out([("procedure", "ZZP-1")], kinds=["overview"]), "*": out([])}  # 0.4 가짜 이해 출력
 
 HANGUL = re.compile(r"[가-힣]")
 NEW_TEMPLATES = ("drawer.html", "drawer_list.html", "state.html", "state_turn.html")
@@ -48,10 +52,10 @@ def _items(text):
 
 def test_s6_t27_drawer_list_order_limit_and_marks(tmp_path):
     f = tmp_path / "chat" / TURNS_FILE
-    _w(f, [_start("aaa", 1, "first-a", "2026-11-17T10:00:00+09:00", consult_rev=3), _end("aaa", 1),
-           _start("bbb", 1, "first-b", "2026-11-17T11:00:00+09:00", consult_rev=3), _end("bbb", 1),
-           _start("aaa", 2, "second-a", "2026-11-17T12:00:00+09:00", consult_rev=3), _end("aaa", 2),
-           _start("ccc", 1, "first-c", "2026-11-17T11:30:00+09:00", consult_rev=3)])  # 맺는 줄 없음 → broken
+    _w(f, [_start("aaa", 1, "first-a", "2026-11-17T10:00:00+09:00", consult_rev=CONSULT_REV), _end("aaa", 1),
+           _start("bbb", 1, "first-b", "2026-11-17T11:00:00+09:00", consult_rev=CONSULT_REV), _end("bbb", 1),
+           _start("aaa", 2, "second-a", "2026-11-17T12:00:00+09:00", consult_rev=CONSULT_REV), _end("aaa", 2),
+           _start("ccc", 1, "first-c", "2026-11-17T11:30:00+09:00", consult_rev=CONSULT_REV)])  # 맺는 줄 없음 → broken
     c = TestClient(_app(tmp_path))
     page = c.get("/c/bbb").text
     items = _items(page)
@@ -101,14 +105,15 @@ def test_s6_t27_outdated_and_limit_states(tmp_path):
     f = tmp_path / "chat" / TURNS_FILE
     _w(f, [_start("old02", 1, "q-old", "2026-11-17T09:00:00+09:00"), _end("old02", 1),  # 0.2 켠 대화(rev 없음)
            _start("off01", 1, "q-off", "2026-11-17T09:10:00+09:00", state="off"), _end("off01", 1),
-           _start("brk", 1, "q-brk", "2026-11-17T09:20:00+09:00", consult_rev=3), _end("brk", 1, conv_end="broken")])
+           _start("brk", 1, "q-brk", "2026-11-17T09:20:00+09:00", consult_rev=CONSULT_REV), _end("brk", 1, conv_end="broken")])
     states = {i[1]: i[0] for i in _items(TestClient(_app(tmp_path)).get("/convs").text)}
     assert states == {"old02": "outdated", "off01": "outdated", "brk": "broken"}
     assert {i[1]: i[0] for i in _items(TestClient(_app(tmp_path, chat_state="off")).get("/convs").text)}["off01"] \
-        == "open"
+        == "outdated"  # 0.4 CP1 — 서버 판은 늘 켬(`CHAT_STATE=off` 여도) · 옛 끈 대화는 읽기만
 
 
 def test_s6_t28_open_from_drawer_resumes_same_session(tmp_path, fake_cli):
+    set_map(fake_cli[1], UMAP)
     r1 = Run(tmp_path, fake_cli)
     try:
         row1, _, _ = r1.turn("가짜고민 알려줘")
@@ -121,7 +126,7 @@ def test_s6_t28_open_from_drawer_resumes_same_session(tmp_path, fake_cli):
         assert "가짜고민 알려줘" in page and f'data-conv-id="{r1.cid}"' in page
         r2.cid, r2.n = r1.cid, 1
         row2, _, _ = r2.turn("가짜시술 개요")
-        cli = [x for x in read_log(r2.log) if "-p" in x["argv"]][-1]["argv"]
+        cli = [x for x in read_log(r2.log) if "--resume" in x["argv"]][-1]["argv"]
         assert row2["llm"]["mode"] == "resume" and cli[cli.index("--resume") + 1] == row1["llm"]["session_id"]
         new = [x["n"] for x in row2["material"]["new_lines"]]
         assert all(n >= row1["material"]["next_n"] for n in new)  # 줄 번호가 장부에서 이어진다
@@ -131,6 +136,7 @@ def test_s6_t28_open_from_drawer_resumes_same_session(tmp_path, fake_cli):
 
 
 def test_s6_t29_panel_on_state_event_before_done(tmp_path, fake_cli):
+    set_map(fake_cli[1], UMAP)
     r = Run(tmp_path, fake_cli, chat_debug_panel="on")
     try:
         assert 'id="consult-state"' in r.c.get(f"/c/{r.cid}").text
@@ -158,11 +164,14 @@ def test_s6_t29_panel_off_no_column_no_event(tmp_path, fake_cli):
 
 
 def test_s6_t29_off_conv_panel_is_empty_bundle(tmp_path, fake_cli):
+    """0.4 CP7(검수 R-2 ⓒ) — 옛 끈 대화: 열면 패널에 상담 칸이 없고(0.1 꼴) · 새 턴은 막힌다."""
+    _w(tmp_path / "chat" / TURNS_FILE, [_start("off05", 1, "q-off", "2026-11-17T09:10:00+09:00", state="off"),
+                                        _end("off05", 1)])
     r = Run(tmp_path, fake_cli, state="off", chat_debug_panel="on")
     try:
-        _, kinds, body = r.turn("가짜고민 알려줘")
-        block = body.split("event: state\n", 1)[1].split("\n\n", 1)[0]
-        assert "cs-state__fields" not in block and kinds.index("state") == kinds.index("done") - 1
+        page = r.c.get("/c/off05").text
+        assert "q-off" in page and "cs-state__fields" not in page
+        assert 'data-error="rev_changed"' in r.c.post("/c/off05/turns", data={"text": "가짜고민"}).text
     finally:
         r.close()
 

@@ -17,6 +17,7 @@ from clinic_chat.consult.server import create_app
 from tests.conftest import make_settings, read_log, stream
 from tests.consult_fixture import consult_hub
 from tests.fake_jev import FakeJev
+from tests.v04_fixture import out, set_map
 from tests.walk_fixture import jev_noul
 
 ANSWER = "짧은 답 <b>\n되묻기?\n" + TAIL_MARK + "\n1: 1\n"
@@ -37,9 +38,16 @@ def kinds_noul(name, instr, state):
     return jev_noul(kinds=kinds, target=lambda i, st: 0.9)(name, instr, state)
 
 
-def make(tmp_path, fake_cli, *, hub=None, noul=kinds_noul, **kw):
+UMAP = {"고민": out([("concern", "ZZC-1")], kinds=["indication"]),
+        "가짜시술둘": out([("procedure", "ZZP-2")], kinds=["overview"]),
+        "가짜시술": out([("procedure", "ZZP-1")], kinds=["overview"]), "*": out([])}  # 0.4 — 가짜 이해 출력(이번 말 낱말)
+
+
+def make(tmp_path, fake_cli, *, hub=None, noul=kinds_noul, umap=None, **kw):
     bin_, route, log = fake_cli
     (route / "answer.jsonl").write_text(stream(ANSWER), encoding="utf-8")
+    set_map(route, {**UMAP, **(umap or {})})
+    kw.setdefault("chat_pick_list_cache", "off")
     s = make_settings(tmp_path, claude_cli_bin=bin_, chat_dir=str(tmp_path / "chat"),
                       chat_cli_cwd=str(tmp_path / "cwd"), **kw)
     hub = hub or consult_hub()
@@ -84,7 +92,7 @@ def test_t6_order_t7_tail_hidden_and_ledger(tmp_path, fake_cli):
     assert TAIL_MARK not in end["answer"] and end["list"]["concerns"][0]["concern_code"] == "ZZC-1"
     assert end["sites"] == {"dots": [], "labels": []}  # 허브 부위 칸 없음 → 빈 꼴(점 0 · 오류 0)
     assert end["timing"]["first_list_ms"] <= end["timing"]["ttft_ms"] <= end["timing"]["total_ms"]
-    assert set(end["timing"]["parts"]) >= {"jev_ms", "hub_ms", "llm_ms"}
+    assert set(end["timing"]["parts"]) >= {"understand_ms", "hub_ms", "llm_ms", "material_ms"}  # 0.4 §6-1
     for k in BOLD:  # T16 — 굵은 칸 여섯
         cur = end
         for part in k.split("."):
@@ -93,13 +101,12 @@ def test_t6_order_t7_tail_hidden_and_ledger(tmp_path, fake_cli):
     assert end["llm"]["mode"] == "new" and end["session_state"] == "open"
     assert end["prompts"]["changed"] is False and end["prompts"]["consult_at_start"] == end["prompts"]["consult_now"]
     assert str(Path.home()) not in (tmp_path / "chat" / "turns.jsonl").read_text(encoding="utf-8")  # LG5
-    cli = [x for x in read_log(log) if "-p" in x["argv"]][-1]
+    cli = [x for x in read_log(log) if "--session-id" in x["argv"] or "--resume" in x["argv"]][-1]  # 답 실행기
     assert cli["stdin"].index("## 앱 판정") < cli["stdin"].index("## 자료") < cli["stdin"].index("## 질문")
 
 
 def test_t6_out_of_scope_has_no_list_or_sites(tmp_path, fake_cli):
-    noul = jev_noul(kinds={}, gap=0.95)
-    app, c, fj, log = make(tmp_path, fake_cli, noul=noul)
+    app, c, fj, log = make(tmp_path, fake_cli, umap={"*": out([], oos=True)})  # out 참 길(QM3)
     cid = new_conv(c)
     _, body, kinds = turn(c, cid, "아무 말", 1)
     assert "list" not in kinds and "sites" not in kinds and kinds[-2:] == ["done", "close"]
@@ -119,7 +126,7 @@ def test_t16_reload_open_and_numbers_continue(tmp_path, fake_cli):
     turn(c2, cid, "가짜시술둘 개요", 2)
     r2 = rows(tmp_path)[1]
     assert r2["llm"]["mode"] == "resume" and r2["material"]["new_lines"][0]["n"] == r1["material"]["next_n"]
-    cli = [x for x in read_log(log2) if "-p" in x["argv"]][-1]["argv"]
+    cli = [x for x in read_log(log2) if "--resume" in x["argv"]][-1]["argv"]
     assert cli[cli.index("--resume") + 1] == r1["llm"]["session_id"]
     page = c2.get(f"/c/{cid}").text
     assert "가짜시술 개요" in page and 'id="answer-2"' in page and "sse-connect" not in page
@@ -215,12 +222,4 @@ def test_prompt_changed_marked_and_kept_copy_used(tmp_path, fake_cli):
     assert r2["prompts"]["changed"] is True and r2["prompts"]["version"] == json.loads(src.read_text(encoding="utf-8"))["version"]  # 그 대화는 시작 판으로(0.3 코디 답 — VO1 version 0.3.0-draft)
 
 
-def test_t12_flow_second_turn_carries_previous_target(tmp_path, fake_cli):
-    app, c, fj, log = make(tmp_path, fake_cli)
-    cid = new_conv(c)
-    turn(c, cid, "가짜고민 시술", 1)
-    _, body, kinds = turn(c, cid, "그중 하나 더 알려줘", 2)
-    r2 = rows(tmp_path)[1]
-    assert r2["carried"][0]["code"] == "ZZC-1" and r2["carried"][0]["decision"] == "carried"
-    assert r2["targets"][0]["by"] == "carried" and r2["targets"][0]["read_as"] == {"by": "carry", "from_turn": 1}
-    assert "list" in kinds and r2["material"]["seen_lines"]  # 같은 요약은 다시 안 싣고 번호만(B-6)
+# 0.4(WORK-017 §15-4): `t12_flow_second_turn_carries_previous_target` 는 지웠다 — 든 후보(AR-9)가 없다(대화 블록 — S8-T3).

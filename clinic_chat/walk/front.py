@@ -467,3 +467,16 @@ def _entry_trace(concepts: list[dict], entries: list[Entry], by: str, overlaps: 
             "picked": [{"id": e.node, "by": e.by, "via": e.via} for e in entries if e.table != OFFER_NAME],
             "offer_name": [e.name for e in entries if e.table == OFFER_NAME],
             "by": by, "overlaps": overlaps, "unused": []}
+
+
+# 상담 0.4(SPEC-008 §3-4 · 코디 F-10) — 밑줄 함수의 공개 감쌈(동작 변경 0 · 본문은 부르는 한 줄)
+async def coverage_of_nodes(hub: HubRest, nodes: list[str]) -> tuple[dict, dict | None]:
+    return await _coverage(hub, nodes)
+
+
+def ranges_for(pairs) -> list[str]:
+    return _ranges_for(pairs)
+
+
+def kind_rows(cov: dict, nodes: list[str], kind: str) -> int:
+    return _kind_rows(cov, nodes, kind)

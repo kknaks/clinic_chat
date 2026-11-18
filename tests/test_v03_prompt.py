@@ -15,6 +15,8 @@ from clinic_chat.consult.prompt import KIND_LABEL_KEYS, V3_SECTION_IDS, PromptEr
 from tests.conftest import read_log, stream
 from tests.state_fixture import Run, jev
 from tests.test_state_blanks import SYSTEM_0_1_SHA
+from tests.test_v03_fixes import _old_rows, _w
+from tests.v04_fixture import set_out
 
 ROOT = Path(__file__).resolve().parent.parent
 PROMPT = ROOT / "prompts" / "consult.json"
@@ -26,7 +28,7 @@ def _doc() -> dict:
 
 
 def _sys(r: Run, i: int = 0) -> str:
-    cli = [x for x in read_log(r.log) if "-p" in x["argv"]]
+    cli = [x for x in read_log(r.log) if "--session-id" in x["argv"] or "--resume" in x["argv"]]  # 답 실행기만
     return cli[i]["argv"][cli[i]["argv"].index("--system-prompt") + 1]
 
 
@@ -48,7 +50,7 @@ def test_s6_t8_v3_sections_in_order_and_off_sha_unchanged():
 
 @pytest.mark.parametrize("breaker", [
     lambda d: d.pop("system_v3"),
-    lambda d: d["jev_state"].pop("turn_kind"),
+    lambda d: d.pop("pick"),  # 0.4 X-26 — `jev_state.turn_kind` 대신 `pick` 이 문턱(S8-T20)
     lambda d: d.pop("kind_labels"),
     lambda d: d.pop("voice_check"),
     lambda d: d["turn_headers"].pop("close"),
@@ -76,13 +78,18 @@ def test_s6_t8_bad_v3_shape_fails(breaker):
 
 
 def test_s6_t8_on_conv_uses_v3_off_conv_uses_0_1(tmp_path, fake_cli):
-    r = Run(tmp_path / "on", fake_cli, noul=jev(kinds={"indication": 0.9}))
+    r = Run(tmp_path / "on", fake_cli)
+    set_out(fake_cli[1], [("concern", "ZZC-1")], kinds=["indication"])
     r.turn("가짜고민 시술")
     assert _sys(r) == load(PROMPT).system_text_v3
     r.close()
-    r2 = Run(tmp_path / "off", fake_cli, state="off", noul=jev(kinds={"indication": 0.9}))
-    r2.turn("가짜고민 시술")
-    assert hashlib.sha256(_sys(r2, -1).encode()).hexdigest() == SYSTEM_0_1_SHA
+    # 0.4 CP1 · CP7(검수 R-2 ⓐ 뒤 반) — 장부에 끈 시작 줄을 둔 옛 대화는 열기만 · 턴 막힘(답 실행기 0)
+    _w(tmp_path / "off" / "chat" / "turns.jsonl", _old_rows("off08", "off"))
+    r2 = Run(tmp_path / "off", fake_cli, state="off")
+    n = len(read_log(r2.log))
+    assert 'data-conv-off-closed' in r2.c.get("/c/off08").text
+    assert 'data-error="rev_changed"' in r2.c.post("/c/off08/turns", data={"text": "가짜고민 시술"}).text
+    assert len(read_log(r2.log)) == n
     r2.close()
 
 
@@ -118,11 +125,13 @@ def test_s6_t9_judgement_fields(tmp_path, fake_cli):
 
 
 def test_s6_t9_off_conv_judgement_is_0_1(tmp_path, fake_cli):
+    """0.4 CP7(검수 R-2 ⓑ) — 옛 끈 대화는 0.1 판정으로 턴을 돌리지 않는다: 열기만 · 새 턴 막힘 · 장부 줄 0."""
+    f = tmp_path / "chat" / "turns.jsonl"
+    _w(f, _old_rows("off07", "off"))
+    before = f.read_text(encoding="utf-8")
     r = Run(tmp_path, fake_cli, state="off", noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
-    row, _, _ = r.turn("가짜제품 받고 싶어요")
-    j = _judgement(row["llm_user_message"])
-    assert "read_as" in j and "unresolved" in j and "turn_kind" not in j
-    assert load(PROMPT).turn_headers["close"] not in row["llm_user_message"]
+    assert 'data-error="rev_changed"' in r.c.post("/c/off07/turns", data={"text": "가짜제품 받고 싶어요"}).text
+    assert f.read_text(encoding="utf-8") == before and r.fj.requests == []
     r.close()
 
 

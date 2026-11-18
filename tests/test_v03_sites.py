@@ -10,7 +10,8 @@ import pytest
 
 from clinic_chat.consult.render import TEMPLATES
 from clinic_chat.consult.sites import place
-from tests.state_fixture import Run, jev, state_hub
+from tests.state_fixture import Run, state_hub
+from tests.v04_fixture import out, set_map
 
 ROOT = Path(__file__).resolve().parent.parent
 FACE_SHA = {"clinic_chat/consult/templates/_face.svg": "6337a357a3b9eff57e57b9dfede839f44b2ddc33",
@@ -19,13 +20,21 @@ SUB = "하위"  # 허브 `match` 값 「하위」
 DIRECT = "직접"  # 「직접」
 SITES = {"ZZC-1": [{"site_code": "SITE-014", "site_name": "가짜이마", "concern_code": "ZZC-1", "csi_id": "CSI-1",
                     "match": DIRECT}],
-         "ZZC-2": [{"site_code": "SITE-046", "site_name": "가짜볼", "concern_code": "ZZC-3", "csi_id": "CSI-3",
+         "ZZC-2": [{"site_code": "SITE-015", "site_name": "가짜미간", "concern_code": "ZZC-2", "csi_id": "CSI-2",
+                    "match": DIRECT},
+                   {"site_code": "SITE-046", "site_name": "가짜볼", "concern_code": "ZZC-3", "csi_id": "CSI-3",
                     "match": SUB}]}
+# 0.4 — 입력 = 가짜 이해 출력(이번 말 낱말 → 출력 · 「됐어요」 가 먼저)
+UMAP = {"됐어요": out([], kind="talk", withdraw=["concern:ZZC-2"]), "그렇군요": out([], kind="talk"),  # OU10
+        "가짜윗고민": out([("concern", "ZZC-2")], kinds=["indication"]),
+        "가짜고민": out([("concern", "ZZC-1")], kinds=["indication"]),
+        "가짜팔자": out([("concern", "ZZC-9")], kinds=["indication"]), "*": out([])}
 
 
 @pytest.fixture
 def run(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, hub=state_hub(sites=SITES), noul=jev(kinds={"indication": 0.9}), chat_ask_max=0)
+    set_map(fake_cli[1], UMAP)
+    r = Run(tmp_path, fake_cli, hub=state_hub(sites=SITES), chat_ask_max=0)
     yield r
     r.close()
 
@@ -46,16 +55,17 @@ def test_s6_t17_union_kept_and_withdraw_removes(run):
     assert list(dots(row1)) == ["SITE-014"] and dots(row1)["SITE-014"]["focus"] is True
     row2, k2, b2 = run.turn("가짜윗고민 은요")
     d2 = dots(row2)
-    assert set(d2) == {"SITE-014", "SITE-046"}  # 합집합(FD1)
-    assert d2["SITE-046"]["concern_codes"] == ["ZZC-3"] and d2["SITE-046"]["asked_codes"] == ["ZZC-2"]
-    assert d2["SITE-046"]["match"] == [SUB] and d2["SITE-046"]["focus"] and not d2["SITE-014"]["focus"]
+    assert set(d2) == {"SITE-014", "SITE-015"}  # 합집합(FD1) · 하위 고민의 부위(SITE-046)는 점이 아니다(0.4 DT1)
+    assert d2["SITE-015"]["concern_codes"] == ["ZZC-2"] and d2["SITE-015"]["asked_codes"] == ["ZZC-2"]
+    assert d2["SITE-015"]["match"] == [DIRECT] and d2["SITE-015"]["focus"] and not d2["SITE-014"]["focus"]
+    assert "SITE-046" in {x["code"] for x in row2["consult"]["after"]["concern_sites"]}  # 하위 부위는 객체 칸에는 있다(DT3)
     frag = sites_frag(b2)
-    assert 'data-concern-codes="ZZC-1"' in frag and 'data-concern-codes="ZZC-3"' in frag and "data-focus" in frag
-    assert f'hx-get="/c/{run.cid}/list?concern=ZZC-3"' in frag and 'hx-target="#procedure-list"' in frag
+    assert 'data-concern-codes="ZZC-1"' in frag and 'data-concern-codes="ZZC-2"' in frag and "data-focus" in frag
+    assert 'data-concern-codes="ZZC-3"' not in frag and 'data-match="하위"' not in frag
+    assert f'hx-get="/c/{run.cid}/list?concern=ZZC-2"' in frag and 'hx-target="#procedure-list"' in frag
     row3, k3, _ = run.turn("가짜팔자 도요")  # 부위 없는 고민 — 앞 점은 남는다(FD3)
-    assert row3["sites"] is None or set(dots(row3)) == {"SITE-014", "SITE-046"}
+    assert row3["sites"] is None or set(dots(row3)) == {"SITE-014", "SITE-015"}
     assert row3["consult"]["after"]["focus"] == "ZZC-9"
-    run.set_noul(jev(kinds={"indication": 0.9}, retract={"가짜윗고민": 0.9}))
     row4, _, _ = run.turn("가짜윗고민 은 됐어요")
     assert set(dots(row4)) == {"SITE-014"}  # 거둔 고민의 점만 빠진다
 
@@ -141,13 +151,11 @@ def test_s6_t19_multiple_codes_pick_latest_and_sub_concern_enters(run):
 
 
 def test_s6_t19_viewing_on_talk_turn(tmp_path, fake_cli):
-    from tests.test_v03_turn_kind import jv
-
-    r = Run(tmp_path, fake_cli, hub=state_hub(sites=SITES), noul=jv(), chat_ask_max=0)
+    set_map(fake_cli[1], UMAP)
+    r = Run(tmp_path, fake_cli, hub=state_hub(sites=SITES), chat_ask_max=0)
     try:
         r.turn("가짜고민 시술")
         r.turn("가짜윗고민 은요")
-        r.set_noul(jv(talk=0.9))
         row, body = _post(r, "음 그렇군요", "ZZC-1")
         c = row["consult"]
         assert c["turn_kind"]["kind"] == "talk" and c["viewing"]["accepted"] is True  # B-4

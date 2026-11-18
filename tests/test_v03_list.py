@@ -16,6 +16,17 @@ from clinic_chat.walk.calls import Call
 from clinic_chat.walk.verified import site_match_by
 from tests.fake_hub import row
 from tests.state_fixture import CC, Run, cc_group, jev, state_hub
+from tests.v04_fixture import out, set_map
+
+# 0.4(검수 C-3) — 켠 턴의 입구 = 가짜 이해 출력(이번 말 낱말 → 출력 · 기대값은 그대로 — QS5 · CP5)
+UMAP = {"가짜부위": out([("concern", "ZZC-1"), ("site", "ZZS-1")], sites=["ZZS-1"], kinds=["indication"]),
+        "가짜고민": out([("concern", "ZZC-1")], kinds=["indication"]), "*": out([])}
+
+
+def _run(tmp_path, fake_cli, **kw):
+    set_map(fake_cli[1], UMAP)
+    return Run(tmp_path, fake_cli, **kw)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 SLOTS = load(ROOT / "prompts" / "consult.json").slots
@@ -140,7 +151,7 @@ def test_s6_t15_turn_ledger_hidden_and_fragment(tmp_path, fake_cli):
             b["descended"] = [desc("ZZM-3", "가짜계열셋", [("ZZP-3", "가짜시술셋", False)], ["GIN-99901"])]
         return b
     hub.routes["concern_candidates"] = cc
-    r = Run(tmp_path, fake_cli, hub=hub, noul=jev(kinds={"indication": 0.9}))
+    r = _run(tmp_path, fake_cli, hub=hub, noul=jev(kinds={"indication": 0.9}))
     try:
         row1, kinds, body = r.turn("가짜고민 시술")
         c = row1["list"]["concerns"][0]
@@ -247,7 +258,7 @@ def test_sp_turn_site_view_and_ledger(tmp_path, fake_cli):
                     x["site_prefer"] = False
         return b
     hub.routes["concern_candidates"] = cc
-    r = Run(tmp_path, fake_cli, hub=hub, noul=jev(kinds={"indication": 0.9}))
+    r = _run(tmp_path, fake_cli, hub=hub, noul=jev(kinds={"indication": 0.9}))
     try:
         row1, _, _ = r.turn("가짜부위 에 가짜고민 시술")
         c = row1["list"]["concerns"][0]

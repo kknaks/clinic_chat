@@ -45,6 +45,10 @@ def consult_hub(*, sites: list[dict] | None = None, sites_field: str = "concern_
                 gold_hash: str = "fakehash") -> FakeHub:
     def resolve_fn(p):
         t = p.get("text") or ""
+        if not t and p.get("tables"):  # 0.4 목록 꼴 — 더하기만
+            tables = p["tables"].split(",")
+            return {"candidates": [{"gold_table": "g_entry", "gid": f"GEN-{x['entity_code']}", "norm": x["text"],
+                                    "name_kind": "이름", **x} for x in (C1, P1, P2) if x["entity_table"] in tables]}
         out = []
         if "가짜고민" in t:
             out.append(cand(C1, start=t.index("가짜고민")))

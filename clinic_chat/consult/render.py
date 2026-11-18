@@ -34,6 +34,11 @@ def state_view(row: dict, *, open_: bool = False) -> dict:
         fields.append(("how=view", json.dumps(view, ensure_ascii=False, indent=1)))
     if ok and c.get("viewing"):
         fields.append(("viewing", json.dumps(c["viewing"], ensure_ascii=False, indent=1)))
+    if ok and c.get("understand") is not None:  # 0.4 §6-2 — 무엇으로 읽었나 · 버렸나 · 얼마나 걸렸나(칸 이름 = 장부 키)
+        u = {k: c["understand"].get(k) for k in ("accepted", "dropped", "merged", "ms", "error")}
+        fields.append(("understand", json.dumps(u, ensure_ascii=False, indent=1)))
+    if ok and c.get("site_filter") is not None:
+        fields.append(("site_filter", json.dumps(c["site_filter"], ensure_ascii=False, indent=1)))
     return {"turn": row.get("turn"), "fields": fields, "open": open_}
 
 
@@ -52,10 +57,12 @@ class Render:
         return self.env.get_template(name).render(**kw).strip()
 
     def page(self, conv_id: str, turns: list[dict], lst: dict | None, sites: dict | None, *, fragment: bool,
-             convs: list[dict] | None = None, states: list[dict] | None = None, outdated: bool = False) -> str:
+             convs: list[dict] | None = None, states: list[dict] | None = None, outdated: bool = False,
+             off_closed: bool = False) -> str:
         name = "partials/main.html" if fragment else "page.html"
         return self._t(name, conv_id=conv_id, turns=turns, lst=lst, sites=sites, show_codes=False,
-                       convs=convs or [], current=conv_id, states=states or [], outdated=outdated)
+                       convs=convs or [], current=conv_id, states=states or [], outdated=outdated,
+                       off_closed=off_closed)
 
     def drawer_list(self, convs: list[dict], current: str | None) -> str:
         return self._t("partials/drawer_list.html", convs=convs, current=current)

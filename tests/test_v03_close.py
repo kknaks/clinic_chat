@@ -14,6 +14,16 @@ from clinic_chat.consult.tail import split_close, split_tail
 from clinic_chat.walk.calls import Call, Entry
 from tests.conftest import stream
 from tests.state_fixture import Run, jev
+from tests.v04_fixture import out, set_map
+
+# 0.4(검수 C-3) — 켠 턴의 입구 = 가짜 이해 출력(이번 말 낱말 → 출력 · 기대값은 그대로 — QS5 · CP5)
+UMAP = {"가짜제품": out([("product", "ZZR-1")], kinds=["overview"]), "*": out([])}
+
+
+def _run(tmp_path, fake_cli, **kw):
+    set_map(fake_cli[1], UMAP)
+    return Run(tmp_path, fake_cli, **kw)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 LABELS = load(ROOT / "prompts" / "consult.json").kind_labels
@@ -129,7 +139,7 @@ def _answer(fake_cli, close_line: str | None):
 
 
 def test_s6_t11_said_recorded_and_ask_not_counted_when_zero(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = _run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
     try:
         _answer(fake_cli, "close: 0")
         row1, _, body = r.turn("가짜제품 받고 싶어요")
@@ -140,7 +150,6 @@ def test_s6_t11_said_recorded_and_ask_not_counted_when_zero(tmp_path, fake_cli):
         assert "close: 0" not in body and "close:" not in row1["answer"]  # 화면 · 본문에 꼬리 글자 0
         assert row1["answer_lines"] == [{"answer_line": 1, "rows": [1]}]
         _answer(fake_cli, "close: 2")
-        r.set_noul(jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
         row2, _, _ = r.turn("가짜제품 또 알려줘")
         assert row2["consult"]["close"]["said"] == 2
         assert len(row2["consult"]["after"]["asked"]) == (1 if row2["consult"]["close"]["by"] == "ask" else 0)
@@ -149,7 +158,7 @@ def test_s6_t11_said_recorded_and_ask_not_counted_when_zero(tmp_path, fake_cli):
 
 
 def test_s6_t11_no_close_line_is_null_and_counted(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = _run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
     try:
         _answer(fake_cli, None)
         row, _, _ = r.turn("가짜제품 받고 싶어요")
@@ -160,7 +169,7 @@ def test_s6_t11_no_close_line_is_null_and_counted(tmp_path, fake_cli):
 
 
 def test_s6_t10_turn_message_has_close_block(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = _run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
     try:
         row, _, _ = r.turn("가짜제품 받고 싶어요")
         msg = row["llm_user_message"]

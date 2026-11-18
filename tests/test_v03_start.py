@@ -26,17 +26,18 @@ def test_on_conv_start_has_rev_to_the_end(tmp_path):
     led.end(c, {"turn": 1, "error": None, "llm": {"answered": True}})
     led.start(c, "q2", "off")  # 대화 값은 첫 턴 것으로 끝까지
     rows = _starts(tmp_path)
-    assert [r.get("consult_rev") for r in rows] == [CONSULT_REV, CONSULT_REV] == [3, 3]
-    assert Ledger(tmp_path).get(c.conv_id).consult_rev == 3
+    assert [r.get("consult_rev") for r in rows] == [CONSULT_REV, CONSULT_REV] == [4, 4]
+    assert Ledger(tmp_path).get(c.conv_id).consult_rev == 4
 
 
 def test_off_conv_start_has_no_rev(tmp_path):
+    """0.4 CP1 — 새 대화는 `off` 를 주어도 켠 상태 · rev 4(끈 상태로 시작하는 새 대화는 없다)."""
     led = Ledger(tmp_path)
     c = led.new_conv(None)
     led.start(c, "q1", "off")
     r = _starts(tmp_path)[0]
-    assert "consult_rev" not in r and r["consult_state"] == "off"
-    assert Ledger(tmp_path).get(c.conv_id).consult_rev is None
+    assert r["consult_rev"] == CONSULT_REV and r["consult_state"] == "on"
+    assert Ledger(tmp_path).get(c.conv_id).consult_rev == CONSULT_REV
 
 
 def test_old_on_conv_without_rev_reloads_none(tmp_path):

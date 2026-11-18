@@ -114,6 +114,14 @@
 - 실측기: `CHAT_STATE=on uv run python -m clinic_chat.consult.probe --e6 [--only c1_e3f90,sp_cheek]` — 입력 글은 `clinic_chat/consult/e6_inputs.json` · 장부 `CHAT_DIR/e6/turns.jsonl` · 결과 `CHAT_DIR/probe/<시각>.json`.
 - 이 판은 **로컬 한 사람 전제**다 — 드로어에 손님 질문 원문이 보인다. 여러 사람이 쓰기 전에 대화의 주인을 가르는 길이 먼저 서야 한다.
 
+### 상담 0.4 — 상담 입구 소넷 전환(SPEC-008 0.2.0 · WORK-017)
+
+- 켠 상태 턴 = 목록 적재(허브 `resolve` 목록 꼴 · `gold_hash` 마다 프로세스 캐시) → **소넷 이해 호출 하나**(`claude -p --no-session-persistence --output-format json` · 답 실행기와 같은 격리 인자 · 턴 메시지는 stdin) → 검증(목록에 없는 코드 버림) → 객체 → 조회(부위 거르개 = 이번 턴 부위만) · 답 재료(걷기의 결정론 함수) → 화면 → 답(0.3 그대로). 걷기 `walk()` · Jev · `resolve` 맞춤 꼴 · 거둠 요청은 켠 턴에서 부르지 않는다.
+- `CHAT_STATE` 기본 `on` · `off` 를 주어도 새 대화는 켠 상태로 연다. 옛 끈 대화 · rev 3 대화는 열기만 되고 새 턴은 `rev_changed` 로 막힌다(막는 자리 `data-slot="conv-off-closed"` — 문구 빈칸).
+- 설정 아홉: `CHAT_PICK_MODEL`(sonnet) · `CHAT_PICK_EFFORT`(low) · `CHAT_PICK_THINKING`(off = `--settings {"alwaysThinkingEnabled": false}` + `MAX_THINKING_TOKENS=0` — CLI 2.1.322 실측에서 20 회 가운데 4 ~ 5 회는 그래도 thinking 이 났다 · 완전히 끄는 것은 SDK 때) · `CHAT_PICK_TIMEOUT_SEC`(10) · `CHAT_PICK_ALIASES`(on) · `CHAT_PICK_LIST_CACHE`(on) · `CHAT_PICK_CONTEXT_TURNS`(2) · `CHAT_PICK_ANSWER_CHARS`(200) · `CHAT_PICK_LIST_MAX`(30).
+- 프롬프트 `prompts/consult.json` 의 `pick` 절(초안 `0.4.0-draft` — 사용자 확인 대상). 장부 `consult.understand` · `consult.site_filter` · `consult.site_index`(색인 지은 턴만) · `consult.turn_kind{kind, from}` · 패널에 같은 키.
+- 실측기: `uv run python -m clinic_chat.consult.e8 --e8-0 <conversations.jsonl> --n 20 --mode a` — thinking 끄는 꼴 후보별 20 회(허브 GET 만).
+
 벤더링한 파일(`clinic_chat/consult/static/` — 고치지 않는다 · CENTURION_DAY `backend/day/static/` dev `c5045a99` 사본):
 
 | 파일 | 판 | 라이선스 | sha256 |

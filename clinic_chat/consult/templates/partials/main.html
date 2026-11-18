@@ -20,6 +20,9 @@
     {%- if outdated %}
     <div class="cs-outdated" data-conv-outdated><span data-slot="conv-outdated"></span><a class="ms-btn ms-btn--outline ms-btn--s cs-new" href="/" data-slot="error-new-conversation"></a></div>
     {%- endif %}
+    {%- if off_closed %}
+    <div class="cs-outdated" data-conv-off-closed><span data-slot="conv-off-closed"></span></div>
+    {%- endif %}
     <div id="chat-log" class="cs-log" data-cs-scroll>
       {%- for t in turns %}
       {%- include "partials/turn.html" %}

@@ -29,7 +29,7 @@ TURNS_FILE = "turns.jsonl"
 # LG3 의 굵은 칸 여섯(턴 · session_id · 고른 대상 · 읽은 재료 id · 답 · 시간)
 BOLD = ("turn", "llm.session_id", "targets", "material.new_lines", "answer", "timing")
 END_KINDS = ("broken", "build_changed")  # 맺는 줄의 `conv_end` — 그 대화는 끝
-CONSULT_REV = 3  # 0.3 — 켠 대화의 판(SPEC-006 FX3)
+CONSULT_REV = 4  # 0.4 — 켠 대화의 판(SPEC-008 §6-1 · rev 3 켠 대화는 0.4 서버에서 끝난 대화)
 
 
 def _scrub_home(text: str) -> str:
@@ -54,6 +54,7 @@ class Conv:
     consult: dict | None = None  # 0.2 — 상담 객체(마지막 성공 줄의 `consult.after`)
     memo: dict = field(default_factory=dict)  # 0.2 — 객체 조회 응답(Call.key → Read 목록 · 메모리만 · B-10)
     consult_rev: int | None = None  # 0.3 — 켠 대화의 판(첫 시작 줄의 값 · 없으면 None)
+    list_calls: list = field(default_factory=list)  # 0.4 QS4 — 마지막 리스트 ② 의 조회(메모리만 · 장부에 안 적음)
 
     @property
     def n_started(self) -> int:
@@ -193,12 +194,13 @@ class Ledger:
 
 
 def state_at_start(conv: Conv, setting: str | None) -> str:
-    """대화의 켠 / 끈 상태 — 이미 정해졌으면 그 값 · 첫 턴이면 설정값 · 시작 줄이 있는데 값이 없으면(0.1 대화) `off`."""
+    """대화의 켠 / 끈 상태 — 이미 정해졌으면 그 값 · 시작 줄이 있는데 값이 없으면(0.1 대화) `off` · **새 대화(시작 줄 0)는 늘
+    `on`**(SPEC-008 CP1 · S8-T19 — 설정값이 `off` 여도 · 끈 상태로 시작하는 새 대화는 없다). `setting` 은 옛 부르는 꼴 그대로 받는다."""
     if conv.consult_state is not None:
         return conv.consult_state
     if conv.starts:
         return "off"
-    return setting if setting in ("on", "off") else "off"
+    return "on"
 
 
 def blocked(conv: Conv, max_turns: int) -> str | None:
@@ -206,7 +208,9 @@ def blocked(conv: Conv, max_turns: int) -> str | None:
     if conv.ended:
         return conv.ended
     if conv.starts and conv.consult_state == "on" and (conv.consult_rev or 0) < CONSULT_REV:
-        return "rev_changed"  # 0.3 FX4 — 0.2 로 시작한 켠 대화는 끝난 대화(줄을 쓰지 않는다 — B-5)
+        return "rev_changed"  # 0.3 FX4 · 0.4 C8-4 — 앞 판으로 시작한 켠 대화는 끝난 대화(줄을 쓰지 않는다 — B-5)
+    if conv.starts and conv.consult_state == "off":
+        return "rev_changed"  # 0.4 CP7 · C8-8 — 옛 끈 대화는 읽기만(같은 자리 · 같은 꼴 · 줄을 쓰지 않는다)
     if conv.running is not None or conv.chat.running:
         return "busy"
     if conv.answered() >= max_turns:

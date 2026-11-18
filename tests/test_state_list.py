@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 
 from clinic_chat.consult.render import Render
-from tests.state_fixture import Run, jev
+from tests.state_fixture import Run
+from tests.v04_fixture import set_out
 
 CONSULT = Path(__file__).resolve().parent.parent / "clinic_chat" / "consult"
 HANGUL = re.compile(r"[가-힣]")
@@ -22,7 +23,8 @@ def _event_html(body: str, name: str) -> str:
 
 
 def test_s5_t12_subject_only_list_and_order(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = Run(tmp_path, fake_cli)
+    set_out(fake_cli[1], [("product", "ZZR-1")], kinds=["overview"])
     row, kinds, body = r.turn("가짜제품 받고 싶어요")
     assert "list" in kinds and row["list"]["interest"][0]["code"] == "ZZR-1" and row["list"]["concerns"] == []
     html = _event_html(body, "list")
@@ -30,7 +32,7 @@ def test_s5_t12_subject_only_list_and_order(tmp_path, fake_cli):
     assert row["timing"]["first_list_ms"] is not None
     steps = [b for b in body.split("\n\n") if "event: step" in b]
     assert any("list" in b for b in steps)  # 묶음 ① 만 있는 턴에도 「목록」 단계(검수 §3-2 ①-a)
-    r.set_noul(jev({"가짜고민": 0.92, "가짜제품": 0.9}, kinds={"indication": 0.9}))
+    set_out(fake_cli[1], [("concern", "ZZC-1"), ("product", "ZZR-1")], kinds=["indication"])
     row2, kinds2, body2 = r.turn("가짜고민 때문에요")
     assert kinds2.index("list") < kinds2.index("sites") < kinds2.index("delta")
     html2 = _event_html(body2, "list")
@@ -41,9 +43,10 @@ def test_s5_t12_subject_only_list_and_order(tmp_path, fake_cli):
 
 
 def test_w3_modality_interest_on_group_head_only(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev(kinds={"indication": 0.9}))
+    r = Run(tmp_path, fake_cli)
+    set_out(fake_cli[1], [("concern", "ZZC-1")], kinds=["indication"])
     r.turn("가짜고민 시술")
-    r.set_noul(jev({"가짜계열": 0.9, "가짜고민": 0.9}, kinds={"overview": 0.9}))
+    set_out(fake_cli[1], [("modality", "ZZM-1"), ("concern", "ZZC-1")], kinds=["overview"])
     row, kinds, body = r.turn("가짜계열 은 어떤 거예요")
     mod = row["list"]["concerns"][0]["modalities"][0]
     assert mod["modality_code"] == "ZZM-1" and mod["interest"] is True
@@ -55,9 +58,9 @@ def test_w3_modality_interest_on_group_head_only(tmp_path, fake_cli):
 
 
 def test_unchanged_list_not_resent(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev(kinds={"indication": 0.9}))
+    r = Run(tmp_path, fake_cli)
+    set_out(fake_cli[1], [("concern", "ZZC-1")], kinds=["indication"])
     r.turn("가짜고민 시술")
-    r.set_noul(jev({"가짜고민": 0.9}, kinds={"indication": 0.9}))
     row, kinds, _ = r.turn("가짜고민 다시")
     assert "list" not in kinds and row["list"] is None  # SC3 — 바뀐 것이 없으면 안 보낸다
     r.close()

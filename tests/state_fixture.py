@@ -33,12 +33,21 @@ CONCEPTS = [
 ]
 
 
+EXTRA_CONCEPTS = [("procedure", "ZZP-2", "가짜시술둘"), ("modality", "ZZM-2", "가짜계열둘"), ("concern", "ZZC-3", "가짜하위하나"),
+                  ("concern", "ZZC-4", "가짜하위둘")]  # 0.4 목록에만 있는 개념(글자 맞춤 `resolve` 에는 안 나온다)
+
+
 def lay(role: str, table: str, code: str, name: str) -> dict:
     return {"role": role, "path": "", "holder": {"holder_table": table, "holder_code": code, "holder_name": name}}
 
 
 def resolve_fn(p: dict) -> dict:
     t = p.get("text") or ""
+    if not t and p.get("tables"):  # 0.4 목록 꼴(SPEC-001 §4-1 — `text` 없음 · 표만) — 더하기만
+        tables = p["tables"].split(",")
+        return {"candidates": [{"gold_table": "g_entry", "gid": f"GEN-{code}", "entity_table": table, "entity_code": code,
+                                "entity_name": name, "text": name, "norm": name, "name_kind": "이름"}
+                               for table, code, name in CONCEPTS + EXTRA_CONCEPTS if table in tables]}
     out = []
     for table, code, name in CONCEPTS:
         i = t.find(name)
@@ -192,6 +201,7 @@ class Run:
     def __init__(self, tmp_path, fake_cli, *, hub=None, noul=None, state: str = "on", **kw) -> None:
         bin_, route, log = fake_cli
         (route / "answer.jsonl").write_text(stream(ANSWER), encoding="utf-8")
+        kw.setdefault("chat_pick_list_cache", "off")  # 0.4 — 시험마다 가짜 목록이 달라 프로세스 캐시를 쓰지 않는다
         self.tmp = tmp_path
         self.s = make_settings(tmp_path, claude_cli_bin=bin_, chat_dir=str(tmp_path / "chat"),
                                chat_cli_cwd=str(tmp_path / "cwd"), chat_state=state, **kw)

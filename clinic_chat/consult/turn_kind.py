@@ -1,9 +1,8 @@
 """턴 종류 가르기(SPEC-006 §2 TK1 ~ TK7 · TW6 · TT6 · WORK-014 §7 · 코디 W-3).
 
 - 종류 셋 = `new` · `follow` · `talk`. 첫 턴(앞 성공 턴 없음)은 요청 없이 `new`(TK2).
-- 가르는 주체 = Jev Noul 셋(`tk_new` · `tk_talk` · `tk_follow`) — 거둠 요청에 함께 실어 요청 하나(TK3 · `state.retract`).
-- 판정(TK5): ① `tk_new` ≥ yes → `new` ② `tk_talk` ≥ yes → `talk` ③ `tk_follow` ≥ yes → `follow` ④ 그 밖 → `new`.
-  요청 오류 · 시간 초과 → `new` + `error`(TK6 — 턴을 죽이지 않는다). 잇단 `talk` 가 `CHAT_TALK_MAX` 면 요청 없이 `new`(TT6).
+- 0.4(SPEC-008 VF6 · VF7 · VF11): 가르는 주체 = 이해 호출의 `kind` 하나(Jev Noul · 판정 순서 없음 — `verify.py`).
+  이 모듈은 앞 턴 읽기(`prev_turn` · `talk_streak` · `prev_state` · `prev_block`)와 앞 대상(`follow_target`)만 남긴다.
 - Jev state(TK4) = `question` · `prev{question, answer, targets[이름], ask{slot, options[이름]}, closed_by, empty[]}` · `consult`.
   코드 · 줄 번호를 싣지 않는다.
 """
@@ -13,7 +12,6 @@ from __future__ import annotations
 from clinic_chat.consult import state as st
 
 KINDS = ("new", "follow", "talk")
-EXTRA = {"new": "tk_new", "talk": "tk_talk", "follow": "tk_follow"}
 OBJ_TABLES = set(st.SLOT_OF)  # 객체 칸에 드는 표 — 그 밖(package · adverse · condition · anatomy · offer)은 CR1 그대로(W-3)
 
 
@@ -55,15 +53,6 @@ def prev_block(row: dict | None, kind_labels: dict[str, str]) -> dict:
     row = row or {}
     return {"closed_by": ((row.get("consult") or {}).get("close") or {}).get("by"),
             "empty": empty_names(row, kind_labels), "end_state": row.get("end_state")}
-
-
-def judge(nouls: dict[str, float] | None, yes_at: float) -> tuple[str, str]:
-    """TK5 — (종류, 규칙)."""
-    v = nouls or {}
-    for i, k in enumerate(("new", "talk", "follow"), 1):
-        if (v.get(k) or 0.0) >= yes_at:
-            return k, f"TK5-{i}"
-    return "new", "TK5-4"
 
 
 def follow_target(obj: dict, prev: dict | None) -> dict | None:

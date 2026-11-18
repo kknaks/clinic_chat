@@ -35,6 +35,9 @@ TURN_KIND_KEYS = ("new", "talk", "follow")  # 0.3 `jev_state.turn_kind`(TK7)
 KIND_LABEL_KEYS = ("overview", "mechanism", "indication", "outcome", "lineup", "adverse", "recovery", "contraindication",
                    "avoid", "combo", "same_day", "order_interval", "package", "offer")  # SPEC-001 §5-8 의 14
 V3_HEADER_KEYS = ("close", "prev")
+PICK_HEADER_KEYS = ("history", "object", "utterance")  # 0.4 `pick.headers`(SPEC-008 §7 — 시안 글자)
+PICK_HEADER_EXTRA = ("answer", "list", "picked", "options", "obj_targets", "obj_guess", "obj_withdrawn", "user")  # WORK-017 B-4
+PICK_MARK_KEYS = ("failed", "same_list", "none")
 
 
 class PromptError(ValueError):
@@ -58,6 +61,7 @@ class ConsultPrompt:
     turn_kind: dict[str, str] = field(default_factory=dict)  # 0.3 `jev_state.turn_kind`
     kind_labels: dict[str, str] = field(default_factory=dict)  # 0.3 정보 종류 → 손님 말 이름
     voice_check: tuple[str, ...] = ()  # 0.3 금지 낱말 정규식(VO10)
+    pick: dict | None = None  # 0.4 이해 호출 절(SPEC-008 §7 적재기 계약 — 한 칸이라도 없거나 비면 None)
 
     @property
     def draft(self) -> bool:
@@ -65,11 +69,29 @@ class ConsultPrompt:
 
     @property
     def state_ready(self) -> bool:
-        """켠 대화(rev 3)를 시작할 수 있나 — 0.2 의 Jev · 머리 키 + 0.3 키가 전부 있다(VO1)."""
-        return bool(self.system_text_v3 and self.jev_state.get("retract") and self.jev_front.get("target_option")
-                    and self.turn_headers.get("consult") and all(self.turn_kind.get(k) for k in TURN_KIND_KEYS)
+        """켠 대화(rev 4)를 시작할 수 있나(SPEC-008 §7 적재기 계약) — `system_text_v3` · `pick` · `turn_headers.consult` ·
+        `kind_labels` 14 · `voice_check` · V3 머리 둘. `jev_state.retract` · `jev_front.target_option` · `turn_kind` 는 보지 않는다."""
+        return bool(self.system_text_v3 and self.pick and self.turn_headers.get("consult")
                     and all(self.kind_labels.get(k) for k in KIND_LABEL_KEYS) and self.voice_check
                     and all(self.turn_headers.get(k) for k in V3_HEADER_KEYS))
+
+
+def _pick(d: dict) -> dict | None:
+    """0.4 `pick` — `version` · `rules[]`(1 줄 이상 · 빈 줄 아님) · `headers` · `marks` 가 다 있어야(아니면 None · 오류 아님)."""
+    pk = d.get("pick")
+    if not isinstance(pk, dict):
+        return None
+
+    def ok(v: object) -> bool:
+        return isinstance(v, str) and bool(v.strip())
+    rules, hd, mk = pk.get("rules"), pk.get("headers"), pk.get("marks")
+    if not ok(pk.get("version")) or not isinstance(rules, list) or not rules or not all(ok(x) for x in rules):
+        return None
+    if not isinstance(hd, dict) or not all(ok(hd.get(k)) for k in (*PICK_HEADER_KEYS, *PICK_HEADER_EXTRA)):
+        return None
+    if not isinstance(mk, dict) or not all(ok(mk.get(k)) for k in PICK_MARK_KEYS):
+        return None
+    return {"version": pk["version"], "rules": list(rules), "headers": dict(hd), "marks": dict(mk)}
 
 
 def _nonempty(v: object, where: str) -> str:
@@ -186,7 +208,7 @@ def parse(raw: bytes) -> ConsultPrompt:
         slots = {str(k): _nonempty(v, f"slots.{k}") for k, v in sl.items()}
     return ConsultPrompt(version, tuple(sections), text, jev, headers, mark, hashlib.sha256(raw).hexdigest(), steps,
                          text_state, jev_state, slots, system_text_v3=text_v3, turn_kind=turn_kind,
-                         kind_labels=kind_labels, voice_check=voice)
+                         kind_labels=kind_labels, voice_check=voice, pick=_pick(d))
 
 
 def load(path: Path) -> ConsultPrompt:

@@ -91,13 +91,15 @@ def _rank(b: dict, obj: dict, turn: int, new_nodes: set[str], new_guess: set[str
 
 
 def pick(blanks: list[dict], obj: dict, turn: int, *, new_nodes: set[str], new_guess: set[str], prev_ask: dict | None,
-         end_state: str | None, kinds_read: list[str], ask_max: int) -> tuple[dict | None, str]:
-    """NQ1 · NQ2 · NQ4 ~ NQ9 → (`ask` | None, 까닭). 까닭 = NQ2 의 급(`NQ2-1` …) 또는 None 의 규칙."""
+         end_state: str | None, kinds_read: list[str], ask_max: int,
+         qy7_new: bool = False) -> tuple[dict | None, str]:
+    """NQ1 · NQ2 · NQ4 ~ NQ9 → (`ask` | None, 까닭). 까닭 = NQ2 의 급(`NQ2-1` …) 또는 None 의 규칙.
+    0.4 BQ4(SPEC-008 AR-12) — `qy7_new`(이번 턴 `new` · 대상이 부위뿐 · `focus` 없음 · QY7 이 섬)면 NQ5 를 걸지 않는다."""
     if end_state in st.TERMINAL:
         return None, "NQ7"
     if any(k in SAFETY_KINDS for k in kinds_read):
         return None, "NQ6"
-    if prev_ask is not None and prev_ask.get("answered") is False:
+    if prev_ask is not None and prev_ask.get("answered") is False and not qy7_new:
         return None, "NQ5"
     live = [b for b in blanks if b["asked_n"] < ask_max]  # NQ4
     if not live and blanks:

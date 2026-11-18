@@ -7,8 +7,9 @@ import asyncio
 from clinic_chat.consult import plan
 from clinic_chat.consult import state as st
 from clinic_chat.walk.calls import Entry, plan_calls
-from tests.state_fixture import Run, jev, state_hub
-from tests.test_state_object import apply, fake_walk, t
+from tests.state_fixture import Run, state_hub
+from tests.test_state_object import apply
+from tests.v04_fixture import set_out
 
 SAFETY = ("adverse", "adverse_detail", "contraindication", "avoid")
 
@@ -18,15 +19,18 @@ def _qs(row: dict) -> list[dict]:
 
 
 def test_s5_t8_walk_overlap_qy3_qy4_and_no_safety(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev(kinds={"indication": 0.9}))
+    route = fake_cli[1]
+    r = Run(tmp_path, fake_cli)
+    set_out(route, [("concern", "ZZC-1")], kinds=["indication"])
     row1, _, _ = r.turn("가짜고민 시술")
     q1 = [q for q in _qs(row1) if q["rule"] == "QY1"]
-    assert q1 and all(q["skipped"] == "walk" for q in q1)  # 걷기가 읽은 조회는 다시 안 부른다
+    assert q1 and all(q["skipped"] == "walk" for q in q1)  # 답 재료 조회가 읽은 조회는 다시 안 부른다(QM5)
     r.close()
-    r = Run(tmp_path / "b", fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = Run(tmp_path / "b", fake_cli)
+    set_out(route, [("product", "ZZR-1")], kinds=["overview"])
     row, _, _ = r.turn("가짜제품 받고 싶어요")
     assert {q["rule"] for q in _qs(row)} == {"QY2", "QY3"}  # 대상만 → QY3 · 시너지 없음(고민이 없다 — U5-2 (a))
-    r.set_noul(jev({"가짜고민": 0.9, "가짜제품": 0.9}, kinds={"indication": 0.9}))
+    set_out(route, [("concern", "ZZC-1"), ("product", "ZZR-1")], kinds=["indication"])
     row2, _, _ = r.turn("가짜고민 때문에요")
     rules = {q["rule"] for q in _qs(row2)}
     assert {"QY4", "QY4b"} <= rules and "QY3" not in rules  # 둘 다 있으면 QY4
@@ -39,7 +43,7 @@ def test_s5_t8_walk_overlap_qy3_qy4_and_no_safety(tmp_path, fake_cli):
 
 def test_w9_wishes_only_turn_makes_no_query():
     obj = st.empty()
-    apply(obj, fake_walk([], kinds=[{"code": "recovery", "decision": "read", "by": "yes"}]), 1)
+    apply(obj, [], 1, kinds=["recovery"])
     assert obj["wishes"] and obj["wishes"][0]["kind"] == "recovery"
     hub = state_hub()
 
@@ -54,24 +58,29 @@ def test_w9_wishes_only_turn_makes_no_query():
 def test_w7_query_key_equals_walk_call_key():
     """부위 거르개 값은 걷기와 같은 꼴(이름 글자) — `plan` 의 `Call.key()` 가 걷기의 것과 같다."""
     obj = st.empty()
-    apply(obj, fake_walk([t("concern:ZZC-9", "가짜팔자", "target", start=0), t("site:ZZS-9", "가짜팔자", "target", start=0)]), 1)
+    apply(obj, [("concern", "ZZC-9"), ("site", "ZZS-9")], 1)
     ents = [Entry("concern", "ZZC-9", "가짜팔자", "target", span="가짜팔자", start=0),
             Entry("site", "ZZS-9", "가짜팔자", "target", span="가짜팔자", start=0)]
     walk_keys = {c.key() for c in plan_calls(ents, ["indication"]) if c.tool == "concern_candidates"}
-    assert {c.key() for c in plan.qy1_calls(obj)} == walk_keys
+    assert {c.key() for c in plan.qy1_calls(obj, ["가짜팔자"])} == walk_keys
 
 
 def test_w1_site_only_gives_concern_options():
+    """QY7 → 0.4 QS6 — 선택지 = `concern_site` 로 묶인 고민(먼저) ∪ `facets(site, indication)` 행의 고민 · 같은 고민 한 번."""
     obj = st.empty()
-    apply(obj, fake_walk([t("site:ZZS-1", "가짜부위", "target")]), 1)
+    apply(obj, [("site", "ZZS-1")], 1)
     hub = state_hub()
+
+    async def bound(code):
+        return [{"table": "concern", "code": c, "name": "", "layer": "", "holder": "", "rank": -1, "first": 0,
+                 "gids": [], "rows": 0} for c in ("ZZC-3", "ZZC-1")]
 
     async def go():
         r = plan.Reader(hub.client(page_limit=50), {}, [], [])
-        return await plan.run(obj, r), r
+        return await plan.run(obj, r, site_options=bound), r
     p, r = asyncio.run(go())
     assert [q["rule"] for q in r.queries] == ["QY7"]
-    assert [o["code"] for o in p.options["site:ZZS-1"]] == ["ZZC-1"]
+    assert [o["code"] for o in p.options["site:ZZS-1"]] == ["ZZC-3", "ZZC-1"]
 
 
 def test_concern_options_layer_order():

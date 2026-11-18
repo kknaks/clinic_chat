@@ -11,8 +11,10 @@ from clinic_chat.consult import blanks
 from clinic_chat.consult import plan as plan_mod
 from clinic_chat.consult import state as st
 from clinic_chat.consult.prompt import STATE_SECTION_IDS, load, parse
-from tests.state_fixture import INDICATION, Run, jev
-from tests.test_state_object import apply, fake_walk, t
+from tests.state_fixture import INDICATION, Run
+from tests.test_state_object import apply
+from tests.test_v03_fixes import _old_rows, _w
+from tests.v04_fixture import set_out
 
 PROMPT = Path(__file__).resolve().parent.parent / "prompts" / "consult.json"
 SYSTEM_0_1_SHA = "b3fa8e2080077c3dc42cc053b5a84779c22d6c730b42267e11dec0f2be577440"  # 0.1(+ 수정 1) 보관본의 끈 시스템 글
@@ -31,12 +33,12 @@ def pick(bl, obj, turn, **kw):
 
 def obj_with(*targets, turn=1):
     o = st.empty()
-    apply(o, fake_walk(list(targets)), turn)
+    apply(o, list(targets), turn)
     return o
 
 
 def test_s5_t9_deterministic_new_item_first_and_limits():
-    o = obj_with(t("product:ZZR-1", "가짜제품", "target"), t("site:ZZS-1", "가짜부위", "uncertain_kept", 0.5, start=5))
+    o = obj_with(("product", "ZZR-1"), ("site", "ZZS-1", False))
     p = plan_mod.Plan(options={"product:ZZR-1": [opt("C1"), opt("C2")]})
     bl = blanks.count(o, p, False)
     assert {b["bk"] for b in bl} == {"BK2", "BK5"}
@@ -51,10 +53,11 @@ def test_s5_t9_deterministic_new_item_first_and_limits():
 
 
 def test_nq5_nq6_nq7_nq9():
-    o = obj_with(t("product:ZZR-1", "가짜제품", "target"))
+    o = obj_with(("product", "ZZR-1"))
     p = plan_mod.Plan(options={"product:ZZR-1": [opt("C1")]})
     bl = blanks.count(o, p, False)
     assert pick(bl, o, 2, prev_ask={"answered": False}, new_nodes={"product:ZZR-1"})[1] == "NQ5"  # 새 항목 무관(W-2)
+    assert pick(bl, o, 2, prev_ask={"answered": False}, qy7_new=False)[1] == "NQ5"  # BQ4 — QY7 이 안 선 턴은 그대로
     assert pick(bl, o, 2, kinds_read=["adverse"])[1] == "NQ6"
     assert pick(bl, o, 2, end_state="범위 밖")[1] == "NQ7"
     empty = blanks.count(o, plan_mod.Plan(options={"product:ZZR-1": []}), False)
@@ -62,7 +65,7 @@ def test_nq5_nq6_nq7_nq9():
 
 
 def test_w4_bk3_bk4_beat_bk1_and_fewer_wins():
-    o = obj_with(t("concern:ZZC-2", "가짜윗고민", "target"))
+    o = obj_with(("concern", "ZZC-2"))
     sub2 = [opt("C3"), opt("C4")]
     sites3 = [{"table": "site", "code": f"S{i}", "name": "s", "layer": ""} for i in range(3)]
     sites2 = sites3[:2]
@@ -75,16 +78,19 @@ def test_w4_bk3_bk4_beat_bk1_and_fewer_wins():
 
 
 def test_w1_site_only_blank_and_not_with_focus():
-    o = obj_with(t("site:ZZS-1", "가짜부위", "target"))
+    o = obj_with(("site", "ZZS-1"))
     p = plan_mod.Plan(options={"site:ZZS-1": [opt("C1")]})
     a, _ = pick(blanks.count(o, p, False), o, 1, new_nodes={"site:ZZS-1"})
     assert a["slot"] == "concern" and a["about"] == "site:ZZS-1" and a["bk"] == "BK2s"
-    apply(o, fake_walk([t("concern:ZZC-1", "가짜고민", "target")]), 2)
+    a2, why = pick(blanks.count(o, p, False), o, 2, prev_ask={"answered": False}, qy7_new=True)
+    assert a2 is not None and why != "NQ5"  # BQ4 — QY7 이 선 new 턴은 NQ5 를 걸지 않는다
+    apply(o, [("concern", "ZZC-1")], 2)
     assert not [b for b in blanks.count(o, p, True) if b["bk"] == "BK2s"]
 
 
 def test_s5_t10_options_are_hub_rows_and_llm_gets_names(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = Run(tmp_path, fake_cli)
+    set_out(fake_cli[1], [("product", "ZZR-1")], kinds=["overview"])
     row, _, _ = r.turn("가짜제품 받고 싶어요")
     codes = {x["concern_code"] for x in INDICATION["product:ZZR-1"]}
     assert row["consult"]["ask"]["options"] and {o["code"] for o in row["consult"]["ask"]["options"]} <= codes
@@ -116,7 +122,11 @@ def test_s5_t19_system_texts_and_loader(tmp_path, fake_cli):
     assert 'data-error="prompt"' in frag or "prompt" in frag  # 켠 대화 시작 실패(오류 종류 prompt)
     assert not (tmp_path / "on" / "chat" / "turns.jsonl").exists()
     r.close()
+    # 0.4 CP1 · CP7(검수 R-2 ⓓ) — 새 대화는 켬이라 `state_ready` 가 거짓이면 시작하지 않는다 · 장부에 끈 시작 줄을 둔
+    # 옛 대화는 열기만 되고 턴은 막힌다(프롬프트와 무관)
+    f = tmp_path / "off" / "chat" / "turns.jsonl"
+    _w(f, _old_rows("off09", "off"))
     r2 = Run(tmp_path / "off", fake_cli, state="off", chat_prompt_file=str(bad))
-    row, kinds, _ = r2.turn("가짜고민 시술")
-    assert "done" in kinds and row["error"] is None  # 끈 대화는 된다
+    assert 'data-slot="conv-off-closed"' in r2.c.get("/c/off09").text
+    assert 'data-error="rev_changed"' in r2.c.post("/c/off09/turns", data={"text": "가짜고민 시술"}).text
     r2.close()

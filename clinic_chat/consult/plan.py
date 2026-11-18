@@ -6,7 +6,10 @@
   걷기가 이번 턴에 읽은 조회는 다시 안 부르고 그 응답을 쓴다 → `queries[]` 에 `skipped: "walk"`.
 - 읽기는 걷기의 함수를 **부르기만** 한다(`walk.breadth.read_calls` — 쪽 넘김 끝까지 + 후보별 profile 이어 조회). 상담 쪽의
   `Verified` · 방문 장부는 따로 세운다(걷기의 것에 섞지 않는다).
-- QY1 · QY5: `focus` 고민의 `concern_candidates`(+ 짝 고민이 `focus` 일 때만 그 부위 — W-2) · QY2: 축 대상의 `scope` ·
+- 0.4(SPEC-008 QS1 ~ QS6): QY1 · QY5 의 부위 거르개 = **이번 턴 부위 거르개**(`consult.site_filter.sites` 의 이름 — 객체 축
+  부위를 읽지 않는다) · `focus` 그대로 + 거르개 `[]` 면 앞 리스트의 조회를 그대로(메모 — 허브 0 · QS4) · QY7 선택지 = 그 부위에
+  `concern_site` 로 묶인 고민(먼저 · `site_index`) ∪ `facets(site, indication)` 행의 고민(QS6).
+- QY1 · QY5: `focus` 고민의 `concern_candidates`(+ 이번 턴 거르개 부위) · QY2: 축 대상의 `scope` ·
   QY3: 축 대상만 있고 축 고민이 없을 때 `facets(indication)` · QY7(코디 W-1 (가)): `focus` 가 없고 축 부위만 있을 때 그 부위의
   `facets(indication)` — 선택지(고민)로만 쓴다. `wishes[]` 는 조회를 일으키지 않는다(W-9).
 - QY6: 이 모듈이 내는 도구 · facet 은 닫힌 목록(`ALLOWED`) — 안전 종류(adverse · contraindication · avoid) 0.
@@ -37,6 +40,7 @@ class Plan:
     options: dict[str, list[dict]] = field(default_factory=dict)  # 대상 · 부위 노드 → 고민 선택지(QY3 · QY7)
     sub_concerns: list[dict] = field(default_factory=list)  # BK3 — focus 응답 행의 하위 고민
     sub_sites: list[dict] = field(default_factory=list)  # BK4 — 하위 고민들의 고민 부위
+    list_calls: list[Call] = field(default_factory=list)  # 0.4 QS4 — 이번 턴 리스트 ② 의 조회(다음 턴이 그대로 쓸 수 있게)
 
 
 def allowed(call: Call) -> bool:
@@ -84,12 +88,12 @@ class Reader:
         return got
 
 
-def qy1_calls(obj: dict) -> list[Call]:
-    """QY1 · QY5 — 걷기의 `_value_calls` 와 같은 꼴(거르개 = 부위 이름 글자 · 부위마다 하나)."""
+def qy1_calls(obj: dict, site_names: list[str] | None = None) -> list[Call]:
+    """QY1 · QY5 — 걷기의 `_value_calls` 와 같은 꼴(거르개 = 이번 턴 부위의 이름 글자 · 부위마다 하나 · QS1 · QS2)."""
     f = obj.get("focus")
     if not f:
         return []
-    names = list(dict.fromkeys(x["name"] for x in st.filter_sites(obj) if x.get("name")))
+    names = list(dict.fromkeys(x for x in site_names or [] if x))
     if not names:
         return [Call("concern_candidates", {"concern_code": f}, ("indication",), ("concern",))]
     return [Call("concern_candidates", {"concern_code": f, "site": x}, ("indication",), ("concern",)) for x in names]
@@ -190,8 +194,18 @@ def qy1_plain(code: str) -> Call:
     return Call("concern_candidates", {"concern_code": code}, ("indication",), ("concern",))
 
 
-async def run(obj: dict, reader: Reader) -> Plan:
-    """L5 — 걷기가 읽지 않은 것만(세 종료 상태 턴에는 부르지 않는다 — 다음 턴이 따라잡는다 · W-6)."""
+def list_calls(obj: dict, site_names: list[str], prev_focus: str | None, prev_calls: list[Call] | None) -> list[Call]:
+    """QS4 — `focus` 가 그대로이고 이번 턴 거르개가 `[]` 면 앞 리스트의 조회 그대로(메모에서 — 허브 0) · 그 밖은 새로."""
+    f = obj.get("focus")
+    if f and f == prev_focus and not site_names and prev_calls \
+            and all(str(c.request.get("concern_code") or "") == f for c in prev_calls):
+        return list(prev_calls)
+    return qy1_calls(obj, site_names)
+
+
+async def run(obj: dict, reader: Reader, *, calls: list[Call] | None = None, site_options=None) -> Plan:
+    """L5 — 걷기가 읽지 않은 것만(세 종료 상태 턴에는 부르지 않는다 — 다음 턴이 따라잡는다 · W-6).
+    `calls` = 리스트 ② 의 조회(`list_calls`) · `site_options` = `async (site_code) -> [고민 선택지]`(QS6 ⓐ — 묶인 고민)."""
     out = Plan(queries=reader.queries)
     subjects = st.axis_items(obj, "subjects")
     concerns = st.axis_items(obj, "concerns")
@@ -201,8 +215,9 @@ async def run(obj: dict, reader: Reader) -> Plan:
         for s in subjects:
             out.options[st.node(s)] = concern_options(_rows(await reader.get(indication_call(st.node(s)), "QY3")))
     f = obj.get("focus")
+    out.list_calls = list(calls if calls is not None else qy1_calls(obj))
     if f:
-        for c in qy1_calls(obj):  # QY1 · QY5
+        for c in out.list_calls:  # QY1 · QY5
             out.lists.extend(await reader.get(c, "QY5" if c.request.get("site") else "QY1"))
     for c in concerns:  # 0.3 FD1 — 점 = 객체 고민 전부의 고민 부위(focus 가 아닌 고민은 메모 · 없으면 QY1 꼴)
         if c["code"] != f and not cc_reads_of(c["code"], reader.memo, list(reader.walk.values())):
@@ -220,12 +235,15 @@ async def run(obj: dict, reader: Reader) -> Plan:
         for s in st.axis_items(obj, "sites"):  # QY7(코디 W-1 (가)) — 부위만 대상 → 그 부위의 고민을 선택지로
             if (s.get("source") or {}).get("pair_concern"):
                 continue
-            out.options[st.node(s)] = concern_options(_rows(await reader.get(indication_call(st.node(s)), "QY7")))
-    derive(obj, reader.memo, out)
+            fac = concern_options(_rows(await reader.get(indication_call(st.node(s)), "QY7")))
+            bound = await site_options(s["code"]) if site_options is not None else []
+            have = {o["code"] for o in bound}
+            out.options[st.node(s)] = [*bound, *(o for o in fac if o["code"] not in have)]  # QS6 — 묶인 고민 먼저
+    derive(obj, reader.memo, out, extra=list(reader.walk.values()))  # 검수 C-2 — 걷기 읽기도 점 재료(run 의 건너뜀과 같은 재료)
     return out
 
 
-def derive(obj: dict, memo: dict, plan: Plan | None = None) -> None:
+def derive(obj: dict, memo: dict, plan: Plan | None = None, extra: list[Read] | None = None) -> None:
     """UP8 — 파생 칸(`procedures[]` · `concern_sites[]`)을 다시 센다. 근거 항목이 거둬지면 빠진다 · 계열은 시술을 정하지 않는다."""
     procs: list[dict] = []
     seen: set[str] = set()
@@ -249,18 +267,16 @@ def derive(obj: dict, memo: dict, plan: Plan | None = None) -> None:
     obj["procedures"] = procs
     cs: list[dict] = []
     f = obj.get("focus")
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()  # 0.4 DT1 — (물은 고민, 고민, 부위): 고민마다 자기 응답의 `match` 를 남긴다
     for c in st.axis_items(obj, "concerns"):  # 0.3 FD1 — said · confirmed 고민 전부(guess · 거둔 것 빼고)
         if c["code"] == f and plan is not None:
             reads = plan.lists
-        elif c["code"] == f:
-            reads = [r for q in qy1_calls(obj) for r in memo.get(q.key()) or []]
         else:
-            reads = cc_reads_of(c["code"], memo)
+            reads = cc_reads_of(c["code"], memo, extra)
         for p in concern_sites_of(reads):
-            if (p["concern_code"], p["site_code"]) in seen:
+            if (c["code"], p["concern_code"], p["site_code"]) in seen:
                 continue
-            seen.add((p["concern_code"], p["site_code"]))
+            seen.add((c["code"], p["concern_code"], p["site_code"]))
             cs.append({"table": "site", "code": p["site_code"], "name": p["site_name"], "concern_code": p["concern_code"],
                        "csi_id": p["csi_id"], "asked": c["code"], "match": p.get("match"), "state": "derived",
                        "source": {"how": "derived"}})

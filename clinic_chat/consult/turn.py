@@ -13,8 +13,6 @@ L9 장부 `consult{…}`. 끈 상태는 0.1 의 줄 그대로 돈다.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import dataclasses
 import time
 from collections.abc import Callable
@@ -28,11 +26,17 @@ from clinic_chat.config import Settings
 from clinic_chat.consult import blanks as blanks_mod
 from clinic_chat.consult import carry as carry_mod
 from clinic_chat.consult import close as close_mod
+from clinic_chat.consult import entry_list as el_mod
 from clinic_chat.consult import material as mat
+from clinic_chat.consult import material_read as mr_mod
 from clinic_chat.consult import plan as plan_mod
+from clinic_chat.consult import site_filter as sf_mod
+from clinic_chat.consult import site_index as si_mod
 from clinic_chat.consult import state as cst
 from clinic_chat.consult import synergy as syn_mod
 from clinic_chat.consult import turn_kind as tk
+from clinic_chat.consult import understand as und
+from clinic_chat.consult import verify as vf_mod
 from clinic_chat.consult import voice as voice_mod
 from clinic_chat.consult.ledger import Conv, Ledger
 from clinic_chat.consult.listing import build_list, list_codes, state_list
@@ -41,6 +45,7 @@ from clinic_chat.consult.render import Render, state_view
 from clinic_chat.consult.sites import build_sites, place, site_pairs, viewable_subs
 from clinic_chat.consult.steps import Steps
 from clinic_chat.consult.tail import TailFilter, split_close, split_tail
+from clinic_chat.consult.verify import Accepted
 from clinic_chat.llm.chat import ChatLLM
 from clinic_chat.runs import app_commit
 from clinic_chat.walk import end_state as es
@@ -95,14 +100,9 @@ async def run_turn(ctx: Ctx, conv: Conv, n: int, question: str, push: Push, *, c
     def push_steps() -> None:
         push("step", r.steps(steps.view()))
 
-    hold: dict[str, Any] = {"on": False, "buf": []}  # 0.3 B-11 — 가르기 판정까지 함께 띄운 걷기의 단계 신호를 붙든다
-
     def sink(ev: dict) -> None:
         kind = ev.get("event")
         if kind == "step":
-            if hold["on"]:
-                hold["buf"].append(ev)
-                return
             if steps.raw(str(ev.get("stage") or ev.get("step") or "")):
                 push_steps()
         elif kind == "delta" and ev.get("text"):
@@ -112,23 +112,17 @@ async def run_turn(ctx: Ctx, conv: Conv, n: int, question: str, push: Push, *, c
             if shown["text"].strip():
                 push("delta", r.delta(shown["text"]))
 
-    def release(keep: bool) -> None:
-        """판정이 났다 — `talk` 면 붙든 신호를 버리고 `understand` 만(TT5) · 아니면 그대로 흘린다."""
-        buf, hold["buf"], hold["on"] = hold["buf"], [], False
-        for ev in (buf if keep else [{"event": "step", "stage": "front"}]):
-            sink(ev)
-
-    carried_in = carry_mod.candidates(conv.turns, s.chat_carry_turns)
-    cs = Consult.begin(ctx, conv, n, question, d, carried_in, viewing) if conv.consult_state == "on" else None
+    cs = Consult.begin(ctx, conv, n, question, d, viewing) if conv.consult_state == "on" else None
     with progress.listen(sink):
-        if cs is None:
+        if cs is None:  # 끈 가지(0.1 그대로 — CP7: 0.4 서버에서 새로 열지 않는다 · 옛 끈 대화는 `blocked` 로 막힌다)
+            carried_in = carry_mod.candidates(conv.turns, s.chat_carry_turns)
             w = await walk(question, d, carry=carried_in or None, instr=prompt.jev_front)
-        else:  # L1 ~ L3a — 든 후보 · 걸린 선택지 · 가르기(거둠 요청에 실음)와 걷기를 함께 · 판정에 따라 다시 걷기
-            w = await cs.walk(hold, release)
+        else:  # SPEC-008 ① ~ ⑤(나) — 이해 호출 하나 → 검증 → 객체 → 답 재료
+            w = await cs.understand(sink)
     talk = cs is not None and cs.kind == "talk"
     walk_ms = _ms(t0)
     row: dict[str, Any] = {"turn": n, "asked_at": conv.starts[n]["asked_at"], "question": question}
-    build = w.build()
+    build = cs.build(w) if cs is not None else w.build()
     gh = (build or {}).get("gold_hash")
     err: dict | None = w.error
     conv_end = None
@@ -209,68 +203,79 @@ async def run_turn(ctx: Ctx, conv: Conv, n: int, question: str, push: Push, *, c
     else:
         push("done", r.answer(n, body, w.end_state))
     timing["total_ms"] = _ms(t0)
-    timing["parts"] = {"jev_ms": round(getattr(d.jev, "ms_total", 0.0) - jms0, 1),
-                       "hub_ms": round(sum(x.get("ms") or 0 for x in d.hub.log[hlog0:]), 1),
-                       "llm_ms": ((llm_res or {}).get("timing") or {}).get("total_ms"), "walk_ms": walk_ms}
+    hub_ms = round(sum(x.get("ms") or 0 for x in d.hub.log[hlog0:]), 1)
+    llm_ms = ((llm_res or {}).get("timing") or {}).get("total_ms")
+    timing["parts"] = ({"understand_ms": cs.understand_ms, "hub_ms": hub_ms, "llm_ms": llm_ms,
+                        "material_ms": cs.material_ms} if cs is not None else
+                       {"jev_ms": round(getattr(d.jev, "ms_total", 0.0) - jms0, 1), "hub_ms": hub_ms, "llm_ms": llm_ms,
+                        "walk_ms": walk_ms})
     llm = dict((llm_res or {}).get("llm") or {})
     llm.update({"observed_model": (llm_res or {}).get("observed_model"),
                 "observed_models": (llm_res or {}).get("observed_models"), "error": llm_err,
                 "answered": llm_res is not None and not llm_err})
     now_sha = file_sha(ctx.settings.chat_prompt_path())
+    if cs is None:
+        trace = b_trace(w, {"answer_lines": lines, "answer_tail_chars": tail_chars,
+                            "input_bytes": len(msg.encode("utf-8"))})
+    elif talk:  # X-7 — `talk` 턴은 짧은 꼴
+        trace = {"understand": {"kind": cs.kind, "ms": cs.understand_ms}, "answer_lines": lines,
+                 "answer_tail_chars": tail_chars, "llm_input_bytes": len(msg.encode("utf-8"))}
+    else:  # §6-1 — `trace.entry` · `trace.entry_pick` 없음 · `trace.depth` 새 꼴
+        trace = b_trace(w, {"answer_lines": lines, "answer_tail_chars": tail_chars,
+                            "input_bytes": len(msg.encode("utf-8"))})
+        for k in ("entry", "entry_pick", "steps", "depth_decisions"):
+            trace.pop(k, None)
+        trace["depth"] = mr_mod.depth_trace(w)
     row.update({
         "llm": llm, "session_state": conv.chat.state,
         "session_next": {"session_id": conv.chat.session_id},
-        "targets": targets_of(w), "carried": (w.front.carried if w.front else []),
+        "targets": cs.targets() if cs is not None else targets_of(w),
+        "carried": [] if cs is not None else (w.front.carried if w.front else []),
         "kinds": list(w.front.kinds) if w.front else [], "end_state": w.end_state, "reason": w.reason,
-        "trace": (cs.talk_trace({"answer_lines": lines, "answer_tail_chars": tail_chars,
-                                 "llm_input_bytes": len(msg.encode("utf-8"))}) if talk else
-                  b_trace(w, {"answer_lines": lines, "answer_tail_chars": tail_chars,
-                              "input_bytes": len(msg.encode("utf-8"))})),
+        "trace": trace,
         "material": tm.ledger() if err is None else {**tm.ledger(), "not_counted": True},
         "list": lst, "sites": sites, "llm_user_message": msg,
         "answer": body if not llm_err else "", "answer_raw": raw, "answer_lines": lines,
         "timing": timing, "tokens": (llm_res or {}).get("tokens") or {},
-        "thinking_seen": (llm_res or {}).get("thinking_seen"), "build": build if not talk else cs.talk_build(),
+        "thinking_seen": (llm_res or {}).get("thinking_seen"), "build": build,
         "prompts": {"version": prompt.version, "consult_at_start": conv.prompt_sha, "consult_now": now_sha,
                     "changed": bool(now_sha and conv.prompt_sha and now_sha != conv.prompt_sha)},
         "commits": {"app": app_commit()}, "error": err, "conv_end": conv_end,
     })
-    if consult_row is not None:  # L9 — 장부 `consult{…}` · `carried[]` 는 앞 턴 대상만(N-8 · N-3)
+    if consult_row is not None:  # L9 — 장부 `consult{…}`(켠 턴의 `carried[]` = [] — AR-9)
         row["carried"], row["consult"] = consult_row
     ctx.ledger.end(conv, row)
 
 
 class Consult:
-    """0.2 켠 상태의 한 턴 몫(SPEC-005 §3-1 L2 ~ L9). 객체는 복사본으로 짓고 맺는 줄의 `consult.after` 에 적는다 —
-    `Conv.consult` 는 `ledger._apply_end` 가 오류 없는 줄일 때만 받는다(RV9)."""
+    """켠 상태의 한 턴 몫(SPEC-008 §2 — rev 4). 객체는 복사본으로 짓고 맺는 줄의 `consult.after` 에 적는다 —
+    `Conv.consult` 는 `ledger._apply_end` 가 오류 없는 줄일 때만 받는다(RV9).
 
-    def __init__(self, ctx: Ctx, conv: Conv, n: int, question: str, d: Deps, carried_in: list[dict],
-                 viewing: str | None = None) -> None:
+    ① 목록 적재 → ② 이해 호출 하나 → ③ 검증(`Accepted` — 그 턴의 유일한 입구 · VF12) → ④ 객체 갱신 · 부위 거르개 →
+    ⑤ 답 재료(`material_read.build_walk` — 걷기의 결정론 함수) · 객체 기준 조회 → ⑥ 화면 → ⑦ 빈 칸 → ⑧ 답(0.3) → ⑨ 장부.
+    걷기 `walk()` · `front()` · Jev · 허브 `resolve` 맞춤 꼴 · 거둠 요청을 부르지 않는다(CP2). 실패(FL1)는 대상 없이 되묻는다."""
+
+    def __init__(self, ctx: Ctx, conv: Conv, n: int, question: str, d: Deps, viewing: str | None = None) -> None:
         self.ctx, self.conv, self.n, self.question, self.d = ctx, conv, n, question, d
         self.s = ctx.settings
         self.prompt = conv.prompt
         self.obj = cst.snapshot(conv.consult or cst.empty())
-        carried_in = carry_mod.alive_in_object(carried_in, self.obj, cst.SLOT_OF)  # 0.3 TW7 · W-3
-        self.prev_targets = {(x["table"], x["code"]) for x in carried_in}
-        self.carry = carry_mod.with_options(carried_in, self.obj["asked"], n)  # L2 · UP4
+        self.focus0 = self.obj.get("focus")
         self.viewing = viewing  # 0.3 FD6 — 누른 고민(폼 값)
-        self.prev_row = tk.prev_turn(conv.turns)
+        self.prev_row = sf_mod.prev_ok(conv.turns)  # 바로 앞 성공 턴(VF6 · OU7)
         self.kind = "new"
-        self.w0 = None  # `talk` 턴에 버린 걷기(앞 `ask` 가 있을 때만 끝까지 · 없으면 거둠 — B-3)
-        self.walks: list[dict] = []
         self.follow: dict | None = None  # 장부 `consult.follow_target`
         self.changed = False  # `talk` 턴에 객체가 바뀌었나(TT2)
         self.system_text = self.prompt.system_text_v3 or self.prompt.system_text  # 0.3 VO1 — 켠 상태 = `system_v3` 통째
-        self.turn_kind: dict = {"kind": "new"}  # 0.3 TK — 장부 `consult.turn_kind`
+        self.turn_kind: dict = {"kind": "new", "from": "understand"}  # 0.4 — 장부 `consult.turn_kind{kind, from}`
         self.close: dict = {"by": None}  # 0.3 CS1 — 장부 `consult.close`
-        self.close_view: dict = {"by": None}  # 「앱 판정」 의 끝맺음 블록(이름만)
-        self.empty: list[dict] = []  # 0.3 EM1 — 장부 `consult.empty[]`
-        self.empty_view: list[dict] = []  # 「앱 판정」 `empty[]`(이름만)
-        self.prev_view: dict | None = None  # 0.3 TT3 — `talk` 턴의 앞 턴 블록
-        self.site_view: dict | None = None  # 0.3 SP — 「앱 판정」 `site`
-        self.voice: dict | None = None  # 0.3 VO10
-        self.viewing_rec: dict | None = None  # 0.3 FD6 — 장부 `consult.viewing`
-        self.rt: dict | None = None
+        self.close_view: dict = {"by": None}
+        self.empty: list[dict] = []
+        self.empty_view: list[dict] = []
+        self.prev_view: dict | None = None
+        self.site_view: dict | None = None
+        self.voice: dict | None = None
+        self.viewing_rec: dict | None = None
         self.diff: list[dict] = []
         self.blanks: list[dict] = []
         self.ask: dict | None = None
@@ -287,158 +292,121 @@ class Consult:
         self.error: dict | None = None
         self.skipped: str | None = None
         self.ms: dict[str, float] = {}
+        self.el = None  # 이번 턴 목록(`entry_list.EntryList`)
+        self.raw: und.Raw | None = None
+        self.parsed: dict | None = None
+        self.acc: Accepted | None = None
+        self.uerr: dict | None = None  # FL1 — `consult.understand.error`
+        self.in_bytes: dict = {"system": None, "message": None}
+        self.obs: list[dict] = []
+        self.sf: dict = {"sites": [], "carried": [], "from": None, "pair_kept": [], "pair_dropped": []}
+        self.site_index_rec: dict | None = None
+        self.material_ms: float | None = None
+        self.understand_ms: float | None = None
 
     @classmethod
-    def begin(cls, ctx: Ctx, conv: Conv, n: int, question: str, d: Deps, carried_in: list[dict],
-              viewing: str | None = None) -> Consult:
-        return cls(ctx, conv, n, question, d, carried_in, viewing)
+    def begin(cls, ctx: Ctx, conv: Conv, n: int, question: str, d: Deps, viewing: str | None = None) -> Consult:
+        return cls(ctx, conv, n, question, d, viewing)
 
-    async def retract(self, kinds: bool = False) -> None:
-        """RV2 — 객체에 항목이 있는 턴에만(`CHAT_RETRACT=on`) · 실패해도 턴은 계속(B-5).
-        0.3 TK3 — `kinds` 면 턴 종류 Noul 셋을 같은 요청에 싣는다(거둠 항목이 0 이어도 묻는다)."""
-        items_on = self.s.chat_retract == "on" and cst.has_items(self.obj)
-        if not kinds and not items_on:
-            return
-        extra = {tk.EXTRA[k]: self.prompt.turn_kind[k] for k in ("new", "talk", "follow")} if kinds else None
-        st_extra = ({"prev": tk.prev_state(self.prev_row or {}, self.prompt.kind_labels),
-                     "consult": mat.consult_view(self.obj)} if kinds else None)
-        self.rt = await cst.retract(self.question, self.obj, self.d, self.prompt.jev_state["retract"],
-                                    yes_at=self.s.jev_noul_yes_at, extra=extra, state_extra=st_extra,
-                                    items_on=items_on)
-
-    def _mode(self) -> tuple[str, str | None]:
-        """L2 — (가르기 여부, 규칙): `off` · 첫 턴(TK2) · 잇단 talk 한도(TT6) 면 요청 없이 `new`."""
-        if self.s.chat_turn_kind != "on":
-            return "off", "off"
-        if self.prev_row is None:
-            return "plain", "TK2"
-        if tk.talk_streak(self.conv.turns) >= self.s.chat_talk_max:
-            return "plain", "TT6"
-        return "classify", None
-
-    async def _walk(self, *, entry_pick: bool, abbr: bool, carry: list[dict] | None = None):
+    async def understand(self, sink: Callable[[dict], None]) -> Walk:
+        """① ~ ⑤(나) — 실패(FL1)면 객체 diff `[]` · 조회 0 · 「입구 없음」 의 빈 걷기."""
         t0 = time.perf_counter()
-        w = await walk(self.question, self.d, carry=(carry if carry is not None else self.carry) or None,
-                       instr=self.prompt.jev_front, entry_pick=entry_pick, abbr_yes_only=abbr)
-        self.walks.append({"entry_pick": entry_pick, "used": True, "ms": _ms(t0), "cancelled": False})
-        return w
-
-    async def walk(self, hold: dict, release: Callable[[bool], None]):
-        """L1 ~ L3a — 첫 걷기와 가르기(거둠 요청)를 함께 · 판정 → `talk` 면 걷기를 버리고 · `follow` · `new` 는 「입구 없음」 이면
-        한 번 더(TW4 · TW5). `CHAT_TURN_KIND=off` 면 0.2 와 같은 호출 순서(기본 인자)."""
-        mode, rule = self._mode()
-        t0 = time.perf_counter()
-        if mode != "classify":
-            off = mode == "off"
-            w, _ = await asyncio.gather(self._walk(entry_pick=True, abbr=not off) if not off else
-                                        walk(self.question, self.d, carry=self.carry or None,
-                                             instr=self.prompt.jev_front), self.retract())
-            if off:
-                self.walks.append({"entry_pick": True, "used": True, "ms": _ms(t0), "cancelled": False})
-            self.turn_kind = {"kind": "new", "nouls": None, "rule": rule, "requests": 0, "ms": None, "error": None,
-                              "walks": self.walks}
+        s, pick = self.s, self.prompt.pick
+        sink({"event": "step", "stage": "front"})  # UC10 — `understand`
+        try:
+            self.el = await el_mod.load(self.d.hub, aliases=s.chat_pick_aliases == "on",
+                                        cache=s.chat_pick_list_cache == "on", gold_hash=self.conv.gold_hash)
+        except el_mod.EntryListError as e:
+            self.uerr = {"kind": "list", "detail": str(e)[:200]}
+        if self.uerr is None:
+            system = und.system_text(pick, self.el)
+            msg = und.turn_message(self.conv.turns, self.obj, self.question, pick, s, self.el)
+            self.in_bytes = {"system": len(system.encode("utf-8")), "message": len(msg.encode("utf-8"))}
+            self.raw = await und.call(s, system, msg)
+            self.uerr = self.raw.error
+        if self.uerr is None:
+            try:
+                self.parsed = vf_mod.parse(self.raw.output_raw)
+            except vf_mod.UnderstandJSONError as e:
+                self.uerr = {"kind": "json", "detail": str(e)}
+        self.understand_ms = _ms(t0)
+        if self.uerr is not None:  # FL2 — 대상 없이 되묻는다(「입구 없음」 · 새 문구 0)
+            w = Walk()
+            w.end_state, w.reason = es.NO_ENTRY, None
             return w
-        hold["on"] = True
-        task = asyncio.create_task(self._walk(entry_pick=False, abbr=True))
-        try:  # 걷기가 먼저 뜨고 가르기(거둠 요청)가 함께 돈다 — 0.2 의 gather 순서 그대로
-            await asyncio.create_task(self.retract(kinds=True))
-        except Exception:  # noqa: BLE001 — 가르기는 턴을 죽이지 않는다(TK6)
-            self.rt = {"items": [], "requests": 0, "error": {"kind": "internal"}, "extra": None}
-        rt = self.rt or {}
-        ex = rt.get("extra")
-        nouls = {k: ex.get(v) for k, v in tk.EXTRA.items()} if ex else None
-        kind, rule = tk.judge(nouls, self.s.jev_noul_yes_at) if nouls else ("new", "TK6")
-        self.kind = kind
-        self.turn_kind = {"kind": kind, "nouls": nouls, "rule": rule, "requests": rt.get("requests", 0),
-                          "ms": rt.get("ms"), "error": rt.get("error") if not nouls else None, "walks": self.walks}
-        if kind == "talk":
-            last = self.obj["asked"][-1] if self.obj["asked"] else None
-            if last and last.get("turn") == self.n - 1:  # B-3 · W-7 — 걸린 선택지 값이 필요하다: 끝까지 기다렸다 버린다
-                self.w0 = await task
-                self.walks[-1]["used"] = False
-            else:  # TW3 — 곧바로 거둔다(이미 끝났으면 결과만 버린다 — 장부에는 그 `front` 가 남는다)
-                if task.done() and not task.cancelled() and task.exception() is None:
-                    self.w0 = task.result()
-                    self.walks[-1]["used"] = False
-                else:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                    self.walks.append({"entry_pick": False, "used": False, "ms": _ms(t0), "cancelled": True})
-            release(False)
+        self.acc = acc = vf_mod.verify(self.parsed, self.el, self.obj, first_turn=self.prev_row is None,
+                                       talk_streak=tk.talk_streak(self.conv.turns), talk_max=s.chat_talk_max,
+                                       prev_row=self.prev_row)
+        self.kind = acc.kind
+        self.turn_kind = {"kind": acc.kind, "from": acc.kind_from}
+        self.follow = acc.follow_target
+        self._apply()
+        if acc.kind == "talk":
             return Walk()
-        w = await task
-        release(True)
-        if w.end_state == es.NO_ENTRY:
-            tgt = tk.follow_target(self.obj, self.prev_row) if kind == "follow" else None
-            if tgt is not None:  # TW4 — 앞 대상을 `origin` = `follow` 로 실어 한 번 더
-                self.follow = {"table": tgt["table"], "code": tgt["code"]}
-                fx = {**tgt, "from_turn": (self.prev_row or {}).get("turn"), "origin": "follow"}
-                w = await self._walk(entry_pick=False, abbr=True,
-                                     carry=[x for x in self.carry if (x["table"], x["code"]) != (tgt["table"], tgt["code"])]
-                                     + [fx])
-            elif not ((w.front.trace_entry or {}).get("resolve_candidates") if w.front else None):
-                w = await self._walk(entry_pick=True, abbr=True)  # TW5 — 입구 고르기로 한 번 더(첫 걷기 글자 맞춤 후보 0 일 때만 · 검수 N-2)
-            else:
-                return w  # 글자 맞춤 후보가 있었으면 입구 고르기가 안 돌아 같은 「입구 없음」 — 다시 걷지 않는다(N-2)
-            self.walks[0]["used"] = False
+        sink({"event": "step", "stage": "hub"})  # `search`
+        t1 = time.perf_counter()
+        w = await mr_mod.build_walk(self.d, acc, self.sf["sites"], self.el)
+        self.material_ms = _ms(t1)
         return w
 
-    def talk_trace(self, ans: dict) -> dict:
-        """TT4 — 버린 걷기의 `front` 만(거둔 걷기는 `cancelled`)."""
-        f = self.w0.front if self.w0 is not None else None
-        out = {"front": f.trace_front if f else None, **ans}
-        if self.w0 is None:
-            out["cancelled"] = True
-        return out
+    def _apply(self) -> None:
+        """④ — 관찰(OU1 ~ OU4) · 거둠(OU8) · 바람(OU11) → 객체 · `focus`(OU9) · 누르기(FD6) · 부위 거르개(VF8 · OU7 · QS3)."""
+        acc = self.acc
+        assert acc is not None
+        t0 = time.perf_counter()
+        last = self.obj["asked"][-1] if self.obj["asked"] else None
+        prev_ask = last if last and last.get("turn") == self.n - 1 else None
+        subjects_before = {cst.node(x) for x in self.obj["subjects"]}
+        self.obs = cst.observe_accepted(acc, prev_ask, self.obj) if acc.kind != "talk" else []
+        wishes = [k for k in acc.kinds if k in cst.WISH_KINDS] if acc.kind != "talk" else []
+        self.diff = cst.update(self.obj, self.obs, wishes, self.n, set(acc.withdraw))
+        self.prev_ask = cst.mark_answered(self.obj, self.n, self.diff, subjects_before)
+        self.ms["update_ms"] = _ms(t0)
+        self._viewing()
+        self.changed = any(x["op"] in ("add", "state", "withdraw", "focus") for x in self.diff)
+        self.sf = sf_mod.decide(acc, self.obj, self.prev_row, self.obj.get("focus"))
 
-    def talk_build(self) -> dict | None:
-        return self.w0.build() if self.w0 is not None else None
+    def build(self, w) -> dict | None:
+        return w.build() or ({"gold_hash": self.el.gold_hash} if self.el is not None and self.el.gold_hash else None)
 
     async def after_talk(self) -> None:
-        """TT1 · TT2 — 걷기 없이: 거둠 yes → withdrawn · 앞 `ask` 의 걸린 선택지 yes → `how` = `option`. 글에서 새 낱말 0.
-        객체가 바뀌었을 때만 객체 기준 조회 · 리스트(TT2)."""
-        last = self.obj["asked"][-1] if self.obj["asked"] else None
-        prev_ask = last if last and last.get("turn") == self.n - 1 else None
-        obs = [o for o in (cst.observe(self.w0, prev_ask)[0] if self.w0 is not None else []) if o["how"] == "option"]
-        await self._update(obs, [], terminal=False, reads=[], talk=True)
+        """TT2 · OU10 — 객체는 거둠으로만 바뀐다 · 바뀌었을 때만 객체 기준 조회 · 리스트."""
+        await self._after(terminal=not self.changed or self.uerr is not None, reads=[], talk=True)
 
     async def after_walk(self, w) -> None:
-        if self.conv.gold_hash and (w.build() or {}).get("gold_hash") not in (None, self.conv.gold_hash):
+        if self.conv.gold_hash and (self.build(w) or {}).get("gold_hash") not in (None, self.conv.gold_hash):
             self.skipped = "build_changed"
             return
-        last = self.obj["asked"][-1] if self.obj["asked"] else None
-        prev_ask = last if last and last.get("turn") == self.n - 1 else None
-        obs, kinds = cst.observe(w, prev_ask)
-        await self._update(obs, kinds, terminal=w.end_state in NO_B_ON, reads=w.reads, talk=False, w=w)
+        await self._after(terminal=w.end_state in NO_B_ON, reads=w.reads, talk=False, w=w)
 
-    async def _update(self, obs: list[dict], kinds: list[str], *, terminal: bool, reads, talk: bool, w=None) -> None:
-        t0 = time.perf_counter()
-        subjects_before = {cst.node(x) for x in self.obj["subjects"]}
-        self.diff = cst.update(self.obj, obs, kinds, self.n, cst.retract_yes(self.rt))  # L4(세 종료 상태 턴에도 — W-6)
-        self.prev_ask = cst.mark_answered(self.obj, self.n, self.diff, subjects_before)
-        self.changed = any(x["op"] in ("add", "state", "withdraw", "focus") for x in self.diff)
-        self.ms["update_ms"] = _ms(t0)
-        self._viewing()  # 0.3 FD6 · FD7 · W-1 · W-2 · B-2 · B-4
-        self.changed = any(x["op"] in ("add", "state", "withdraw", "focus") for x in self.diff)
-        if talk and not self.changed:  # TT2 — 객체 조회 0 · list · sites 안 보냄
-            terminal = True
+    async def _site_options(self, site_code: str) -> list[dict]:
+        """QS6 ⓐ — 그 부위에 `concern_site` 로 묶인 고민(색인 — `gold_hash` 마다 한 번)."""
+        codes, rec = await si_mod.concerns_of_site(self.d.hub, self.el, site_code)
+        if rec is not None:
+            self.site_index_rec = rec
+        return [{"table": "concern", "code": c, "name": self.el.name("concern", c), "layer": "", "holder": "",
+                 "rank": -1, "first": i, "gids": [], "rows": 0} for i, c in enumerate(codes)]
+
+    async def _after(self, *, terminal: bool, reads, talk: bool, w=None) -> None:
         reader = plan_mod.Reader(self.d.hub, self.conv.memo, reads, self.queries)
         t1 = time.perf_counter()
         try:
-            if terminal:  # 그 턴에 필요해진 조회는 다음 턴이 따라잡는다(W-6)
-                plan_mod.derive(self.obj, self.conv.memo)
+            if terminal:  # 그 턴에 필요해진 조회는 다음 턴이 따라잡는다(W-6) · 실패 턴은 조회 0(FL2)
+                plan_mod.derive(self.obj, self.conv.memo, extra=list(reads or []))
             else:
-                self.plan = await plan_mod.run(self.obj, reader)
-                names = {x["code"]: x["name"] for x in self.obj["concerns"]}
-                base = build_list(self.plan.lists, names, codes=True) if self.plan.lists else None
+                names = [self.el.name("site", c) for c in self.sf["sites"]] if self.el is not None else []
+                calls = plan_mod.list_calls(self.obj, names, self.focus0, self.conv.list_calls)
+                self.plan = await plan_mod.run(self.obj, reader, calls=calls,
+                                               site_options=self._site_options if self.el is not None else None)
+                cnames = {x["code"]: x["name"] for x in self.obj["concerns"]}
+                base = build_list(self.plan.lists, cnames, codes=True) if self.plan.lists else None
                 procs, mods = list_codes(base)
                 self.syn = await syn_mod.run(self.obj, reader, self.n, procs, mods, on=self.s.chat_synergy == "on")
                 self.diff += self.syn["diff"]
-                self.list_state = state_list(self.obj, self.plan.lists, names, self.syn["bundles"],
+                self.list_state = state_list(self.obj, self.plan.lists, cnames, self.syn["bundles"],
                                              syn_mod.marks(self.syn["bundles"], self.obj))
                 self._site()
-        except Exception as e:  # noqa: BLE001 — 객체 조회가 깨져도 걷기의 답은 낸다(기록만)
+        except Exception as e:  # noqa: BLE001 — 객체 조회가 깨져도 답은 낸다(기록만)
             self.error = {"kind": type(e).__name__, "detail": str(e)[:200]}
         self.ms["plan_ms"] = _ms(t1)
         new_nodes = {f"{x['table']}:{x['code']}" for x in self.diff if x["op"] == "add" and x["table"]}
@@ -447,9 +415,14 @@ class Consult:
         list_shown = bool(self.list_state and self.list_state["concerns"])
         self.blanks = blanks_mod.count(self.obj, self.plan, list_shown)  # L7
         kinds_read = list(w.front.kinds) if w is not None and w.front else []
+        acc = self.acc
+        axis_tg = [x for x in (acc.targets if acc else []) if x.get("sure")]  # 검수 L-5 — 축 항목 기준(guess 빼고 · RV1)
+        qy7_new = bool(acc and acc.kind == "new" and axis_tg and all(x["table"] == "site" for x in axis_tg)
+                       and not self.obj.get("focus") and any(k.startswith("site:") for k in self.plan.options))  # BQ4
         self.ask, self.ask_why = blanks_mod.pick(
             self.blanks, self.obj, self.n, new_nodes=new_nodes, new_guess=new_guess, prev_ask=self.prev_ask,
-            end_state=w.end_state if w is not None else None, kinds_read=kinds_read, ask_max=self.s.chat_ask_max)
+            end_state=w.end_state if w is not None else (es.NO_ENTRY if self.uerr is not None else None),
+            kinds_read=kinds_read, ask_max=self.s.chat_ask_max, qy7_new=qy7_new)
         self._close(w, kinds_read, talk)
 
     def _viewing(self) -> None:
@@ -476,8 +449,7 @@ class Consult:
         if pick not in axis:  # B-2 — 하위 고민을 객체에 들인다(손님이 말한 것이 아니다 — how = view)
             it = {"table": "concern", "code": pick, "name": subs[pick] or plan_mod.concern_name_in(self.conv.memo, pick),
                   "state": "said",
-                  "source": {"turn": self.n, "how": "view", "matched": None, "covered_by": None, "noul": None,
-                             "decision": "view", "from_ask": None},
+                  "source": {"turn": self.n, "how": "view", "from_ask": None, "sure": None},  # X-28 — 손님 말이 아니다
                   "history": [{"turn": self.n, "state": "said"}]}
             self.obj["concerns"].append(it)
             self.diff.append({"op": "add", "slot": "concerns", "table": "concern", "code": pick, "from": None,
@@ -492,7 +464,7 @@ class Consult:
 
     def _site(self) -> None:
         """SP-5 — 부위 거르개가 걸린 `focus` 리스트의 `site` → 장부 `list.site{name, …}` · 「앱 판정」 `site`."""
-        names = [c.request["site"] for c in plan_mod.qy1_calls(self.obj) if c.request.get("site")]
+        names = [c.request["site"] for c in self.plan.list_calls if c.request.get("site")]
         self.site_view = None
         for c in (self.list_state or {}).get("concerns") or []:
             if c.get("site") and names:
@@ -583,7 +555,7 @@ class Consult:
                  "empty": self.empty_view}
         else:
             extra = {"turn_kind": self.turn_kind["kind"], "ask": self.ask_view, "synergy_lines": self.syn_lines,
-                     "empty": self.empty_view}
+                     "empty": self.empty_view}  # AN1 — `turn_kind` = 검증 뒤 `kind`
             if self.site_view is not None:
                 extra["site"] = self.site_view
             j = mat.judgement_v3(w, tm, self.n, kind_labels=self.prompt.kind_labels, extra=extra)
@@ -639,41 +611,51 @@ class Consult:
             for nd in nodes:
                 self.obj["shown"]["info"].append({"node": nd, "kind": k, "turn": self.n, "lines": lines})
 
+    def understand_view(self) -> dict:
+        """장부 `consult.understand`(§6-1) — 턴 메시지 전문은 싣지 않고 바이트 수만."""
+        raw, acc, pick = self.raw, self.acc, self.prompt.pick or {}
+        return {"model": self.s.chat_pick_model, "thinking": self.s.chat_pick_thinking,
+                "pick_version": pick.get("version"), "list_sha": self.el.sha if self.el else None,
+                "aliases": self.s.chat_pick_aliases == "on", "input_bytes": self.in_bytes,
+                "output_raw": raw.output_raw if raw else None,
+                "parsed": vf_mod.parsed_view(self.parsed) if self.parsed is not None else None,
+                "accepted": acc.view() if acc else None, "dropped": acc.dropped if acc else [],
+                "merged": acc.merged if acc else [], "added_from_sites": acc.added_from_sites if acc else [],
+                "ms": raw.ms if raw else self.understand_ms, "api_ms": raw.api_ms if raw else None,
+                "usage": {k: (raw.usage or {}).get(k) for k in ("input_tokens", "cache_read_input_tokens",
+                                                                "output_tokens", "thinking_tokens")} if raw else None,
+                "error": self.uerr}
+
+    def targets(self) -> list[dict]:
+        """턴 줄 `targets[]` = `{table, code, name, sure, how}`(§6-1 — `by` · `noul` 없음)."""
+        how = {(o["table"], o["code"]): o["how"] for o in self.obs}
+        return [{"table": t["table"], "code": t["code"], "name": t.get("name") or "", "sure": bool(t.get("sure")),
+                 "how": how.get((t["table"], t["code"]), "text")} for t in (self.acc.targets if self.acc else [])]
+
     def ledger(self, w, err: dict | None, conv_end: str | None) -> tuple[list[dict], dict]:
-        if self.kind == "talk":  # TT4 — 버린 걷기의 든 후보 · 걸린 선택지만 남긴다(대상 0)
-            w = self.w0 if self.w0 is not None else Walk()
-        rows = list(w.front.carried if w.front else [])
-        carried = [{k: v for k, v in x.items() if k != "origin"} for x in rows
-                   if x.get("origin") != "option" or (x["table"], x["code"]) in self.prev_targets]
-        opts = [{k: x[k] for k in ("table", "code", "from_turn", "noul", "decision")} for x in rows
-                if x.get("origin") == "option"]
         if self.skipped:
-            return carried, {"skipped": self.skipped, "diff": [], "after": None}
+            return [], {"skipped": self.skipped, "diff": [], "after": None, "understand": self.understand_view(),
+                        "turn_kind": self.turn_kind}
         if err is None:
             self._info(w)
             if self.ask is not None and not (self.close.get("by") == "ask" and self.close.get("said") == 0):  # W-8
                 blanks_mod.record(self.obj, self.ask, self.n)
                 self.diff.append({"op": "asked", "slot": "asked", "table": None, "code": self.ask["slot"], "from": None,
                                   "to": self.ask["about"], "why": self.ask_why})
+            if self.plan.list_calls:
+                self.conv.list_calls = list(self.plan.list_calls)  # QS4 — 다음 턴의 「앞 리스트」(메모리만)
         out = {"diff": self.diff, "after": self.obj if err is None else None,
                "blanks": blanks_mod.ledger_view(self.blanks),
                "ask": ({k: self.ask[k] for k in ("slot", "about", "options", "why")} if self.ask else None),
-               "ask_why": self.ask_why, "options_carried": opts,
-               "retract": (self.rt or {}).get("items") or [], "retract_ms": (self.rt or {}).get("ms"),
-               "retract_resolve_ms": (self.rt or {}).get("resolve_ms"),
-               "retract_requests": (self.rt or {}).get("requests", 0), "queries": self.queries,
+               "ask_why": self.ask_why, "queries": self.queries,
                "synergy_lines": self.syn_lines, "turn_kind": self.turn_kind, "follow_target": self.follow,
                "close": self.close, "viewing": self.viewing_rec,
-               "empty": self.empty, **({"voice": self.voice} if self.voice is not None else {}), "jev_requests": {
-                   "front": (w.front.trace_front or {}).get("jev_requests") if w.front else None,
-                   "entry_pick": ((w.front.trace_entry_pick or {}).get("requests") if w.front else None),
-                   "retract": (self.rt or {}).get("requests", 0)},
-               "hub_queries": len(self.queries) - sum(1 for q in self.queries if q.get("skipped"))
-               + (1 if self.rt and self.rt.get("resolve_ms") is not None else 0), **self.ms}
-        if (self.rt or {}).get("error"):
-            out["retract_error"] = self.rt["error"]
+               "empty": self.empty, **({"voice": self.voice} if self.voice is not None else {}),
+               "understand": self.understand_view(), "site_filter": self.sf,
+               **({"site_index": self.site_index_rec} if self.site_index_rec is not None else {}),
+               "hub_queries": len(self.queries) - sum(1 for q in self.queries if q.get("skipped")), **self.ms}
         if self.error:
             out["error"] = self.error
         if err is not None:
             out["not_counted"] = True
-        return carried, out
+        return [], out

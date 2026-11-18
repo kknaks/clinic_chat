@@ -8,18 +8,30 @@ import pytest
 
 from clinic_chat.consult import synergy
 from tests.state_fixture import Run, jev
+from tests.v04_fixture import out, set_map
+
+# 0.4(검수 C-3) — 켠 턴의 입구 = 가짜 이해 출력(이번 말 낱말 → 출력 · 기대값은 그대로 — QS5 · CP5)
+UMAP = {"가짜윗고민": out([("concern", "ZZC-2")], kinds=["indication"]),
+        "가짜고민": out([("concern", "ZZC-1")], kinds=["indication"]),
+        "가짜시술": out([("procedure", "ZZP-1")], kinds=["overview"]),
+        "가짜제품": out([("product", "ZZR-1")], kinds=["overview"]), "*": out([])}
+
+
+def _run(tmp_path, fake_cli, **kw):
+    set_map(fake_cli[1], UMAP)
+    return Run(tmp_path, fake_cli, **kw)
+
 
 
 def _two_turns(r: Run) -> tuple[dict, dict]:
     row1, _, _ = r.turn("가짜제품 받고 싶어요")
-    r.set_noul(jev({"가짜고민": 0.92, "가짜윗고민": 0.1, "가짜제품": 0.9}, kinds={"indication": 0.9}))
     row2, kinds, _ = r.turn("가짜고민 때문에요")
     return row1, row2
 
 
 @pytest.fixture
 def run(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
+    r = _run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}))
     yield r
     r.close()
 
@@ -48,7 +60,6 @@ def test_s5_t11_complement_lines_inside_only_once(run):
     assert j["synergy_lines"] == [x["n"] for x in lines]
     bundle = row2["list"]["synergy"][0]
     assert [p["code"] for p in bundle["inside"]] == ["ZZM-1", "ZZP-2"] and bundle["outside_n"] == 1
-    run.set_noul(jev({"가짜고민": 0.9, "가짜제품": 0.9}, kinds={"overview": 0.9}))
     row3, _, _ = run.turn("가짜시술 은 뭐예요")
     again = [q for q in row3["consult"]["queries"] if q["tool"] == "pair" and q["request"]["a"] == "product:ZZR-1"]
     assert again == []  # 같은 대상은 한 번(SY9)
@@ -58,7 +69,6 @@ def test_s5_t11_complement_lines_inside_only_once(run):
 
 def test_focus_change_rebuilds_bundle_without_hub(run):
     _two_turns(run)
-    run.set_noul(jev({"가짜윗고민": 0.95, "가짜제품": 0.9, "가짜고민": 0.1}, kinds={"indication": 0.9}))
     n0 = len(run.hub.requests)
     row3, _, _ = run.turn("가짜윗고민 이요")
     pairs = [x for x in run.hub.requests[n0:] if x[0] == "pair"]
@@ -86,7 +96,7 @@ def test_s5_t21_caution_mark_no_material(run):
 
 
 def test_synergy_off_reads_nothing(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}), chat_synergy="off")
+    r = _run(tmp_path, fake_cli, noul=jev({"가짜제품": 0.9}, kinds={"overview": 0.9}), chat_synergy="off")
     _, row2 = _two_turns(r)
     assert not [q for q in row2["consult"]["queries"] if q["tool"] == "pair"] and not row2["list"]["synergy"]
     r.close()

@@ -77,9 +77,8 @@ class Settings(BaseSettings):
     chat_cli_cwd: str | None = None  # 비면 사용자 캐시 폴더 아래 고정 이름(default_chat_cli_cwd)
     chat_prompt_file: str = "prompts/consult.json"
     chat_fake_turn: bool = False  # E0 · 템플릿 시험 전용(외부 호출 0)
-    # 상담 0.2(SPEC-005 §10-2 · WORK-012 §6 · 코디 B-1 (b)) — 기본은 끈 상태(0.1 그대로). 켜는 값은 프로세스 env 로만
-    # (`CHAT_STATE=on uv run …` — `.env` 에 두지 않는다: 시험 설정은 `.env` 를 안 읽지만 손 실행이 섞인다)
-    chat_state: Literal["on", "off"] = "off"
+    # 상담 0.4(SPEC-008 CP1 · CP7) — 기본은 켠 상태. `off` 를 주어도 새 대화는 켠 상태로 연다(옛 끈 대화는 읽기만)
+    chat_state: Literal["on", "off"] = "on"
     chat_ask_max: int = 2  # NQ4 — 같은 빈 칸(slot + about)을 주는 횟수 한도
     chat_synergy: Literal["on", "off"] = "on"  # §7 시너지 먼저(켠 상태에서만 돈다)
     chat_retract: Literal["on", "off"] = "on"  # RV2 거둠 Noul(켠 상태에서만 돈다)
@@ -90,6 +89,16 @@ class Settings(BaseSettings):
     chat_voice_check: Literal["on", "off"] = "on"  # VO10 — 금지 낱말 검사(기록만)
     chat_debug_panel: Literal["on", "off"] = "off"  # SV7 — 상담 객체 패널(개발용)
     chat_drawer_max: int = 50  # SV3 — 드로어에 그리는 지난 대화 수
+    # 상담 0.4(SPEC-008 §4-2 · WORK-017 WP-10) — 이해 호출
+    chat_pick_model: str = "sonnet"  # UC2
+    chat_pick_effort: str = "low"
+    chat_pick_thinking: Literal["on", "off"] = "off"  # UC3 — off = `--settings {"alwaysThinkingEnabled": false}` + MAX_THINKING_TOKENS=0(E8-0)
+    chat_pick_timeout_sec: float = 10.0  # UC9 · D-10
+    chat_pick_aliases: Literal["on", "off"] = "on"  # LD4 · D-3
+    chat_pick_list_cache: Literal["on", "off"] = "on"  # LD5
+    chat_pick_context_turns: int = 2  # UC6
+    chat_pick_answer_chars: int = 200  # UC7
+    chat_pick_list_max: int = 30  # UC7
 
     @property
     def has_typesafe_key(self) -> bool:

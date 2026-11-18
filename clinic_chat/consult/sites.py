@@ -85,11 +85,15 @@ def all_dots() -> dict:
                        for c, v in FACE_COORDS.items() if v["shape"] not in DOT_SHAPES]}
 
 
+DIRECT = "\uc9c1\uc811"  # 허브 `sites[].match` 값 「직접」(앱 문장 아님)
+
+
 def site_pairs(obj: dict) -> list[dict]:
-    """0.3 FD1 — 객체 `concern_sites[]`(축 고민 전부의 고민 부위) → `place` 의 짝."""
+    """0.3 FD1 → 0.4 DT1(SPEC-008 AR-5) — 객체 `concern_sites[]` 가운데 `match` = 「직접」 인 것만 `place` 의 짝(하위 고민의
+    부위는 점이 아니다 — 되묻기 선택지 `plan.sub_sites` 로만 · DT3). `match` 칸이 없는 응답(옛 허브)은 직접으로 본다."""
     return [{"concern_code": x["concern_code"], "site_code": x["code"], "site_name": x.get("name") or "",
              "csi_id": x.get("csi_id"), "asked": x.get("asked") or x["concern_code"], "match": x.get("match")}
-            for x in obj.get("concern_sites") or []]
+            for x in obj.get("concern_sites") or [] if x.get("match") in (None, DIRECT)]
 
 
 def viewable_subs(obj: dict) -> dict[str, str]:

@@ -7,32 +7,38 @@ import json
 from clinic_chat.consult import blanks
 from clinic_chat.consult import plan as plan_mod
 from clinic_chat.consult import state as st
-from clinic_chat.consult.ledger import TURNS_FILE, Ledger, blocked
-from tests.state_fixture import Run, jev
-from tests.test_state_object import apply, fake_walk, t
+from clinic_chat.consult.ledger import CONSULT_REV, TURNS_FILE, Ledger, blocked
+from tests.state_fixture import Run
+from tests.test_state_object import acc, apply
+from tests.v04_fixture import set_out
+
+
+def apply_k(obj, targets, turn, kind):
+    """0.4 — 턴 종류를 준 관찰(OU4 — `follow` 대상이 객체에 있으면 급 그대로)."""
+    a = acc(targets, kind=kind, obj=obj)
+    return st.update(obj, st.observe_accepted(a, None, obj), [], turn, set())
 
 # ───── S6-T12 guess(FX1 · FX2) ─────
 
 def test_s6_t12_guess_again_as_guess_stays_guess():
     obj = st.empty()
-    apply(obj, fake_walk([t("site:ZZS-1", "가짜부위", "uncertain_kept", 0.5)]), 1)
-    diff = apply(obj, fake_walk([t("site:ZZS-1", "가짜부위", "uncertain_kept", 0.5)]), 2)
+    apply(obj, [("site", "ZZS-1", False)], 1)
+    diff = apply(obj, [("site", "ZZS-1", False)], 2)
     it = st.find(obj, "site", "ZZS-1")
     assert it["state"] == "guess" and [h["turn"] for h in it["history"]] == [1, 2]  # history +1 · state 그대로
-    assert not [d for d in diff if d["op"] == "state"] and st.filter_sites(obj) == []  # 거르개 아님
+    assert not [d for d in diff if d["op"] == "state"] and st.axis_items(obj, "sites") == []  # 축 · 거르개 아님
 
 
 def test_s6_t12_target_option_bk5_yes_confirm():
-    for dec, extra in (("target", {}), ("carried", {"option_from": 1})):
-        obj = st.empty()
-        apply(obj, fake_walk([t("site:ZZS-1", "가짜부위", "uncertain_kept", 0.5)]), 1)
-        apply(obj, fake_walk([t("site:ZZS-1", "가짜부위", dec, 0.9, **extra)]), 2)
-        assert st.find(obj, "site", "ZZS-1")["state"] == "confirmed", dec
-    obj = st.empty()  # BK5 답 yes — 그 선택지가 걸린 선택지로 yes(how = option)
-    apply(obj, fake_walk([t("concern:ZZC-1", "가짜고민", "uncertain_kept", 0.5)]), 1)
+    obj = st.empty()  # 다시 sure 로 나옴 → confirmed(FX1)
+    apply(obj, [("site", "ZZS-1", False)], 1)
+    apply(obj, [("site", "ZZS-1")], 2)
+    assert st.find(obj, "site", "ZZS-1")["state"] == "confirmed"
+    obj = st.empty()  # BK5 답 yes — 그 선택지를 이번 말이 답함(how = option)
+    apply(obj, [("concern", "ZZC-1", False)], 1)
     blanks.record(obj, {"slot": "confirm", "about": "concern:ZZC-1",
                         "options": [{"table": "concern", "code": "ZZC-1", "name": "가짜고민"}]}, 1)
-    apply(obj, fake_walk([t("concern:ZZC-1", "가짜고민", "carried", 0.9, option_from=1)]), 2)
+    apply(obj, [("concern", "ZZC-1")], 2)
     assert st.find(obj, "concern", "ZZC-1")["state"] == "confirmed"
     assert st._again("said", "guess") == "confirmed" and st._again("withdrawn", "guess") == "guess"
 
@@ -41,8 +47,7 @@ def test_s6_t12_target_option_bk5_yes_confirm():
 
 def test_s6_t13_guess_site_equal_focus_concern_site_no_bk5():
     obj = st.empty()
-    apply(obj, fake_walk([t("concern:ZZC-1", "가짜고민", "target"),
-                          t("site:ZZS-1", "가짜부위", "uncertain_kept", 0.5, start=5)]), 1)
+    apply(obj, [("concern", "ZZC-1"), ("site", "ZZS-1", False)], 1)
     obj["concern_sites"] = [{"table": "site", "code": "ZZS-1", "name": "가짜부위", "concern_code": "ZZC-1",
                              "state": "derived"}]
     bks = blanks.count(obj, plan_mod.Plan(), False)
@@ -85,40 +90,44 @@ def test_s6_t21_rev_less_on_conv_rejected_without_writing(tmp_path, fake_cli):
 
 
 def test_s6_t21_off_conv_marked_but_runs_as_0_1(tmp_path, fake_cli):
+    """0.4 CP7 — 옛 끈 대화: 표지(빈 `data-slot` 하나) · 열기는 되고 · 새 턴은 막힌다(줄을 쓰지 않는다 · C8-8)."""
     f = tmp_path / "chat" / TURNS_FILE
     _w(f, _old_rows("off01", "off"))
-    r = Run(tmp_path, fake_cli, noul=jev(kinds={"indication": 0.9}))
+    before = f.read_text(encoding="utf-8")
+    r = Run(tmp_path, fake_cli)
     try:
-        assert 'data-slot="conv-outdated"' in r.c.get("/c/off01").text  # 서버 켬 · 대화 끔
-        r.cid, r.n = "off01", 1
-        row, kinds, _ = r.turn("가짜고민 시술")
-        assert "consult" not in row and "done" in kinds and r.rows("start")[-1]["consult_state"] == "off"
-        assert "consult_rev" not in r.rows("start")[-1]
+        page = r.c.get("/c/off01").text
+        assert 'data-slot="conv-off-closed"' in page and "q-old" in page and "a-old" in page
+        frag = r.c.post("/c/off01/turns", data={"text": "가짜고민 시술"}).text
+        assert 'data-error="rev_changed"' in frag
+        assert f.read_text(encoding="utf-8") == before
     finally:
         r.close()
 
 
 def test_s6_t21_new_on_conv_has_rev_and_no_marker(tmp_path, fake_cli):
-    r = Run(tmp_path, fake_cli, noul=jev(kinds={"indication": 0.9}))
+    r = Run(tmp_path, fake_cli)
     try:
+        set_out(fake_cli[1], [("concern", "ZZC-1")], kinds=["indication"])
         r.turn("가짜고민 시술")
-        assert r.rows("start")[0]["consult_rev"] == 3
+        assert r.rows("start")[0]["consult_rev"] == CONSULT_REV
         assert 'data-slot="conv-outdated"' not in r.c.get(f"/c/{r.cid}").text
+        set_out(fake_cli[1], [("procedure", "ZZP-1")], kinds=["overview"])
         row2, _, _ = r.turn("가짜시술 개요")
-        assert row2["error"] is None  # rev 3 대화는 계속 받는다
+        assert row2["error"] is None  # 같은 판 대화는 계속 받는다
     finally:
         r.close()
 
 
 def test_w3_abbr_carry_keeps_original_state():
-    """검수 W-3 ⓐ — 줄임으로 다시 부른 앞 대상(`by` = abbr+carry)은 객체 칸의 원래 급 그대로(history 만 +1)."""
-    for first, want in (("uncertain_kept", "guess"), ("target", "said")):
+    """검수 W-3 ⓐ → 0.4 OU4 — 이어 물은(`follow`) 앞 대상은 객체 칸의 원래 급 그대로(history 만 +1) · 객체에 없으면 said."""
+    for first, want in (False, "guess"), (True, "said"):
         obj = st.empty()
-        apply(obj, fake_walk([t("modality:ZZM-1", "가짜계열", first, 0.9)]), 1)
-        diff = apply(obj, fake_walk([t("modality:ZZM-1", "가짜계열", "target", 0.55, by="abbr+carry")]), 2)
+        apply(obj, [("modality", "ZZM-1", first)], 1)
+        diff = apply_k(obj, [("modality", "ZZM-1")], 2, "follow")
         it = st.find(obj, "modality", "ZZM-1")
         assert it["state"] == want and [h["turn"] for h in it["history"]] == [1, 2], first
         assert not [d for d in diff if d["op"] == "state"]
-    obj = st.empty()  # 객체에 없으면(생기지 않는 꼴) 추정으로
-    apply(obj, fake_walk([t("modality:ZZM-1", "가짜계열", "target", 0.55, by="abbr+carry")]), 1)
-    assert st.find(obj, "modality", "ZZM-1")["state"] == "guess"
+    obj = st.empty()
+    apply_k(obj, [("modality", "ZZM-1")], 1, "follow")
+    assert st.find(obj, "modality", "ZZM-1")["state"] == "said"
