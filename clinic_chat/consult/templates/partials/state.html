@@ -1,0 +1,11 @@
+{#- 0.3 상담 객체 패널(SPEC-006 SV7 ~ SV10 · 개발용) — 턴마다 한 묶음(최근 턴이 위) · 값은 장부 칸 그대로(칸 이름 = 장부 키).
+    `state` 이벤트가 #consult-state-turns 맨 위에 덧붙인다 -#}
+<aside id="consult-state" class="ms-card cs-state">
+  <div class="ms-card__head"><h2 class="ms-card__title" data-slot="state-title"></h2></div>
+  <div id="consult-state-turns" class="cs-state__turns">
+    {%- for st in states %}
+    {%- include "partials/state_turn.html" %}
+    {%- endfor %}
+  </div>
+  <p class="cs-empty cs-state__empty" data-slot="state-empty"></p>
+</aside>

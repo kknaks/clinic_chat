@@ -1,0 +1,35 @@
+[project]
+name = "clinic-chat"
+version = "0.2.0"
+description = "채팅 3열 비교 시험(단일 턴) — A 원장 · B gold + Jev · C gold MCP 직접"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp==2.3.0",
+    "typesafe-sdk==0.7.5",
+    "pydantic-settings==2.16.2",
+    "httpx==0.28.1",
+    "fastapi==0.163.1",
+    "uvicorn==0.54.0",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.33",
+    "markdown-it-py==4.3.0",
+]
+
+[dependency-groups]
+dev = ["pytest==9.2.0", "pytest-asyncio==1.4.1", "ruff==0.17.3"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.uv]
+package = false

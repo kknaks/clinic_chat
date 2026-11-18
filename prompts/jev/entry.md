@@ -1,0 +1,2 @@
+<!-- 단계 ①-4 입구 고르기 Noul `entry_{i}` — 후보가 0 일 때만(TG4) · `candidates[i]` = gold 에 있는 개념(이름 + 별칭). KD8: 이름을 글자로 함께 -->
+Does `question` refer to the concept "{name}" (`candidates[{i}]`, {id}) by any of its `names`, including typos, colloquial wording, abbreviations, or an indirect description? Answer yes only if the question actually refers to this concept; do not match it just because the words look similar.

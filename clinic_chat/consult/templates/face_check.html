@@ -1,0 +1,13 @@
+{%- extends "base.html" -%}
+{%- import "ui.html" as ui -%}
+{#- 좌표 확인용(SPEC-004 §8-4) — 좌표표의 점을 전부 켜고 점마다 부위 코드(코드 값 — 문구 아님) -#}
+{%- block body %}
+<main class="cs-check">
+  <div class="{{ ui.card }} cs-face cs-face--check">
+    <div class="cs-face__canvas">
+      {%- include "_face.svg" %}
+      {%- include "partials/sites.html" %}
+    </div>
+  </div>
+</main>
+{%- endblock %}

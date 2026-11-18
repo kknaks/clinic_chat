@@ -1,0 +1,23 @@
+{#- 0.2 묶음 ③ 시너지(SPEC-005 SY5 · U5-3 (a) · U5-4 (a1)) — 대상마다 · 리스트 안 상대는 이름 + 표지 · 밖 상대는 수와 이름만. 글은 빈 자리 -#}
+  <section class="cs-synergy">
+    <h3 class="cs-synergy__head" data-slot="list-section-synergy"></h3>
+    {%- for b in lst.synergy %}
+    <div class="cs-synergy__group" data-subject="{{ b.a_table }}:{{ b.a_code }}">
+      <h4 class="cs-synergy__with">{{ b.a_name }}</h4>
+      <ul class="cs-synergy__items">
+        {%- for p in b.inside %}
+        <li class="cs-synergy__item" data-partner="{{ p.table }}:{{ p.code }}" data-synergy{% if p.caution %} data-caution{% endif %}>
+          <span class="cs-synergy__name">{{ p.name }}</span>
+          {%- if p.caution %}<span class="cs-mark cs-mark--caution" data-slot="mark-caution"></span>{% endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- if b.outside %}
+      <div class="cs-synergy__outside" data-outside-n="{{ b.outside_n }}">
+        <span class="cs-synergy__outside-head" data-slot="list-synergy-outside"></span>
+        {%- for p in b.outside %}<span class="ms-chip cs-synergy__chip" data-partner="{{ p.table }}:{{ p.code }}"{% if p.caution %} data-caution{% endif %}>{{ p.name }}</span>{% endfor %}
+      </div>
+      {%- endif %}
+    </div>
+    {%- endfor %}
+  </section>

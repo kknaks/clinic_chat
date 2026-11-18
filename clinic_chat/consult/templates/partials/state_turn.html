@@ -1,0 +1,13 @@
+{#- 0.3 패널의 한 턴(SPEC-006 SV8 · SV9) — 그 턴 장부 줄의 consult.after · diff · blanks · ask · turn_kind · close 를 값 그대로.
+    끈 상태 대화 · 오류 턴은 빈 묶음(칸 0) -#}
+<details class="cs-state__turn" data-turn="{{ st.turn }}"{% if st.open %} open{% endif %}>
+  <summary class="cs-state__sum">{{ st.turn }}</summary>
+  {%- if st.fields %}
+  <dl class="cs-state__fields">
+    {%- for k, v in st.fields %}
+    <dt class="cs-state__key">{{ k }}</dt>
+    <dd class="cs-state__val" data-key="{{ k }}"><pre>{{ v }}</pre></dd>
+    {%- endfor %}
+  </dl>
+  {%- endif %}
+</details>

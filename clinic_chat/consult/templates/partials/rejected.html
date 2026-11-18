@@ -1,0 +1,5 @@
+{#- TF1 — 받지 않은 턴(빈 글 · broken · 턴 한도 · 앞 턴 도는 중) -#}
+<div class="cs-turn cs-turn--rejected">
+  {%- if question %}<div class="cs-bubble cs-bubble--me">{{ question }}</div>{% endif %}
+  <div class="cs-bot">{% include "partials/error.html" %}</div>
+</div>

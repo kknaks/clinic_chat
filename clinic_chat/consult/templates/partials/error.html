@@ -1,0 +1,7 @@
+{#- 오류 — 종류 코드만(data-error) · 글은 빈 자리. 대화가 끝난 종류는 새 대화를 여는 길(문구는 빈 자리) -#}
+<div class="cs-answer cs-answer--error" id="answer-{{ n }}" data-error="{{ kind }}">
+  <span data-slot="{{ 'turn-limit' if kind == 'turn_limit' else 'error-' ~ kind }}"></span>
+  {%- if kind in ("broken", "build_changed", "turn_limit", "rev_changed") %}
+  <a class="ms-btn ms-btn--outline ms-btn--s cs-new" href="/" data-slot="error-new-conversation"></a>
+  {%- endif %}
+</div>

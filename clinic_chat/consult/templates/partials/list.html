@@ -1,0 +1,58 @@
+{#- 시술 리스트(SPEC-004 §6-1) — 값만 그린다(시술 · 계열 이름 · 층 값). 묶음 머리 글은 빈 자리 -#}
+{#- 0.2(SPEC-005 SC2 · SC4 · SC6 · U5-4 (a1)): 켠 상태의 꼴에만 있는 칸(interest · synergy · 표지)은 있을 때만 그린다 — 끈 상태 출력은 0.1 그대로 -#}
+{#- 0.3(SPEC-006 LS1 ~ LS5): 고민 묶음에 `hidden` 칸이 있으면(켠 상태 rev 3) list_v3.html 로 그린다 -#}
+{%- import "ui.html" as ui -%}
+<div id="procedure-list" class="cs-list">
+  {%- if not lst or not (lst.concerns or lst.interest or lst.synergy) %}
+  <p class="cs-empty" data-slot="list-empty"></p>
+  {%- else %}
+  {%- if lst.interest %}
+  {%- include "partials/list_interest.html" %}
+  {%- endif %}
+  {%- for c in lst.concerns %}
+  {%- if c.hidden is defined %}
+  {%- include "partials/list_v3.html" %}
+  {%- else %}
+  <section class="cs-concern" data-concern-code="{{ c.concern_code }}">
+    <h3 class="cs-concern__name">{{ c.concern_name }}</h3>
+    {%- if c.inherited_from %}
+    <p class="cs-concern__from" data-inherited-from="{{ c.inherited_from.concern_code }}" data-steps="{{ c.inherited_from.steps }}">{{ c.inherited_from.concern_name }}</p>
+    {%- endif %}
+    {%- for m in c.modalities %}
+    <div class="cs-mod"{% if m.modality_code %} data-modality-code="{{ m.modality_code }}"{% endif %}{% if m.interest %} data-interest{% endif %}{% if m.synergy %} data-synergy{% endif %}{% if m.caution %} data-caution{% endif %}>
+      <h4 class="cs-mod__name">{{ m.modality_name }}
+        {%- if m.interest %}<span class="cs-mark cs-mark--interest" data-slot="mark-interest"></span>{% endif %}
+        {%- if m.caution %}<span class="cs-mark cs-mark--caution" data-slot="mark-caution"></span>{% endif %}</h4>
+      <ul class="cs-procs">
+        {%- for p in m.procedures %}
+        <li class="cs-proc" data-procedure-code="{{ p.procedure_code }}"{% if p.interest %} data-interest{% endif %}{% if p.synergy %} data-synergy{% endif %}{% if p.caution %} data-caution{% endif %}>
+          <span class="cs-proc__name">{{ p.procedure_name }}</span>
+          {%- if p.interest %}<span class="cs-mark cs-mark--interest" data-slot="mark-interest"></span>{% endif %}
+          {%- if p.caution %}<span class="cs-mark cs-mark--caution" data-slot="mark-caution"></span>{% endif %}
+          {%- for r in p.reach %}<span class="{{ ui.badge('neutral', 'sm') }}">{{ r }}</span>{% endfor %}
+          {%- for r in p.concern_match %}<span class="{{ ui.badge('primary', 'sm') }}">{{ r }}</span>{% endfor %}
+        </li>
+        {%- endfor %}
+      </ul>
+    </div>
+    {%- endfor %}
+    {%- if c.modality_only %}
+    <div class="cs-extra">
+      <h4 class="cs-extra__head" data-slot="list-section-modality-only"></h4>
+      <ul class="cs-extra__items">{% for m in c.modality_only %}<li>{{ m.modality_name }}</li>{% endfor %}</ul>
+    </div>
+    {%- endif %}
+    {%- if c.unreached %}
+    <div class="cs-extra">
+      <h4 class="cs-extra__head" data-slot="list-section-unreached"></h4>
+      <ul class="cs-extra__items">{% for u in c.unreached %}<li>{{ u.candidate_name }} <span class="{{ ui.badge('neutral', 'sm') }}">{{ u.reach }}</span></li>{% endfor %}</ul>
+    </div>
+    {%- endif %}
+  </section>
+  {%- endif %}
+  {%- endfor %}
+  {%- if lst.synergy %}
+  {%- include "partials/list_synergy.html" %}
+  {%- endif %}
+  {%- endif %}
+</div>
