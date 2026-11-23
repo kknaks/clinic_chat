@@ -1,0 +1,12 @@
+{#- 0.5 장바구니(SPEC-010 §4-6 CT1 ~ CT8 · OP1 ~ OP8) — 시안 dialog#cs-cart 그대로(오른쪽 드로어). 진료항목 줄은 cart_item.html.
+    WP-5 = 서버 장바구니(POST /c/<id>/cart → cart_body.html 조각) · 「저장」 = 장부 cart_saved(CT7) -#}
+<dialog id="cs-cart" class="ms-modal cs-pm cs-cart" aria-labelledby="cs-cart-title" data-conv-id="{{ conv_id }}">
+  <div class="ms-modal__head">
+    <div><p class="cs-pm__kind">{{ txt.cart_kind }}</p><h2 id="cs-cart-title" class="ms-modal__title">{{ txt.top_cart }} <span class="ms-badge ms-badge--sm ms-badge--primary" data-cart-n>{{ (cart or [])|length }}</span></h2></div>
+    <button type="button" class="ms-modal__close" data-cart-close aria-label="{{ txt.close }}"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg></button>
+  </div>
+  <div class="ms-modal__body cs-cart__body" id="cs-cart-body">
+    {%- include "partials/cart_body.html" %}
+  </div>
+  <div class="ms-modal__foot"><button type="button" class="ms-btn ms-btn--gray ms-btn--block" data-cart-clear>{{ txt.clear_all }}</button><button type="button" class="ms-btn ms-btn--primary ms-btn--block" data-cart-save data-saved="{{ txt.saved }}" data-save="{{ txt.save }}"{% if not cart %} disabled{% endif %}>{{ txt.save }}</button></div>
+</dialog>

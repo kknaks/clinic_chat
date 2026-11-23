@@ -1,9 +1,11 @@
-{#- 단계 줄(수정 1 · 4번) — 진행 중 = 스피너 + 문구 · 끝남 = 체크. 문구는 prompts/consult.json `steps`(앱 코드 0) -#}
-<ol class="cs-steps">
-  {%- for it in items %}
-  <li class="cs-steps__item is-{{ it.state }}" data-step="{{ it.key }}" data-state="{{ it.state }}">
-    {%- if it.state == "active" %}<span class="cs-spin cs-spin--s" aria-hidden="true"></span>{% else %}<span class="cs-tick" aria-hidden="true"></span>{% endif -%}
-    <span class="cs-steps__label">{{ labels.get(it.key, "") }}</span>
-  </li>
-  {%- endfor %}
-</ol>
+{#- 단계 줄 — gui-feedback F5(사용자 11-19 · 코디 11-22): 스피너 하나 + 한 줄. 단계(understand → search → list → answer)마다
+    글만 바뀐다(문구 = prompts/consult.json `steps` · 새 문구 0). 지금 줄 = 진행 중 단계 · 없으면 마지막 단계. 턴이 끝나면(end) 줄 0(빈 이벤트는 SSE 가 버리므로 숨은 표지 하나) ·
+    답 글이 오기 시작하면 CSS 가 줄을 숨긴다(.cs-step:has(~ .cs-answer 스피너 없음)). 답 자리 스피너는 줄이 있는 동안 숨김(스피너 하나) -#}
+{%- set act = items | selectattr("state", "equalto", "active") | list -%}
+{%- set cur = act[-1] if act else (items[-1] if items else none) -%}
+{%- if cur is not none and not items[-1].get("end") %}
+<p class="cs-steps cs-steps--one" data-step="{{ cur.key }}" data-state="{{ cur.state }}" role="status" aria-live="polite">
+  <span class="cs-spin cs-spin--s" aria-hidden="true"></span><span class="cs-steps__label">{{ labels.get(cur.key, "") }}</span>
+</p>
+{%- else %}<span class="cs-step-end" data-step-end hidden></span>
+{%- endif %}

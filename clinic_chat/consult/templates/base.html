@@ -6,12 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
   <title data-slot="page-title"></title>
-  <link rel="stylesheet" href="/static/medikit.css">
-  <link rel="stylesheet" href="/static/consult.css">
+  <link rel="stylesheet" href="{{ asset('medikit.css') }}">
+  <link rel="stylesheet" href="{{ asset('consult.css') }}">
   <script defer src="/static/htmx.min.js?v=2.0.4"></script>
   <script defer src="/static/htmx-ext-sse.js?v=2.2.4"></script>
-  <script defer src="/static/medikit.js"></script>
-  <script defer src="/static/consult.js"></script>
+  <script defer src="{{ asset('medikit.js') }}"></script>
+  <script defer src="{{ asset('consult.js') }}"></script>
 </head>
 <body>
   <div id="ms-progress" class="ms-progress" aria-hidden="true"></div>

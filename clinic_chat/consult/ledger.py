@@ -46,6 +46,7 @@ class Conv:
     starts: dict[int, dict] = field(default_factory=dict)  # 시작 줄
     gold_hash: str | None = None
     sent: dict[str, int] = field(default_factory=dict)  # 실은 gid → 대화 줄 번호
+    sent_names: dict[str, int] = field(default_factory=dict)  # SPEC-011 G7 · LG6 — 이름만 실은 gid → 줄 번호(뒤 턴 상세는 같은 번호로)
     summaries: dict[str, int] = field(default_factory=dict)  # 요약 줄 키 → 줄 번호(B-6)
     next_n: int = 1
     ended: str | None = None  # broken | build_changed
@@ -55,6 +56,9 @@ class Conv:
     memo: dict = field(default_factory=dict)  # 0.2 — 객체 조회 응답(Call.key → Read 목록 · 메모리만 · B-10)
     consult_rev: int | None = None  # 0.3 — 켠 대화의 판(첫 시작 줄의 값 · 없으면 None)
     list_calls: list = field(default_factory=list)  # 0.4 QS4 — 마지막 리스트 ② 의 조회(메모리만 · 장부에 안 적음)
+    viewed: list = field(default_factory=list)  # 0.5 MD4 — 마지막 맺는 줄 뒤에 모달로 본 진료항목(다음 턴 블록)
+    cart: list = field(default_factory=list)  # 0.5 D-15 — 장바구니(마지막 `cart` 줄로 되읽음)
+    topic_override: str | None = None  # 0.5 TP10 — 마지막 맺는 줄 뒤의 `topic_switch`(머리 누름)가 덮은 지금 주제
 
     @property
     def n_started(self) -> int:
@@ -71,6 +75,20 @@ class Conv:
     def last_list(self) -> dict | None:
         return next((t["list"] for t in reversed(self.turns) if t.get("list") is not None), None)
 
+    def last_topics(self, view: bool = True) -> tuple[list[dict], str | None]:
+        """0.5 TP10 — 마지막 맺는 줄의 `consult.topics` · `active_topic`. `view` 면 그 뒤 `topic_switch`(머리 누름)가 덮는다(화면).
+        11-23 — 턴 판단(`view=False`)은 머리 누름을 쓰지 않는다: 누름은 보기만이고, 대화의 지금 주제는 마지막 턴의 주제다
+        (conv 67bb9faf 3 턴 — 머리를 눌러 본 뒤 말한 「써마지」 가 대화 주제 ② 가 아니라 누른 ① 을 깊게 했다)."""
+        for t in reversed(self.turns):
+            c = t.get("consult") or {}
+            if c.get("topics") is not None:
+                return list(c["topics"]), (self.topic_override if view else None) or c.get("active_topic")
+        return [], None
+
+    def last_items(self) -> dict | None:
+        """0.5 — 마지막 `items` 칸(목록 진료항목 코드 — SPEC-010 §5-1 ⑦)."""
+        return next((t["items"] for t in reversed(self.turns) if t.get("items") is not None), None)
+
     def last_sites(self) -> dict | None:
         return next((t["sites"] for t in reversed(self.turns) if t.get("sites") is not None), None)
 
@@ -79,6 +97,7 @@ class Ledger:
     def __init__(self, chat_dir: Path) -> None:
         self.dir = Path(chat_dir)
         self.convs: dict[str, Conv] = {}
+        self.kos_map: dict | None = None  # 0.5 JS3 · JS4 — 시작 줄 `kos_map{sha, made_at, hub_gold_hash, hash_mismatch}`
         self.index = DrawerIndex.scan(self.file)  # 0.3 W-11 — 뜰 때 한 번 훑고 줄을 쓸 때 함께 고친다
 
     @property
@@ -131,6 +150,12 @@ class Ledger:
                     c.chat.session_id = sid
             elif r.get("phase") == "end":
                 self._apply_end(c, r)
+            elif r.get("phase") == "topic_switch":  # 0.5 TP10 · r6 P2-3
+                c.topic_override = r.get("topic_id")
+            elif r.get("phase") == "cart":  # 0.5 CT6 — 새로 고침 · 재시작 뒤에도 같은 장바구니
+                c.cart = list(r.get("cart") or [])
+            elif r.get("phase") == "viewed" and r.get("code") and r["code"] not in c.viewed:  # 0.5 MD4
+                c.viewed.append(r["code"])
         if c.open_turns():  # W-3 ① — 서버가 턴 도중 죽었다(CLI 자식은 세션에 턴을 남겼을 수 있다)
             c.chat.state = "broken"
             c.ended = "broken"
@@ -148,10 +173,41 @@ class Ledger:
                "prompts": {"consult_at_start": conv.prompt_sha}, "consult_state": conv.consult_state}
         if conv.consult_rev is not None:
             row["consult_rev"] = conv.consult_rev
+        if self.kos_map is not None:
+            row["kos_map"] = dict(self.kos_map)
         conv.starts[n] = row
         conv.running = n
         self._append(row)
         self.index.on_start(row)
+        return row
+
+    def viewed(self, conv: Conv, code: str, figs: list[dict], error: dict | None) -> dict:
+        """0.5 MD4 · IM12 — 모달을 연 진료항목(장부 줄 `viewed` · 턴 아님)."""
+        row = {"conv_id": conv.conv_id, "phase": "viewed", "at": now_iso(), "code": code,
+               "modal": {"figs": figs, "error": error}}
+        self._append(row)
+        if code not in conv.viewed:
+            conv.viewed.append(code)
+        return row
+
+    def cart(self, conv: Conv, cart: list[dict], op: str, rec: dict | None = None) -> dict:
+        """0.5 CT6 — 장바구니가 바뀔 때마다(진료항목 코드 · 옵션 키만 · 추천 옵션 키 · 표지 — 가격 0)."""
+        row = {"conv_id": conv.conv_id, "phase": "cart", "at": now_iso(), "op": op, "cart": cart, "rec": rec}
+        self._append(row)
+        conv.cart = cart
+        return row
+
+    def cart_saved(self, conv: Conv, codes: list[str], best: list[list[str]] | None) -> dict:
+        """0.5 CT7 — 「저장」(코드 목록 · 추천 최저 조합의 옵션 키 · 시각 · 가격 0)."""
+        row = {"conv_id": conv.conv_id, "phase": "cart_saved", "at": now_iso(), "codes": codes, "best_keys": best}
+        self._append(row)
+        return row
+
+    def topic_switch(self, conv: Conv, topic_id: str) -> dict:
+        """0.5 TP3 1 · TP10 — 앞 주제 머리 누름(턴 아님) · 장부 줄 `topic_switch`."""
+        row = {"conv_id": conv.conv_id, "phase": "topic_switch", "at": now_iso(), "topic_id": topic_id}
+        self._append(row)
+        conv.topic_override = topic_id
         return row
 
     def end(self, conv: Conv, row: dict) -> dict:
@@ -165,6 +221,9 @@ class Ledger:
     @staticmethod
     def _apply_end(c: Conv, r: dict) -> None:
         c.turns.append(r)
+        c.viewed = []  # 0.5 MD4 — 본 진료항목은 그 다음 한 턴의 블록에만
+        if (r.get("consult") or {}).get("topics") is not None:
+            c.topic_override = None  # 새 맺는 줄의 `active_topic` 이 앞 머리 누름을 덮는다
         llm = r.get("llm") or {}
         nxt = r.get("session_next") or {}
         if nxt.get("session_id"):
@@ -180,8 +239,11 @@ class Ledger:
                 if ln.get("summary"):
                     if ln.get("key"):
                         c.summaries[ln["key"]] = ln["n"]
+                elif ln.get("gid") and ln.get("names_only"):  # G7 — 이름만은 `sent` 에 넣지 않는다
+                    c.sent_names[str(ln["gid"])] = ln["n"]
                 elif ln.get("gid"):
                     c.sent[str(ln["gid"])] = ln["n"]
+                    c.sent_names.pop(str(ln["gid"]), None)
             if mat.get("next_n"):
                 c.next_n = mat["next_n"]
             after = (r.get("consult") or {}).get("after")

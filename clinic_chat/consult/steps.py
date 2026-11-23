@@ -16,6 +16,7 @@ RAW = {"front": "understand", "hub": "search", "depth": "search", "gate": "searc
 class Steps:
     def __init__(self) -> None:
         self.items: list[dict] = []
+        self.ended = False  # gui-feedback F5 — 끝난 턴은 단계 줄 0
 
     def _close_active(self) -> None:
         for it in self.items:
@@ -38,9 +39,13 @@ class Steps:
         return self._add("list", "done")
 
     def finish(self) -> bool:
-        changed = any(it["state"] == "active" for it in self.items)
+        changed = any(it["state"] == "active" for it in self.items) or not self.ended
         self._close_active()
+        self.ended = True
         return changed
 
     def view(self) -> list[dict]:
-        return [dict(it) for it in self.items]
+        out = [dict(it) for it in self.items]
+        if out and self.ended:
+            out[-1]["end"] = True
+        return out

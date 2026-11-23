@@ -65,9 +65,16 @@ def test_step_labels_from_prompt_file_and_render():
     assert set(p.steps) == set(KEYS) and all(v.strip() for v in p.steps.values())
     r = Render(p.steps)
     out = r.steps([{"key": "understand", "state": "done"}, {"key": "search", "state": "active"}])
-    assert p.steps["understand"] in out and p.steps["search"] in out
-    assert out.count("class=\"cs-spin ") == 1 and out.count("class=\"cs-tick") == 1
+    # gui-feedback F5 — 스피너 하나 + 한 줄(지금 단계 글만 · 끝난 단계 줄 0)
+    assert p.steps["search"] in out and p.steps["understand"] not in out
+    assert out.count('class="cs-spin ') == 1 and "cs-tick" not in out and out.count("<p ") == 1
     assert 'data-step="search" data-state="active"' in out
+    gap = r.steps([{"key": "search", "state": "done"}, {"key": "list", "state": "done"}])  # 목록 뒤 · 답 전
+    assert p.steps["list"] in gap and 'class="cs-spin ' in gap
+    st = Steps()
+    st.raw("front")
+    st.finish()
+    assert "cs-steps" not in r.steps(st.view())  # 턴 끝 = 줄 0
 
 
 def test_prompt_steps_key_checked():
@@ -94,7 +101,9 @@ def test_fake_stream_has_steps_spinner_and_cumulative_markdown(tmp_path):
     c = TestClient(create_app(s, turn_fn=make(0)))
     loc = c.get("/", follow_redirects=False).headers["location"]
     frag = c.post(f"{loc}/turns", data={"text": "q"}).text
-    assert "data-cs-spinner" in frag and 'sse-swap="delta" hx-swap="innerHTML"' in frag
+    # 테스트 고침 B — 스피너 하나 + 글 한 줄: 단계 자리에 첫 단계 줄(스피너 1) · 답 자리 옛 대기 스피너 0(숨은 대기 표지만)
+    assert "data-cs-wait" in frag and "data-cs-spinner" not in frag and 'sse-swap="delta" hx-swap="innerHTML"' in frag
+    assert frag.count('class="cs-spin ') == 1 and labels["understand"] in frag and "cs-steps--one" in frag
     asyncio.run(asyncio.sleep(0))
     body = c.get(f"{loc}/turns/1/events").text
     blocks = [b for b in body.strip().split("\n\n") if b.strip()]
@@ -102,7 +111,9 @@ def test_fake_stream_has_steps_spinner_and_cumulative_markdown(tmp_path):
                                                                     if ln.startswith("data: "))) for b in blocks]
     steps = [d for k, d in ev if k == "step"]
     assert labels["understand"] in steps[0] and "cs-spin" in steps[0]
-    assert all(labels[k] in steps[-1] for k in KEYS) and "cs-spin" not in steps[-1]  # 끝 = 모두 체크
+    # gui-feedback F5 — 단계마다 한 줄(글만 바뀜) · 네 단계 글이 차례로 지나감 · 끝 = 줄 0(숨은 표지)
+    assert all(any(labels[k] in d for d in steps) for k in KEYS) and all(d.count('class="cs-spin ') <= 1 for d in steps)
+    assert "cs-spin" not in steps[-1] and "data-step-end" in steps[-1]
     deltas = [d for k, d in ev if k == "delta"]
     assert len(deltas) > 3 and all(len(a) <= len(b) for a, b in zip(deltas, deltas[1:], strict=False))  # 지금까지 전체
     assert "<strong>bold</strong>" in deltas[-1] and "<li>" in deltas[-1] and "item two" in deltas[-1]

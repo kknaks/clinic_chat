@@ -2,6 +2,10 @@
     `state` 이벤트가 #consult-state-turns 맨 위에 덧붙인다 -#}
 <aside id="consult-state" class="ms-card cs-state">
   <div class="ms-card__head"><h2 class="ms-card__title" data-slot="state-title"></h2></div>
+  {%- if kos_check %}
+  {#- 0.5 JS4 — 매핑 JSON 판 · 허브 해시 대조(값만 · 문구 0) -#}
+  <p class="cs-state__kos" data-kos-hash-mismatch="{{ kos_check.hash_mismatch }}">kos_map {{ (kos_check.sha or '')[:8] }} · {{ kos_check.made_at }} · hub_gold_hash {{ (kos_check.hub_gold_hash or '')[:8] }} · hub {{ (kos_check.hub_build_gold_hash or '')[:8] }} · hash_mismatch {{ kos_check.hash_mismatch }}</p>
+  {%- endif %}
   <div id="consult-state-turns" class="cs-state__turns">
     {%- for st in states %}
     {%- include "partials/state_turn.html" %}

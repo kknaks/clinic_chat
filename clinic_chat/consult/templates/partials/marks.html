@@ -1,0 +1,21 @@
+{#- 테스트 고침 D(11-23): 점은 늘 다 뜬다 = 대화 전체(모든 주제)의 부위 · 지금(보이는) 주제가 아닌 점은 cs-dot--other(옅게) ·
+    앞 주제 점 누름 = 그 주제 조건 목록을 그 점으로 거름(보기만).
+    0.5 얼굴 점 · 몸 목록(SPEC-010 §4-2 · 테스트 고침 A 사용자 11-22) — 점 = 지금 주제의 대화 부위(말한 부위 + 고민의 부위 · 쌓임)
+    `points`(비율 × 590 · 1060) · 몸 부위 = .cs-labels 안 이름. 누르면 그 점에 속하는(매핑 부위가 그 점을 품는) 진료항목만 ·
+    다른 점은 그대로(누른 점만 aria-pressed) · 같은 점 다시 = 전체. 카드 「시술설명」 강조(g.cs-pick)는 consult.js -#}
+<div id="face-marks" class="cs-marks"{% if oob_marks %} hx-swap-oob="true"{% endif %}>
+  <svg class="cs-marks__svg" viewBox="0 0 590 1060" aria-hidden="true">
+    {%- for d in (iv.dots if iv else []) %}
+    {%- for pt in d.points %}
+    {%- if iv.site == d.site_code %}<circle class="cs-dot__ring" data-ring-for="{{ d.site_code }}" cx="{{ pt[0] }}" cy="{{ pt[1] }}" r="16"></circle>{% endif %}
+    <circle class="cs-dot{% if d.get('current', true) == false %} cs-dot--other{% endif %}" data-site-code="{{ d.site_code }}"{% if d.topic %} data-topic="{{ d.topic }}"{% endif %}{% if conv_id %} data-cs-pick hx-get="/c/{{ conv_id }}/items{% if iv.site != d.site_code %}?site={{ d.site_code|urlencode }}{% endif %}" hx-target="#procedure-list" hx-swap="outerHTML"{% endif %} aria-pressed="{{ 'true' if iv.site == d.site_code else 'false' }}" role="button" tabindex="0" cx="{{ pt[0] }}" cy="{{ pt[1] }}" r="11"></circle>
+    {%- endfor %}
+    {%- endfor %}
+  </svg>
+  <div class="cs-labels">
+    {%- if iv and iv.body %}
+    <span class="cs-labels__head" data-slot="body-sites-title">{{ slots.get("body-sites-title", "") }}</span>
+    {%- for b in iv.body %}<span class="ms-chip cs-label{% if b.get('current', true) == false %} cs-label--other{% endif %}" data-site-code="{{ b.site_code }}" data-region="body"{% if conv_id %} data-cs-pick hx-get="/c/{{ conv_id }}/items{% if iv.site != b.site_code %}?site={{ b.site_code|urlencode }}{% endif %}" hx-target="#procedure-list" hx-swap="outerHTML"{% endif %} aria-pressed="{{ 'true' if iv.site == b.site_code else 'false' }}" role="button" tabindex="0">{{ b.name }}</span>{% endfor %}
+    {%- endif %}
+  </div>
+</div>

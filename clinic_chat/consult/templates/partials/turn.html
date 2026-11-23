@@ -1,16 +1,18 @@
 {#- 한 턴 — 손님 말 = 오른쪽 말풍선 · 답 = 왼쪽 본문(말풍선 없이). 도는 턴(t.live)만 줄기에 붙는다(이벤트 이름마다
-    받는 자리 — DAY board.html 꼴). 답 자리는 첫 글자가 오기 전까지 스피너 · `delta` = 지금까지의 답 전체(마크다운)로 바꾼다.
+    받는 자리 — DAY board.html 꼴). 0.5 — 왼쪽은 `items` 하나(목록 + 점 · 몸 목록 oob — SPEC-010 §4-9) ·
+    0.4 `list` · `sites` 이벤트는 받는 자리 없음(장부에만). 답 자리는 첫 글자가 오기 전까지 스피너 · `delta` = 지금까지의 답 전체(마크다운)로 바꾼다.
     줄기는 `close` 이벤트에서 닫힌다(done · turn_error 뒤에 서버가 보낸다) -#}
 <div class="cs-turn" id="turn-{{ t.n }}" data-turn="{{ t.n }}">
   <div class="cs-bubble cs-bubble--me">{{ t.question }}</div>
   {%- if t.live %}
   <div class="cs-bot" hx-ext="sse" sse-connect="/c/{{ conv_id }}/turns/{{ t.n }}/events" sse-close="close" data-cs-live>
-    <div class="cs-step" id="step-{{ t.n }}" sse-swap="step" hx-swap="innerHTML"></div>
-    <div class="cs-answer" id="answer-{{ t.n }}" sse-swap="delta" hx-swap="innerHTML"><span class="cs-spin" data-cs-spinner aria-hidden="true"></span></div>
+    {#- 테스트 고침 B(사용자 11-22) — 스피너 하나 + 글 한 줄: 단계 자리에 첫 단계(understand) 줄을 미리 그리고, 답 자리의 옛 대기
+        스피너는 없앤다(숨은 대기 표지 data-cs-wait 만 — 답 글이 오면 바뀌어 사라지고, 그때 단계 줄을 CSS 가 숨긴다) -#}
+    <div class="cs-step" id="step-{{ t.n }}" sse-swap="step" hx-swap="innerHTML">{% with items=[{"key": "understand", "state": "active"}], labels=step_labels %}{% include "partials/steps.html" %}{% endwith %}</div>
+    <div class="cs-answer" id="answer-{{ t.n }}" sse-swap="delta" hx-swap="innerHTML"><span data-cs-wait hidden></span></div>
     <div hidden sse-swap="done" hx-target="#answer-{{ t.n }}" hx-swap="outerHTML"></div>
     <div hidden sse-swap="turn_error" hx-target="#answer-{{ t.n }}" hx-swap="outerHTML"></div>
-    <div hidden sse-swap="list" hx-target="#procedure-list" hx-swap="outerHTML"></div>
-    <div hidden sse-swap="sites" hx-target="#face-marks" hx-swap="outerHTML"></div>
+    <div hidden sse-swap="items" hx-target="#procedure-list" hx-swap="outerHTML"></div>
     {%- if panel %}
     <div hidden sse-swap="state" hx-target="#consult-state-turns" hx-swap="afterbegin"></div>
     {%- endif %}
@@ -18,7 +20,7 @@
   {%- else %}
   <div class="cs-bot">
     {%- if t.error_kind %}{% set kind = t.error_kind %}{% set n = t.n %}{% include "partials/error.html" %}
-    {%- else %}{% set n = t.n %}{% set body = t.answer %}{% set end_state = t.end_state %}{% include "partials/answer.html" %}{% endif %}
+    {%- else %}{% set n = t.n %}{% set body, after = split_fig(t.answer, t.fig) %}{% set fig = t.fig %}{% set end_state = t.end_state %}{% include "partials/answer.html" %}{% endif %}
   </div>
   {%- endif %}
 </div>

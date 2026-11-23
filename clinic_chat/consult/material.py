@@ -20,6 +20,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from clinic_chat.consult import fetch_read as fr
 from clinic_chat.consult.prompt import ConsultPrompt
 from clinic_chat.walk.fold import est_tokens
 from clinic_chat.walk.material import to_lines
@@ -159,25 +160,43 @@ V3_SUMMARY = ("modality_name", "procedures", "mechanism_name", "modality_level")
 V1_SUMMARY = ("modality_name", "procedures", "reach", "concern_match", "mechanism_name")
 
 
-def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: int, v3: bool = False) -> TurnMaterial:
-    """걷기 결과 → 이번 턴에 새로 싣는 것(대화 번호). `v3`(0.3 켠 상태) = 요약 줄 꼴 LS6."""
+def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: int, v3: bool = False,
+             cut: dict[str, tuple[str, str]] | None = None, sent_names: dict[str, int] | None = None) -> TurnMaterial:
+    """걷기 결과 → 이번 턴에 새로 싣는 것(대화 번호). `v3`(0.3 켠 상태) = 요약 줄 꼴 LS6.
+
+    SPEC-011(0.6) — `cut` = 2차 읽기(`fetch_read.decide`)의 gid → (전체 | 이름만 | 뺌). 뺌은 싣지 않는다 · 이름만은 이름 칸만
+    (묶음을 갈라 머리도 이름 칸만 · 머리 `marks.names_only`). G7 — 이름만 실은 gid 는 `sent` 가 아니라 `sent_names` 에 둔다:
+    뒤 턴에 같은 gid 를 전체로 읽게 되면 **같은 번호로** 상세를 다시 싣는다 · 다시 이름만이면 그 번호를 `seen_lines` 로."""
     out = TurnMaterial(next_n=next_n)
+    cut = cut or {}
+    sent_names = sent_names or {}
     local_gid = {x["n"]: x["gid"] for x in w.material.lines}
     line_of = {x["gid"]: x for x in w.material.lines}
     only = summary_only_gids(w.reads)
     new_n: dict[str, int] = {}
+    thin: dict[str, str] = {}  # 이름만 gid → 까닭(branch · lineup — 머리 `marks.names_only` 값 · AR1)
     seen: list[int] = []
     # ① 칸째 싣는 행 — 묶음 순서 · 줄 순서대로 새 번호
     for g in w.material.groups:
         for r in g["rows"]:
             gid = local_gid.get(r["n"])
-            if gid is None or gid in only:
+            if gid is None or gid in only or gid in new_n:
+                continue
+            fate = cut.get(gid, ("full", ""))[0]
+            if fate == "drop":
                 continue
             if gid in sent:
                 seen.append(sent[gid])
-            elif gid not in new_n:
+            elif gid in sent_names:
+                if fate == "names":
+                    seen.append(sent_names[gid])
+                else:  # G7 — 앞 턴 이름만 → 이번 턴 전체: 같은 번호로 상세를 다시 싣는다
+                    new_n[gid] = sent_names[gid]
+            else:
                 new_n[gid] = out.next_n
                 out.next_n += 1
+                if fate == "names":
+                    thin[gid] = cut[gid][1] or "branch"
 
     def conv_n(local: int) -> int | None:
         gid = local_gid.get(local)
@@ -185,28 +204,38 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
 
     k = 0
     for g in w.material.groups:
-        rows = []
+        full_rows: list[dict] = []
+        thin_rows: dict[str, list[dict]] = {}
         for r in g["rows"]:
             gid = local_gid.get(r["n"])
             if gid not in new_n:
+                continue
+            if gid in thin:
+                body = fr.names_only({c: x for c, x in r.items() if c not in ("n", "marks")})
+                thin_rows.setdefault(thin[gid], []).append({"n": new_n[gid], **body})
                 continue
             r2 = copy.deepcopy(r)
             r2["n"] = new_n[gid]
             if r2.get("marks", {}).get("conflict_lines"):
                 r2["marks"]["conflict_lines"] = [x for x in map(conv_n, r2["marks"]["conflict_lines"]) if x]
-            rows.append(r2)
-        if not rows:
-            continue
-        k += 1
-        g2 = {"group": k, "table": g["table"], "same": copy.deepcopy(g["same"]), "marks": copy.deepcopy(g["marks"]),
-              "lines": [r["n"] for r in rows], "rows": rows}
-        if g2["marks"].get("conflict_lines"):
-            g2["marks"]["conflict_lines"] = [x for x in map(conv_n, g2["marks"]["conflict_lines"]) if x]
-        out.groups.append(g2)
+            full_rows.append(r2)
+        if full_rows:
+            k += 1
+            g2 = {"group": k, "table": g["table"], "same": copy.deepcopy(g["same"]), "marks": copy.deepcopy(g["marks"]),
+                  "lines": [r["n"] for r in full_rows], "rows": full_rows}
+            if g2["marks"].get("conflict_lines"):
+                g2["marks"]["conflict_lines"] = [x for x in map(conv_n, g2["marks"]["conflict_lines"]) if x]
+            out.groups.append(g2)
+        for why, rows in thin_rows.items():  # G4 · G5 — 이름만 묶음(머리도 이름 칸만 · 까닭별)
+            k += 1
+            out.groups.append({"group": k, "table": g["table"], "same": fr.names_only(g["same"]),
+                               "marks": {"names_only": why}, "lines": [r["n"] for r in rows], "rows": rows})
     for gid, n in sorted(new_n.items(), key=lambda x: x[1]):
         ln = line_of[gid]
         out.new_lines.append({"n": n, "gid": gid, **{c: ln.get(c) for c in (
-            "gold_table", "silver_table", "silver_id", "evidence_kind", "kind", "range", "layer")}})
+            "gold_table", "silver_table", "silver_id", "evidence_kind", "kind", "range", "layer")},
+            **({"names_only": True, "names_why": thin[gid]} if gid in thin else {}),
+            **({"fetch": cut[gid][1]} if gid in cut else {})})
     # ② 목록 요약 줄
     for blk in summaries(w.reads, only, v3):
         rows = []
@@ -327,3 +356,50 @@ def message(prompt: ConsultPrompt, judgement: dict, tm: TurnMaterial, question: 
 
 def too_large(prompt: ConsultPrompt, msg: str, max_tokens: int, system_text: str | None = None) -> bool:
     return est_tokens((system_text if system_text is not None else prompt.system_text) + msg) > max_tokens
+
+
+def size_of(prompt: ConsultPrompt, msg: str, system_text: str | None = None) -> dict:
+    """테스트 고침 E(11-23) — 답 입력 크기 기록(장부 `material_size`): 메시지 글자 · 바이트 · 시스템 포함 추정 토큰."""
+    sys_t = system_text if system_text is not None else prompt.system_text
+    return {"msg_chars": len(msg), "msg_bytes": len(msg.encode("utf-8")), "est_tokens": est_tokens(sys_t + msg)}
+
+
+def _gsize(g: dict) -> int:
+    return len(json.dumps(g.get("rows") or [], ensure_ascii=False).encode("utf-8"))
+
+
+def shrink(tm: TurnMaterial, fits) -> dict:
+    """테스트 고침 E(사용자 11-23 「큰 재료 답 실패」) — 입력 한도를 넘으면 재료를 줄여서라도 답한다(옛 FT5 「중단」 대체).
+    가장 큰 묶음(바이트)의 행을 앞쪽 절반만 남기기를 `fits(tm)` 가 참일 때까지 되풀이한다(행 차례 = 허브 응답 차례 그대로 ·
+    줄 번호는 남은 행 것 그대로). 행이 하나 남은 묶음은 통째로 뺀다. 뺀 줄 번호는 `new_lines` 에서도 지운다(장부 · 다음 턴 덧붙이기와
+    맞게). → `{rounds, dropped_rows, dropped_groups, by_table{table: [전, 후]}}`."""
+    rec: dict = {"rounds": 0, "dropped_rows": 0, "dropped_groups": 0, "by_table": {}}
+    gone: set[int] = set()
+    pools = [tm.groups, tm.summary_groups]
+    while not fits(tm):
+        cands = [(pool, g) for pool in pools for g in pool if g.get("rows")]
+        if not cands:
+            break
+        pool, g = max(cands, key=lambda x: _gsize(x[1]))
+        t = str(g.get("table") or g.get("group"))
+        before = len(g["rows"])
+        rec["by_table"].setdefault(t, [0, 0])
+        rec["by_table"][t][0] = max(rec["by_table"][t][0], before)
+        rec["rounds"] += 1
+        if before <= 1:
+            pool.remove(g)
+            gone |= {r.get("n") for r in g["rows"]}
+            rec["dropped_rows"] += before
+            rec["dropped_groups"] += 1
+            rec["by_table"][t][1] = 0
+            continue
+        keep = before // 2
+        drop = g["rows"][keep:]
+        g["rows"] = g["rows"][:keep]
+        g["lines"] = [r.get("n") for r in g["rows"]]
+        gone |= {r.get("n") for r in drop}
+        rec["dropped_rows"] += len(drop)
+        rec["by_table"][t][1] = keep
+    if gone:
+        tm.new_lines = [x for x in tm.new_lines if x.get("n") not in gone]
+    return rec

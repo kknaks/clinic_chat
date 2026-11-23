@@ -92,7 +92,8 @@ async def build_walk(d, acc, site_codes: list[str], el) -> Walk:
                 f.scope_gap = True
         else:
             f.coverage, f.build = await coverage_of_nodes(d.hub, [e.node for e in f.entries])
-            k = kp.decide(f.entries, acc.kinds, f.coverage)
+            fk = (getattr(acc, "fetch", None) or {}).get("kinds") or []  # SPEC-011 JC2 — 1차 `fetch.kinds`
+            k = kp.decide(f.entries, acc.kinds, f.coverage, fetch_kinds=fk)
             f.kinds, f.required, f.offered, f.by = k.kinds, k.required, k.offered, k.by
             f.ranges, f.attr_start, f.applicable_kinds, f.kinds_by = k.ranges, k.attr_start, k.applicable, k.kinds_by
             f.scope_gap = bool(acc.out)

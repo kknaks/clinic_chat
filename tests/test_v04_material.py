@@ -45,7 +45,7 @@ def deps(tmp_path, hub, noul=no_jev):
 # ───── S8-T9 정보 종류 ─────
 
 @pytest.mark.parametrize("tables,kinds", [
-    (["procedure"], ["mechanism"]), (["procedure"], ["overview"]), (["concern"], ["indication"]),
+    (["procedure"], ["mechanism"]), (["concern"], ["indication"]),  # SPEC-011 G2 — overview yes 는 KS5 를 꺼 갈린다(아래)
     (["procedure", "concern"], ["outcome", "adverse"]), (["site"], []), (["procedure"], ["same_day", "offer"]),
     (["modality"], ["lineup", "recovery"]),
 ])
@@ -65,7 +65,10 @@ def test_s8_t9_empty_kinds_default_and_overview_set():
     k0 = kp.decide(e, [], {})
     assert k0.kinds and set(k0.by.values()) == {"default"} and k0.required == []  # KS2 없음 → KS6
     k1 = kp.decide(e, ["overview"], {})
-    assert {"mechanism", "indication", "outcome", "lineup"} & {k for k, v in k1.by.items() if v == "kd9"}  # KS5
+    assert "kd9" not in k1.by.values() and not {"mechanism", "outcome", "lineup"} & set(k1.kinds)  # SPEC-011 G2 — KS5 끔
+    k2 = kp.decide(e, ["overview"], {}, fetch_kinds=["overview", "mechanism", "indication", "outcome", "lineup"])
+    assert {k2.by[k] for k in ("mechanism", "indication", "outcome", "lineup")} == {"fetch"}  # JC2 — 1차가 고른 종류
+    assert set(k2.required) == {"overview"}  # KS8 — `fetch` 는 필수 아님
     ks = kp.decide(e, ["mechanism"], {})
     assert ks.offered and all(o["by"] == "kd11" for o in ks.offered)  # KS7 — 안 고른 기본 묶음 = offered
     assert "adverse" not in ks.kinds and "adverse" in kp.decide(e, ["adverse"], {}).kinds  # KD7 — 안전 종류는 고를 때만

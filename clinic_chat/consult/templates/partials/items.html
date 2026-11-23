@@ -1,0 +1,55 @@
+{#- 0.5 진료항목 목록(SPEC-010 §4-3 IL1 ~ IL11) — 시안 줄 640 ~ 708 꼴. `items` 이벤트 · GET /c/<id>/items · POST /c/<id>/topic 이
+    #procedure-list 통째를 바꾸고, 같은 조각 안의 #face-marks(hx-swap-oob)도 함께 바꾼다. 값은 `$J` 원문 · 문구는 ui_text.json(시안 글자).
+    IL11 주제 묶음: 주제가 둘 이상이면 지금 주제(details.cs-topic[open] · 안 = 시안 cs-kinds 그대로) + 앞 주제(접힘 머리만 · 누르면
+    POST /c/<id>/topic) · 머리 글 = 조건 이름 span 만(잇는 글자 0) · 꾸밈은 빈 slot topic-current-mark · topic-prev-title -#}
+{%- macro kinds_block(iv) -%}
+    <div class="cs-kinds">
+      <p class="cs-kinds__sum">{{ txt.sum_kinds }} <b>{{ iv.n_kinds }}{{ txt.unit_kind }}</b> {{ txt.sum_items }} <b>{{ iv.n_items }}{{ txt.unit_item }}</b></p>
+      {%- for k in iv.kinds %}
+      <details class="cs-kind" data-kind="{{ k.name }}"{% if loop.first %} open{% endif %}>
+        <summary class="cs-kind__head"><span class="cs-kind__name">{{ k.name }}</span><span class="cs-kind__n">{{ k.cards|length }}</span><svg class="cs-kind__chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></summary>
+        <div class="cs-kind__body">
+          {%- for c in k.cards %}
+          <article class="cs-pcard" aria-pressed="false" data-code="{{ c.code }}" data-kind="{{ c.kind }}" data-site="{{ c.site }}" data-device="{{ c.device }}"{% if c.status %} data-status="{{ c.status }}"{% endif %} data-points="{{ c.points }}" data-body-sites="{{ c.body_sites }}"{% if c.published %} data-published{% endif %}>
+            <div class="cs-pcard__info"><div class="cs-pcard__name">{{ c.name }}{% if c.unit %}<span class="cs-pcard__unit" data-unit>{{ c.unit }}</span>{% endif %}</div>{% if c.desc %}<p class="cs-pcard__desc" data-desc>{{ c.desc }}</p>{% endif %}<div class="cs-pcard__meta">{% if c.drug %}<span class="cs-pcard__drug">{{ c.drug }}</span>{% endif %}<span class="cs-pcard__code">{{ c.code }}</span>{% if c.status_slot %}<span class="cs-pcard__status" data-slot="{{ c.status_slot }}">{{ slots.get(c.status_slot, "") }}</span>{% endif %}</div></div>
+            <div class="cs-pcard__acts"><button type="button" class="ms-btn ms-btn--gray ms-btn--ss" data-cs-explain aria-haspopup="dialog">{{ txt.explain }}</button><button type="button" class="ms-btn ms-btn--filled ms-btn--ss" data-cs-cart aria-pressed="{{ 'true' if c.in_cart else 'false' }}" data-on="{{ txt.cart_added }}" data-off="{{ txt.cart_add }}">{{ txt.cart_added if c.in_cart else txt.cart_add }}</button></div>
+          </article>
+          {%- endfor %}
+        </div>
+      </details>
+      {%- endfor %}
+    </div>
+{%- endmacro -%}
+{%- macro topic_head(t) -%}
+<span class="cs-topic__name">{% for n in t.conds %}<span class="cs-topic__cond">{{ n }}</span>{% endfor %}</span><span class="cs-topic__n">{{ t.n }}</span><svg class="cs-topic__chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+{%- endmacro -%}
+<div id="procedure-list" class="cs-list"{% if iv and iv.site %} data-site-filter="{{ iv.site }}"{% endif %}>
+  {%- if iv and iv.show_topics %}
+  <div class="cs-topics">
+    {%- for t in iv.topics %}
+    {%- if t.current %}
+    <details class="cs-topic" data-topic-id="{{ t.id }}" data-topic-current open>
+      <summary class="cs-topic__head"><span class="cs-topic__mark" data-slot="topic-current-mark">{{ slots.get("topic-current-mark", "") }}</span>{{ topic_head(t) }}</summary>
+      <div class="cs-topic__body">
+        {%- if iv.kinds %}{{ kinds_block(iv) }}{% else %}<p class="cs-empty" data-slot="items-empty">{{ slots.get("items-empty", "") }}</p>{% endif %}
+      </div>
+    </details>
+    {%- else %}
+    {%- if loop.index == 2 %}
+    <p class="cs-topics__prev" data-slot="topic-prev-title">{{ slots.get("topic-prev-title", "") }}</p>
+    {%- endif %}
+    <details class="cs-topic" data-topic-id="{{ t.id }}">
+      <summary class="cs-topic__head" data-topic-switch{% if conv_id %} hx-post="/c/{{ conv_id }}/topic" hx-vals='{{ {"id": t.id}|tojson }}' hx-target="#procedure-list" hx-swap="outerHTML"{% endif %}>{{ topic_head(t) }}</summary>
+    </details>
+    {%- endif %}
+    {%- endfor %}
+  </div>
+  {%- elif iv and iv.kinds %}
+  {{ kinds_block(iv) }}
+  {%- else %}
+    <p class="cs-empty" data-slot="items-empty">{{ slots.get("items-empty", "") }}</p>
+  {%- endif %}
+</div>
+{%- if oob %}
+{%- with oob_marks = true %}{% include "partials/marks.html" %}{% endwith %}
+{%- endif %}

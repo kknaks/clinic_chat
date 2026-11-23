@@ -97,11 +97,14 @@ body { background: var(--ms-gray-100); }
 .cs-tick::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--ms-primary); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 
 /* 단계 줄 */
-.cs-step:empty { display: none; }
+.cs-step:empty, .cs-step:not(:has(.cs-steps)) { display: none; }
 .cs-step { margin-bottom: 8px; }
 .cs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ms-gray-600); }
 .cs-steps__item { display: flex; align-items: center; gap: 8px; }
 .cs-steps__item.is-active { color: var(--ms-text); }
+/* gui-feedback F5 — 스피너 + 한 줄(단계마다 글만 바뀜) · 답 글이 오면 줄을 숨김 · 스피너는 하나만 */
+.cs-steps--one { flex-direction: row; align-items: center; gap: 8px; color: var(--ms-text); }
+.cs-step:has(~ .cs-answer:not(:has([data-cs-wait]))) { display: none; }
 
 /* 입력창 */
 .cs-form { padding: 0 var(--cs-pad); }
@@ -166,4 +169,189 @@ body { background: var(--ms-gray-100); }
 .cs-mod--descended .cs-proc__name { font-weight: 400; }
 .cs-marks__svg [data-cs-pick], .cs-labels [data-cs-pick] { pointer-events: auto; cursor: pointer; }
 .cs-dot[data-focus] { stroke: var(--ms-gray-800); }
-.cs-dot[aria-pressed="true"], .cs-label[aria-pressed="true"] { fill: var(--ms-gray-800); outline: 2px solid var(--ms-primary); }
+/* 코디 11-22 — 누른 점 = 까만 채움 대신 시안 cs-dot__ring 웨이브(marks.html 이 누른 점 뒤에 링을 그림) · 다른 점 그대로 */
+.cs-dot[aria-pressed="true"] { fill: var(--ms-primary); stroke: var(--ms-white); stroke-width: 3; }
+.cs-dot--other { opacity: .45; }  /* 테스트 고침 D — 앞 주제 점(늘 뜸 · 옅게) */
+.cs-dot--other[aria-pressed="true"] { opacity: 1; }
+.cs-label--other { opacity: .6; }
+.cs-label[aria-pressed="true"] { fill: var(--ms-gray-800); outline: 2px solid var(--ms-primary); }
+
+
+/* 스크롤 전부 투명(디자인 피드백 11-19) */
+*{scrollbar-width:none}
+*::-webkit-scrollbar{display:none;width:0;height:0;background:transparent}
+html,body{height:100%;background:var(--ms-bg, #fff)}
+/* 감지된 시술 — 시술 종류 아코디언 · 진료항목 카드 */
+.cs-kinds, .cs-topics { display: flex; flex-direction: column; gap: 8px; }
+.cs-kinds__sum { margin: 0 0 4px; font-size: 12px; color: var(--ms-gray-700); }
+.cs-kinds__sum b { color: var(--ms-black); font-weight: 600; }
+.cs-kind, .cs-topic { border: 1px solid var(--ms-gray-200); border-radius: 12px; background: var(--ms-white); }
+.cs-kind[open], .cs-topic[open] { background: var(--ms-gray-100); }
+.cs-kind__head, .cs-topic__head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; list-style: none; cursor: pointer; user-select: none; }
+.cs-kind__head::-webkit-details-marker, .cs-topic__head::-webkit-details-marker { display: none; }
+.cs-kind__name, .cs-topic__name { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; color: var(--ms-black); }
+.cs-kind__n, .cs-topic__n { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--ms-primary-100); color: var(--ms-primary-700); font-size: 12px; font-weight: 600; line-height: 22px; text-align: center; }
+.cs-kind__chev, .cs-topic__chev { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--ms-gray-600); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.cs-kind[open] .cs-kind__chev, .cs-topic[open] .cs-topic__chev { transform: rotate(180deg); }
+.cs-kind__head:focus-visible, .cs-topic__head:focus-visible { outline: 2px solid var(--ms-primary); outline-offset: -2px; border-radius: 12px; }
+.cs-kind__body, .cs-topic__body { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+.cs-pcard { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border: 1px solid var(--ms-gray-200); border-radius: 10px; background: var(--ms-white); cursor: pointer; transition: border-color .15s; }
+.cs-pcard__info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.cs-pcard__acts { flex: none; display: flex; flex-direction: column; gap: 4px; width: 68px; }
+.cs-pcard__acts .ms-btn { width: 100%; padding: 0; }
+.cs-pcard__acts [data-cs-cart][aria-pressed="true"] { background: var(--ms-primary); color: var(--ms-white); }
+#cs-proc-modal { margin: auto var(--cs-pad, 16px) auto auto; }
+#cs-proc-modal::backdrop { background: rgba(0, 0, 0, .2); }
+.cs-pcard:hover { border-color: var(--ms-primary-500); }
+.cs-pcard__name { font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--ms-black); }
+.cs-pcard__meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cs-pcard__drug { height: 22px; padding: 0 8px; border-radius: 6px; background: var(--ms-gray-200); color: var(--ms-gray-800); font-size: 12px; font-weight: 500; line-height: 22px; }
+.cs-pcard[aria-pressed="true"] { border-color: var(--ms-primary); box-shadow: inset 0 0 0 1px var(--ms-primary); }
+.cs-dot--pick { fill: var(--ms-primary); stroke: var(--ms-white); stroke-width: 3; }
+.cs-dot__ring { fill: none; stroke: var(--ms-primary); stroke-width: 2; opacity: .5; transform-box: fill-box; transform-origin: center; animation: cs-ring 1.4s ease-out infinite; }
+@keyframes cs-ring { from { transform: scale(.6); opacity: .7; } to { transform: scale(1.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cs-dot__ring { animation: none; } }
+.cs-pm { width: 600px; height: calc(100vh - 32px); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; }
+.cs-pm:not([open]) { display: none; }
+.cs-pm__tabs { display: flex; gap: 4px; margin: 16px 24px 0; padding: 4px; border-radius: 10px; background: var(--ms-gray-200); }
+.cs-pm__tab { flex: 1; height: 32px; border-radius: 8px; color: var(--ms-gray-700); font-size: 13px; font-weight: 500; line-height: 32px; text-align: center; text-decoration: none; }
+.cs-pm__tab:hover { color: var(--ms-gray-800); }
+.cs-pm__tab.is-active { background: var(--ms-white); color: var(--ms-black); box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+.cs-pm__body { flex: 1; min-height: 0; overflow: auto; gap: 28px; scroll-behavior: smooth; }
+.cs-pm__sec { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 8px; }
+.cs-pm__h { margin: 0; font-size: 15px; font-weight: 700; color: var(--ms-black); }
+.cs-pm__lead { margin: 0; color: var(--ms-gray-800); line-height: 1.7; }
+.cs-pm__fig { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.cs-pm__fig figcaption { display: flex; flex-direction: column; gap: 6px; color: var(--ms-gray-800); line-height: 1.6; }
+.cs-pm__tag { align-self: flex-start; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--ms-primary-100); color: var(--ms-primary-700); font-size: 12px; font-weight: 600; line-height: 22px; }
+.cs-pm__fig img { display: block; width: 100%; height: auto; border: 1px solid var(--ms-gray-200); border-radius: 10px; background: var(--ms-white); }
+.cs-pm__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.cs-pm__list li { position: relative; padding-left: 16px; line-height: 1.6; color: var(--ms-gray-800); }
+.cs-pm__list li::before { content: ""; position: absolute; left: 2px; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--ms-primary); }
+.cs-pm__list--warn li::before { background: var(--ms-yellow); }
+.cs-pm__list li b { color: var(--ms-black); font-weight: 600; }
+.cs-pm__kind { margin: 0 0 2px; font-size: 12px; font-weight: 500; color: var(--ms-primary-700); }
+.cs-pm__grid { display: grid; grid-template-columns: 96px 1fr; gap: 10px 12px; margin: 0; padding: 16px; border-radius: 10px; background: var(--ms-gray-100); }
+.cs-pm__grid dt { color: var(--ms-gray-700); font-size: 13px; }
+.cs-pm__grid dd { margin: 0; color: var(--ms-black); font-size: 14px; font-weight: 500; }
+.cs-pm__site { display: flex; align-items: center; gap: 8px; color: var(--ms-text-secondary); font-size: 13px; }
+.cs-pm__site::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--ms-primary); box-shadow: 0 0 0 3px var(--ms-primary-300); }
+/* 오른쪽 칸 — 헤더(담은 시술 수) + 채팅 · 담은 시술 드로어는 채팅 위로 */
+.cs-right { display: grid; grid-template-rows: auto 1fr; gap: var(--cs-gap); min-height: 0; }
+.cs-top { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 20px; }
+.cs-top__title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.cs-top__h { margin: 0; font-size: 16px; font-weight: 600; color: var(--ms-black); }
+.cs-top__sub { font-size: 13px; color: var(--ms-gray-600); }
+.cs-top__cart { gap: 6px; color: var(--ms-gray-800); }
+.cs-top__cart[aria-expanded="true"] { border-color: var(--ms-primary-500); background: var(--ms-primary-100); color: var(--ms-primary-700); }
+.cs-top__icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.cs-top__n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--ms-gray-200); color: var(--ms-gray-700); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+.cs-top__n.is-on { background: var(--ms-primary); color: var(--ms-white); }
+.cs-top__n.is-bump { animation: cs-bump .35s ease-out; }
+@keyframes cs-bump { 40% { transform: scale(1.3); } }
+.cs-chat { position: relative; }
+/* 대화 안 그림 — 시술 원리·방법 이미지 */
+.cs-fig { margin: 4px 0 16px; padding: 12px; max-width: 520px; border: 1px solid var(--ms-gray-200); border-radius: 12px; background: var(--ms-white); }
+.cs-fig__cap { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ms-black); }
+.cs-fig__tag { height: 22px; padding: 0 8px; border-radius: 6px; background: var(--ms-primary-100); color: var(--ms-primary-700); font-size: 12px; font-weight: 600; line-height: 22px; }
+.cs-fig img { display: block; width: 100%; height: auto; border-radius: 8px; }
+/* 담은 시술 모달 — 위(담은 시술) / 아래(최저가 추천) 5:5 */
+.cs-cart__body { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 0; padding: 0; }
+.cs-cart__half { min-height: 0; display: flex; flex-direction: column; padding: 16px 24px; }
+.cs-cart__half--rec { border-top: 1px solid var(--ms-gray-200); background: var(--ms-gray-100); }
+.cs-cart__sub { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 14px; font-weight: 700; color: var(--ms-black); }
+.cs-cart__hint { font-size: 12px; font-weight: 400; color: var(--ms-gray-600); }
+.cs-cart__scroll { flex: 1; min-height: 0; overflow: auto; }
+.cs-rec { display: flex; flex-direction: column; gap: 8px; }
+.cs-rec__msg { margin: 0 0 4px; font-size: 13px; color: var(--ms-gray-700); }
+.cs-rec__card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px dashed var(--ms-gray-300); border-radius: 10px; background: var(--ms-white); }
+.cs-rec__row { display: flex; align-items: center; justify-content: space-between; }
+.cs-sk { display: block; height: 12px; border-radius: 6px; background: var(--ms-gray-200); }
+.cs-sk--tag { width: 64px; height: 20px; }
+.cs-sk--price { width: 88px; height: 18px; }
+.cs-sk--line { width: 80%; }
+.cs-sk--short { width: 45%; }
+/* 오른쪽 드로어 — 담은 시술 */
+#cs-cart { margin: auto var(--cs-pad, 16px) auto auto; }
+#cs-cart::backdrop { background: rgba(0, 0, 0, .2); }
+@keyframes cs-cart-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .cs-cart { animation: none; } }
+.cs-cart__head { display: flex; align-items: center; gap: 8px; padding: 18px 16px 14px 20px; border-bottom: 1px solid var(--ms-gray-200); }
+.cs-cart__title { flex: 1; margin: 0; font-size: 16px; font-weight: 600; color: var(--ms-black); }
+.cs-cart__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cs-cart__item { display: flex; align-items: center; gap: 10px; padding: 12px 8px 12px 14px; border: 1px solid var(--ms-gray-200); border-radius: 10px; }
+.cs-cart__info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cs-cart__kind { font-size: 12px; color: var(--ms-primary-700); font-weight: 500; }
+.cs-cart__name { font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--ms-black); }
+.cs-cart__acts { flex: none; display: flex; align-items: center; gap: 4px; }
+.cs-cart__del { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: none; color: var(--ms-gray-600); }
+.cs-cart__del:hover { background: var(--ms-gray-200); color: var(--ms-gray-800); }
+.cs-cart__empty { margin: auto; padding: 32px 0; color: var(--ms-gray-600); text-align: center; }
+.cs-cart__foot { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--ms-gray-200); }
+.cs-pcard__code { font-size: 12px; color: var(--ms-gray-600); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+/* 0.5 WP-2 — 시안에 없는 자리(SPEC-010 FS2 · FS3 · OP2 ~ OP4 · §4-7) · 색은 medikit 토큰만 */
+.cs-labels [data-region="body"]::before { content: "\2022"; margin-right: 4px; color: var(--ms-gray-600); }
+.cs-label.is-pick { border-color: var(--ms-primary); color: var(--ms-primary-700); }
+.cs-pcard__status:empty { display: none; }
+.cs-labels__head:empty { display: none; }
+.cs-cart__item { flex-wrap: wrap; }
+.cs-cart__opts { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cs-cart__opt-list:empty { display: none; }
+.cs-cart__opt-add { align-self: flex-start; }
+.cs-cart__opt-pick { display: flex; gap: 6px; align-items: center; }
+.cs-cart__opt-pick[hidden] { display: none; }
+.cs-cart__opt-select { flex: 1; min-width: 0; }
+/* 0.5 WP-2 추가분 — IL11 주제 묶음(cs-topic* 는 위 cs-kind* 규칙을 함께 씀) · 머리 = 조건 이름 span(잇는 글자 0 · 간격만) */
+.cs-topic__name { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.cs-topic__mark:empty, .cs-topics__prev:empty { display: none; }
+.cs-topic:not([open]) > .cs-topic__body { display: none; }
+/* 0.5 FS6 /face-check — `$J` 점(빨간 테)을 옛 좌표표 점과 나란히 */
+.cs-dot--kos { fill: none; stroke: var(--ms-red); stroke-width: 2; }
+.cs-dot__code--kos { fill: var(--ms-red); }
+.cs-state__kos { margin: 0 0 8px; font-size: 12px; color: var(--ms-gray-700); word-break: break-all; }
+/* 0.5 WP-4 — 모달 효과 · 부작용 줄의 원문 칸(잇는 글자 0 · 간격만) · 그림 없음 빈 slot */
+.cs-pm__note, .cs-pm__sev { margin-left: 6px; color: var(--ms-gray-700); }
+/* 11-22 모달 효과 · 부작용 정리 — 칸 원문을 「이름 — 값 · 값」 으로 잇고, 부작용은 분류 묶음(위급 맨 위 · 눈에 띄게) */
+.cs-pm__fs::before { content: " \2014  "; color: var(--ms-gray-600); }
+.cs-pm__f { color: var(--ms-gray-700); }
+.cs-pm__f + .cs-pm__f::before { content: " \00b7  "; color: var(--ms-gray-600); }
+.cs-pm__fk:empty { display: none; }
+.cs-pm__fk:not(:empty)::after { content: " "; }
+.cs-pm__sgrp { margin-top: 10px; }
+.cs-pm__sgrp-h { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--ms-gray-700); }
+.cs-pm__sgrp-h:empty { display: none; }
+.cs-pm__sgrp--urgent { padding: 10px 12px; border: 1px solid var(--ms-red); border-radius: 8px; background: var(--ms-red-100); }
+.cs-pm__sgrp--urgent .cs-pm__list li::before { background: var(--ms-red); }
+.cs-pm__sgrp--urgent .cs-pm__list li b { color: var(--ms-red); }
+.cs-pm__alert { margin-top: 4px; padding: 6px 8px; border-left: 3px solid var(--ms-red); background: var(--ms-red-100); display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ms-gray-800); }
+.cs-pm__alert-h { font-weight: 600; color: var(--ms-red); }
+.cs-pm__alert-h:empty { display: none; }
+/* 테스트 고침 B — 미리 만든 문장 꼴(항목 · 한두 문장 · 작은 칸) · 카드 용량 · 설명 */
+.cs-pm__tlist { gap: 12px; }
+.cs-pm__tlist li { padding-bottom: 2px; }
+.cs-pm__tn { display: block; }
+.cs-pm__sent { margin: 2px 0 0; color: var(--ms-gray-800); line-height: 1.6; }
+.cs-pm__chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.cs-pm__chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--ms-gray-100); color: var(--ms-gray-700); }
+.cs-pm__sgrp-h--text { font-size: 13px; font-weight: 700; color: var(--ms-gray-800); }
+.cs-pm__sgrp--urgent .cs-pm__sgrp-h--text { color: var(--ms-red); }
+.cs-pm__desc { margin: 6px 0 0; color: var(--ms-gray-700); }
+.cs-pcard__unit { margin-left: 6px; font-size: 12px; font-weight: 500; color: var(--ms-gray-600); }
+.cs-pcard__desc { margin: 2px 0 0; font-size: 12px; color: var(--ms-gray-600); line-height: 1.5; }
+.cs-pm__fig-missing:empty { display: none; }
+/* 0.5 WP-5 — 장바구니 옵션 줄 · 최저가 카드 값(시안 스켈레톤 자리 · 원본 숫자 · 잇는 글자 0) */
+.cs-cart__opt { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ms-gray-800); }
+.cs-cart__opt-title { flex: 1; min-width: 0; }
+.cs-cart__opt-price { font-variant-numeric: tabular-nums; color: var(--ms-gray-700); }
+.cs-rec__card[data-rec-card] { display: flex; flex-direction: column; gap: 6px; }
+.cs-rec__tag:empty { display: none; }
+.cs-rec__price { margin-left: auto; font-size: 16px; font-weight: 700; color: var(--ms-black); font-variant-numeric: tabular-nums; }
+.cs-rec__list { margin-left: 6px; font-size: 12px; font-weight: 400; color: var(--ms-gray-600); }
+.cs-rec__line { display: flex; gap: 6px; font-size: 13px; color: var(--ms-gray-800); }
+.cs-rec__title { flex: 1; min-width: 0; color: var(--ms-gray-700); }
+.cs-rec__used { font-variant-numeric: tabular-nums; }
+.cs-rec__line--short { font-size: 12px; color: var(--ms-gray-600); gap: 8px; flex-wrap: wrap; }
+.cs-rec__group { margin-top: 8px; font-size: 13px; color: var(--ms-gray-700); }
+.cs-rec__group-h:empty { display: none; }
+.cs-rec__names { margin: 0; padding-left: 16px; }

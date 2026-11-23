@@ -1,0 +1,5 @@
+{#- 0.5 시술 설명 모달(SPEC-010 §4-5) — 시안 dialog#cs-proc-modal 그대로. 안(머리 · 탭 · 칸 · 그림 · 효과 · 부작용 · foot)은
+    modal_body.html 이 그린다 — 처음은 빈 틀(pm 없음) · 「시술설명」 을 누르면 consult.js 가 GET /c/<id>/item?code= 조각으로 바꾼다(MD4) -#}
+<dialog id="cs-proc-modal" class="ms-modal cs-pm" aria-labelledby="cs-pm-title">
+{%- include "partials/modal_body.html" %}
+</dialog>

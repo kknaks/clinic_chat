@@ -1,0 +1,97 @@
+{#- 0.5 모달 안(§4-5 · MD1 ~ MD5 · §8 IM5 ~ IM10). `pm` 이 없으면 빈 틀(WP-2). 값은 `$J` · 허브 원문만 · 잇는 글자 0.
+    그림: 코드가 없으면 figure 통째 숨김(IM9) · 코드는 있는데 파일이 없거나 CHAT_IMAGE_DIR 이 비면 img 0 + 빈 slot pm-fig-missing(IM8) ·
+    alt = slot fig-alt(IM10). 케이스 0(MD2) · 허브 오류(MD3) = 허브 칸 0 + 빈 slot pm-empty -#}
+{%- macro titem(e) -%}
+{#- 테스트 고침 C · D(11-23 「한 줄 설명만」) — 항목 이름 + LLM 최종 문장 하나(원문 칩 · 값 줄 · 경고 줄 0) -#}
+<li class="cs-pm__ti" data-class="{{ e.class }}"><b class="cs-pm__tn">{{ e.name }}</b>{% if e.sentence %}<p class="cs-pm__sent">{{ e.sentence }}</p>{% endif %}</li>
+{%- endmacro -%}
+{%- macro parts(e) -%}
+{%- if e.parts %}<span class="cs-pm__fs">{% for p in e.parts %}<span class="cs-pm__f" data-f="{{ p.f }}"><span class="cs-pm__fk" data-slot="pm-f-{{ p.f }}">{{ slots.get("pm-f-" ~ p.f, "") }}</span>{{ p.v }}</span>{% endfor %}</span>{% endif %}
+{%- endmacro -%}
+{%- set hubok = pm and pm.has_hub -%}
+{%- macro fig(table, f, tag) -%}
+<figure class="cs-pm__fig" data-pm-fig="{{ table }}" data-code="{{ f.code }}"{% if f.case is defined %} data-case="{{ f.case }}"{% endif %}><figcaption><span class="cs-pm__tag">{{ tag }}</span><span data-pm="{{ 'mecText' if table == 'mechanism' else 'metText' }}">{{ f.text }}</span></figcaption>
+  {%- if f.present and image_on %}<img src="/img/{{ table }}/{{ f.code }}.svg" alt="{{ slots.get('fig-alt', '') }}" data-slot="fig-alt">{% else %}<span class="cs-pm__fig-missing" data-slot="pm-fig-missing">{{ slots.get("pm-fig-missing", "") }}</span>{% endif %}</figure>
+{%- endmacro -%}
+  <div class="ms-modal__head">
+    <div><p class="cs-pm__kind" data-pm="kind">{{ pm.kind if pm }}</p><h2 id="cs-pm-title" class="ms-modal__title" data-pm="name">{{ pm.name if pm }}</h2></div>
+    <button type="button" class="ms-modal__close" data-close-dialog aria-label="{{ txt.close }}"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg></button>
+  </div>
+  <nav class="cs-pm__tabs" aria-label="{{ txt.toc_label }}">
+    <a href="#pm-overview" class="cs-pm__tab is-active">{{ txt.tab_overview }}</a><a href="#pm-desc" class="cs-pm__tab">{{ txt.tab_desc }}</a><a href="#pm-effect" class="cs-pm__tab">{{ txt.tab_effect }}</a><a href="#pm-side" class="cs-pm__tab">{{ txt.tab_side }}</a>
+  </nav>
+  <div class="ms-modal__body cs-pm__body" data-pm-body{% if pm %} data-pm-code="{{ pm.code }}"{% endif %}>
+    <section id="pm-overview" class="cs-pm__sec">
+      <h3 class="cs-pm__h">{{ txt.tab_overview }}</h3>
+      <p class="cs-pm__lead" data-pm="lead">{{ pm.lead if pm }}</p>
+      {#- 테스트 고침 B — 진료항목 설명(카드와 같은 값) · 용량 -#}
+      <p class="cs-pm__desc" data-pm="desc"{% if not (pm and pm.desc) %} hidden{% endif %}>{{ pm.desc if pm }}</p>
+      <dl class="cs-pm__grid">
+        <dt>{{ txt.f_code }}</dt><dd data-pm="code">{{ pm.code if pm }}{% if pm and pm.unit %}<span class="cs-pcard__unit" data-pm="unit">{{ pm.unit }}</span>{% endif %}</dd>
+        <dt>{{ txt.f_kind }}</dt><dd data-pm="kind2">{{ pm.kind if pm }}</dd>
+        <dt>{{ txt.f_site }}</dt><dd data-pm="site">{{ pm.site if pm }}</dd>
+        <dt>{{ txt.f_drug }}</dt><dd data-pm="drug">{{ pm.drug if pm }}</dd>
+        <dt>{{ txt.f_device }}</dt><dd data-pm="device">{{ pm.device if pm }}</dd>
+        <dt>{{ txt.f_status }}</dt><dd><span class="ms-badge ms-badge--sm ms-badge--primary" data-pm="published"{% if pm and not pm.published %} hidden{% endif %}>{{ txt.published }}</span></dd>
+      </dl>
+    </section>
+    <section id="pm-desc" class="cs-pm__sec">
+      <h3 class="cs-pm__h">{{ txt.tab_desc }}</h3>
+      {%- if not pm %}
+      <figure class="cs-pm__fig" data-pm-fig="mechanism"><figcaption><span class="cs-pm__tag">{{ txt.fig_mec }}</span><span data-pm="mecText"></span></figcaption></figure>
+      <figure class="cs-pm__fig" data-pm-fig="method"><figcaption><span class="cs-pm__tag">{{ txt.fig_met }}</span><span data-pm="metText"></span></figcaption></figure>
+      {%- elif hubok %}
+      {%- for f in pm.mechanisms if f.code %}
+      {{ fig("mechanism", f, txt.fig_mec) }}
+      {%- endfor %}
+      {%- for f in pm.methods %}
+      {{ fig("method", f, txt.fig_met) }}
+      {%- endfor %}
+      {%- endif %}
+      <p class="cs-empty" data-slot="pm-empty"{% if hubok or not pm %} hidden{% endif %}>{{ slots.get("pm-empty", "") }}</p>
+    </section>
+    <section id="pm-effect" class="cs-pm__sec">
+      <h3 class="cs-pm__h">{{ txt.tab_effect }}</h3>
+      {%- if pm and pm.text %}
+      {#- 테스트 고침 B — 미리 만든 고객 문장(modal_text): 항목 · 한두 문장 · 작은 칸(언제 · 얼마나 · 빈도) · 빈 줄 0 -#}
+      <ul class="cs-pm__list cs-pm__tlist" data-pm-list="effect" data-pm-text>{% for e in pm.text.effects %}{{ titem(e) }}{% endfor %}</ul>
+      {%- else %}
+      <ul class="cs-pm__list" data-pm-list="effect">
+        {#- 11-22 정리: 계열 줄 뺌 · 같은 이름 하나 · 칸 = onset · peak · duration 원문(칸 이름 slot pm-f-*) -#}
+        {%- for e in (pm.effects if hubok else []) %}<li data-case="{{ e.case }}" data-code="{{ e.code }}" data-codes="{{ e.codes|join(',') }}"><b>{{ e.name }}</b>{{ parts(e) }}</li>{% endfor %}
+      </ul>
+      {%- endif %}
+      <p class="cs-pm__course" data-slot="pm-effect-course" hidden>{{ slots.get("pm-effect-course", "") }}</p>
+      {%- if pm and not hubok %}<p class="cs-empty" data-slot="pm-empty">{{ slots.get("pm-empty", "") }}</p>{% endif %}
+    </section>
+    <section id="pm-side" class="cs-pm__sec">
+      <h3 class="cs-pm__h">{{ txt.tab_side }}</h3>
+      {#- 11-22 정리: 허브 severity_class 묶음(위급 → 주의 → 일시적 → 빈칸) · 묶음 머리 = slot pm-side-<key>(시안 밖 · 빈칸 시작) ·
+          「바로 병원」 경고 = guidance_alerts true 줄 원문 + 머리 slot pm-alert-head -#}
+      {%- if pm and pm.text %}
+      {#- 테스트 고침 B — 묶음 머리 = 분류 원문(위급 · 주의 · 일시적 — 허브 severity_class 값) 보임 -#}
+      {%- for g in pm.text.groups %}
+      <div class="cs-pm__sgrp cs-pm__sgrp--{{ g.key }}" data-class="{{ g.cls }}">
+        {%- if g.cls %}<p class="cs-pm__sgrp-h cs-pm__sgrp-h--text">{{ g.cls }}</p>{% endif %}
+        <ul class="cs-pm__list cs-pm__list--warn cs-pm__tlist" data-pm-list="side" data-pm-text>{% for e in g.rows %}{{ titem(e) }}{% endfor %}</ul>
+      </div>
+      {%- else %}
+      <ul class="cs-pm__list cs-pm__list--warn" data-pm-list="side" data-pm-text></ul>
+      {%- endfor %}
+      {%- else %}
+      {%- for g in (pm.side_groups if hubok else []) %}
+      <div class="cs-pm__sgrp cs-pm__sgrp--{{ g.key }}" data-class="{{ g.cls }}">
+        <p class="cs-pm__sgrp-h" data-slot="pm-side-{{ g.key }}">{{ slots.get("pm-side-" ~ g.key, "") }}</p>
+        <ul class="cs-pm__list cs-pm__list--warn" data-pm-list="side">
+          {%- for e in g.rows %}<li data-case="{{ e.case }}" data-code="{{ e.code }}" data-codes="{{ e.codes|join(',') }}" data-class="{{ e.cls }}"><b>{{ e.name }}</b>{{ parts(e) }}
+            {%- if e.alerts %}<div class="cs-pm__alert" role="note"><span class="cs-pm__alert-h" data-slot="pm-alert-head">{{ slots.get("pm-alert-head", "") }}</span>{% for a in e.alerts %}<span class="cs-pm__alert-t">{{ a }}</span>{% endfor %}</div>{% endif %}</li>{% endfor %}
+        </ul>
+      </div>
+      {%- else %}
+      <ul class="cs-pm__list cs-pm__list--warn" data-pm-list="side"></ul>
+      {%- endfor %}
+      {%- endif %}
+      {%- if pm and not hubok %}<p class="cs-empty" data-slot="pm-empty">{{ slots.get("pm-empty", "") }}</p>{% endif %}
+    </section>
+  </div>
+  <div class="ms-modal__foot"><button type="button" class="ms-btn ms-btn--gray ms-btn--block" data-close-dialog>{{ txt.close }}</button><button type="button" class="ms-btn ms-btn--primary ms-btn--block" data-pm-cart data-on="{{ txt.cart_added }}" data-off="{{ txt.cart_add }}">{{ txt.cart_add }}</button></div>

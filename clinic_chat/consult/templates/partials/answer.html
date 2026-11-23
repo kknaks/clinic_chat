@@ -1,1 +1,2 @@
-<div class="cs-answer" id="answer-{{ n }}" data-end-state="{{ end_state or '' }}"><div class="cs-md">{{ body|md }}</div></div>
+<div class="cs-answer" id="answer-{{ n }}" data-end-state="{{ end_state or '' }}"><div class="cs-md">{{ body|md }}
+{%- if fig %}<figure class="cs-fig" data-fig-code="{{ fig.code }}"><figcaption class="cs-fig__cap"><span class="cs-fig__tag">{{ txt.fig_mec }}</span>{{ fig.name }}</figcaption><img src="/img/mechanism/{{ fig.code }}.svg" alt="{{ slots.get('fig-alt', '') }}" data-slot="fig-alt"></figure>{{ after|md }}{% endif %}</div></div>

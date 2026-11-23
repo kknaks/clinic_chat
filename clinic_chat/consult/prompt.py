@@ -38,6 +38,8 @@ V3_HEADER_KEYS = ("close", "prev")
 PICK_HEADER_KEYS = ("history", "object", "utterance")  # 0.4 `pick.headers`(SPEC-008 §7 — 시안 글자)
 PICK_HEADER_EXTRA = ("answer", "list", "picked", "options", "obj_targets", "obj_guess", "obj_withdrawn", "user")  # WORK-017 B-4
 PICK_MARK_KEYS = ("failed", "same_list", "none")
+# 0.5 TP13 · r7 P2-B — 주제 블록 머리(선택 키 · `_pick` 필수 검사 밖 — 없으면 머리 없이 블록만)
+PICK_HEADER_OPTIONAL = ("topics", "topic_current", "topic_prev")
 
 
 class PromptError(ValueError):
@@ -62,6 +64,7 @@ class ConsultPrompt:
     kind_labels: dict[str, str] = field(default_factory=dict)  # 0.3 정보 종류 → 손님 말 이름
     voice_check: tuple[str, ...] = ()  # 0.3 금지 낱말 정규식(VO10)
     pick: dict | None = None  # 0.4 이해 호출 절(SPEC-008 §7 적재기 계약 — 한 칸이라도 없거나 비면 None)
+    kos: dict | None = None  # 0.5 `kos` 절(SPEC-010 §7-3 — rules[] · block_header · overflow · fig_marker · labels{}) · 없으면 None
 
     @property
     def draft(self) -> bool:
@@ -92,6 +95,29 @@ def _pick(d: dict) -> dict | None:
     if not isinstance(mk, dict) or not all(ok(mk.get(k)) for k in PICK_MARK_KEYS):
         return None
     return {"version": pk["version"], "rules": list(rules), "headers": dict(hd), "marks": dict(mk)}
+
+
+KOS_LABELS = ("conditions", "items", "cart", "rec", "pairs", "course", "figs")  # 0.5 블록 줄 머리(값은 파일 · 한글 0)
+
+
+def _kos(d: dict) -> dict | None:
+    """0.5 `kos` 절 — 다 있어야(아니면 None · 블록 · 규칙 없이 0.4 그대로 · 오류 아님). `fig_marker` 는 `{code}` 를 든다."""
+    k = d.get("kos")
+    if not isinstance(k, dict):
+        return None
+
+    def ok(v: object) -> bool:
+        return isinstance(v, str) and bool(v.strip())
+
+    rules, lb = k.get("rules"), k.get("labels")
+    if not isinstance(rules, list) or not rules or not all(ok(x) for x in rules):
+        return None
+    if not all(ok(k.get(x)) for x in ("block_header", "overflow", "fig_marker")) or "{code}" not in k["fig_marker"]:
+        return None
+    if not isinstance(lb, dict) or not all(ok(lb.get(x)) for x in KOS_LABELS):
+        return None
+    return {"rules": list(rules), "block_header": k["block_header"], "overflow": k["overflow"],
+            "fig_marker": k["fig_marker"], "labels": dict(lb)}
 
 
 def _nonempty(v: object, where: str) -> str:
@@ -208,7 +234,7 @@ def parse(raw: bytes) -> ConsultPrompt:
         slots = {str(k): _nonempty(v, f"slots.{k}") for k, v in sl.items()}
     return ConsultPrompt(version, tuple(sections), text, jev, headers, mark, hashlib.sha256(raw).hexdigest(), steps,
                          text_state, jev_state, slots, system_text_v3=text_v3, turn_kind=turn_kind,
-                         kind_labels=kind_labels, voice_check=voice, pick=_pick(d))
+                         kind_labels=kind_labels, voice_check=voice, pick=_pick(d), kos=_kos(d))
 
 
 def load(path: Path) -> ConsultPrompt:

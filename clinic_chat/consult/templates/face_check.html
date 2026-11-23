@@ -7,6 +7,15 @@
     <div class="cs-face__canvas">
       {%- include "_face.svg" %}
       {%- include "partials/sites.html" %}
+      {#- 0.5 FS6 — `$J` 얼굴 점(빨간 테 · 코드)을 옛 좌표표 점 위에 나란히 -#}
+      <div class="cs-marks" data-kos-check>
+        <svg class="cs-marks__svg" viewBox="0 0 590 1060" aria-hidden="true">
+          {%- for d in kos_sites %}{% for pt in d.points %}
+          <circle class="cs-dot cs-dot--kos" data-site-code="{{ d.site_code }}" cx="{{ pt[0] }}" cy="{{ pt[1] }}" r="7"></circle>
+          <text class="cs-dot__code cs-dot__code--kos" x="{{ pt[0] + 10 }}" y="{{ pt[1] - 8 }}">{{ d.site_code }}</text>
+          {%- endfor %}{% endfor %}
+        </svg>
+      </div>
     </div>
   </div>
 </main>

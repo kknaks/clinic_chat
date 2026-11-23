@@ -1,0 +1,40 @@
+{#- 0.5 WP-5 장바구니 몸(§4-6 · §6-3) — POST /c/<id>/cart 가 #cs-cart-body 안을 이 조각으로 바꾼다. 가격은 원본 숫자 그대로(PR1 · PR2) ·
+    잇는 글 · 머리 글은 빈 slot(price-unit · rec-total · rec-list-price · rec-tag-event · rec-no-pick · rec-no-price · rec-comp-unit) -#}
+{%- set unit = slots.get("price-unit", "") -%}
+<div hidden data-cart-state data-cart-count="{{ (cart or [])|length }}" data-cart-codes="{{ (cart or [])|map(attribute='code')|join('|') }}"></div>
+    <section class="cs-cart__half" aria-labelledby="cs-cart-h1">
+      <h3 id="cs-cart-h1" class="cs-cart__sub">{{ txt.cart_list }}</h3>
+      <div class="cs-cart__scroll"><ul class="cs-cart__list" data-cart-list>
+        {%- for ci in (cart or []) %}{% include "partials/cart_item.html" %}{% else %}<li class="cs-cart__empty" data-cart-empty>{{ txt.cart_empty }}</li>{% endfor %}
+      </ul></div>
+    </section>
+    <section class="cs-cart__half cs-cart__half--rec" aria-labelledby="cs-cart-h2">
+      <h3 id="cs-cart-h2" class="cs-cart__sub">{{ txt.rec_title }} <span class="cs-cart__hint">{{ txt.rec_hint }}</span></h3>
+      <div class="cs-cart__scroll">
+        <div class="cs-rec" data-rec{% if rec and rec.capped %} data-rec-capped{% endif %}>
+          {%- for card in (rec.cards if rec else []) %}
+          <div class="cs-rec__card" data-rec-card="{{ loop.index }}">
+            <div class="cs-rec__row">{% if card.event %}<span class="cs-rec__tag" data-slot="rec-tag-event">{{ slots.get("rec-tag-event", "") }}</span>{% endif %}<span class="cs-rec__price"><span data-slot="rec-total">{{ slots.get("rec-total", "") }}</span>{{ card.total }}{{ unit }}{% if card.list_total != card.total %} <span class="cs-rec__list"><span data-slot="rec-list-price">{{ slots.get("rec-list-price", "") }}</span>{{ card.list_total }}{{ unit }}</span>{% endif %}</span></div>
+            {%- for o in card.options %}
+            <div class="cs-rec__line" data-key="{{ o.key|join('|') }}"><span class="cs-rec__product">{{ o.product }}</span> <span class="cs-rec__title">{{ o.title }}</span> <span class="cs-rec__used">{{ o.used }}{{ unit }}</span></div>
+            {%- if o.covers %}<div class="cs-rec__line cs-rec__line--short">{% for n in o.covers %}<span class="cs-rec__cover">{{ n }}</span>{% endfor %}</div>{% endif %}
+            {%- endfor %}
+          </div>
+          {%- else %}
+          {%- for _ in range(rec_max) %}
+          <div class="cs-rec__card" aria-hidden="true">
+            <div class="cs-rec__row"><span class="cs-sk cs-sk--tag"></span><span class="cs-sk cs-sk--price"></span></div>
+            <span class="cs-sk cs-sk--line"></span>
+            <span class="cs-sk cs-sk--line cs-sk--short"></span>
+          </div>
+          {%- endfor %}
+          {%- endfor %}
+          {%- if rec and rec.no_pick_names %}
+          <div class="cs-rec__group" data-rec-no-pick><p class="cs-rec__group-h" data-slot="rec-no-pick">{{ slots.get("rec-no-pick", "") }}</p><ul class="cs-rec__names">{% for n in rec.no_pick_names %}<li>{{ n }}</li>{% endfor %}</ul></div>
+          {%- endif %}
+          {%- if rec and rec.no_price_names %}
+          <div class="cs-rec__group" data-rec-no-price><p class="cs-rec__group-h" data-slot="rec-no-price">{{ slots.get("rec-no-price", "") }}</p><ul class="cs-rec__names">{% for n in rec.no_price_names %}<li>{{ n }}</li>{% endfor %}</ul></div>
+          {%- endif %}
+        </div>
+      </div>
+    </section>
