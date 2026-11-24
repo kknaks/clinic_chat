@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import contextvars
+
 import itertools
 import json
 from dataclasses import asdict, dataclass, field
@@ -134,9 +136,14 @@ def filter_entries(owner: Entry | None, entries: list[Entry], table: str) -> tup
     return fs, any(e.by in WEAK_BY for e in fs)
 
 
+# SPEC-012 HF1 — 상담 경로만 허브 `site_name` 거르개를 끈다(허브 행 site_name 이 거의 빈칸이라 늘 0 행 · 부위 가족은 2차
+# `consult/fetch_read.decide` HF2 가 층 holder 로 본다). 시험 앱 열 · 걷기 시험 경로는 그대로(기본 False).
+SITE_NAME_OFF: contextvars.ContextVar[bool] = contextvars.ContextVar("site_name_off", default=False)
+
+
 def _site_filters(entries: list[Entry], facet: str, owner: Entry | None = None) -> list[dict | None]:
     """부위 입구 필터 — **부위마다 하나씩**(사건 · 조건 입구와 같은 식 · 코드 검수 v05 W-2). 걸 수 없으면 `[None]`."""
-    if facet not in SITE_NAME_FACETS or len(entries) < 2:
+    if SITE_NAME_OFF.get() or facet not in SITE_NAME_FACETS or len(entries) < 2:
         return [None]
     sites, plain = filter_entries(owner, entries, "site")
     if not sites:

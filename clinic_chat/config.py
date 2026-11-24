@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     chat_debug_panel: Literal["on", "off"] = "off"  # SV7 — 상담 객체 패널(개발용)
     chat_drawer_max: int = 50  # SV3 — 드로어에 그리는 지난 대화 수
     # 상담 0.4(SPEC-008 §4-2 · WORK-017 WP-10) — 이해 호출
+    # SPEC-011(0.6) — 2차 읽기 잘라 내기. off = 줄은 다 싣고 판단만 장부 `material.new_lines[].fetch_would` 에(재생 · 되돌림용)
+    chat_fetch_cut: Literal["on", "off"] = "on"
     chat_pick_model: str = "sonnet"  # UC2
     chat_pick_effort: str = "low"
     chat_pick_thinking: Literal["on", "off"] = "off"  # UC3 — off = `--settings {"alwaysThinkingEnabled": false}` + MAX_THINKING_TOKENS=0(E8-0)
@@ -99,6 +101,17 @@ class Settings(BaseSettings):
     chat_pick_context_turns: int = 2  # UC6
     chat_pick_answer_chars: int = 200  # UC7
     chat_pick_list_max: int = 30  # UC7
+    # 상담 0.5(SPEC-010 §2-3 · JS1 ~ JS4) — 명동점 매핑 JSON v3(`$J`)
+    chat_kos_map: str | None = None  # 비면 시작 실패 · 레포 안 `data/kos/…`(git 무시)
+    chat_kos_map_sha: str | None = None  # 주면 파일 sha256 이 같아야 시작(앞 8 자 이상이면 앞자리 비교)
+    chat_kos_map_items: int = 324  # JS2 진료항목 수 · 0 = 수 검사 안 함(시험 고정본 전용)
+    # 그림 자리(그 아래 mechanism/ · method/) — 코디 판단 11-20(WP-4 G1): 허브 레포 assets(원리 55 · 방법 66 · 허브와 함께 배포)
+    # · 옛 시드(프로시저허브-데이터-메달리온/…)는 쓰지 않음 · 폴더가 없거나 비우면 그림 칸 숨김(§8 IM2)
+    chat_image_dir: str | None = "/Users/kknaks/orca/workspaces/PROCEDURE-HUB/phub-consult-demo/assets/procedure-images/images"
+    chat_kos_llm_items_max: int = 30  # LC1
+    chat_rec_max: int = 2  # D-16 · 시안 스켈레톤 2
+    chat_ask_list_min: int = 4  # AX1
+    chat_topic_max: int = 6  # TP11 — 목록에 보이는 주제 수(지금 + 앞 5)
 
     @property
     def has_typesafe_key(self) -> bool:

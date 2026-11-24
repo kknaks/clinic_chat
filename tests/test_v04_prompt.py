@@ -26,7 +26,7 @@ def _p(d):
 
 def test_s8_t20_pick_loaded_and_ready():
     p = load(PROMPT)
-    assert p.pick["version"] == "0.4.0-draft" and p.state_ready and len(p.pick["rules"]) >= 1
+    assert p.pick["version"] == "0.6.0-draft" and p.state_ready and len(p.pick["rules"]) >= 1  # 0.5 N1 · TP13
     assert set(p.pick["marks"]) == {"failed", "same_list", "none"}
     assert {"history", "object", "utterance"} <= set(p.pick["headers"])
     assert p.draft == p.version.endswith("-draft")  # draft = 최상위 version 만
@@ -42,6 +42,15 @@ def test_s8_t20_pick_missing_or_blank_not_ready(breaker):
     breaker(d)
     p = _p(d)
     assert p.pick is None and not p.state_ready
+
+
+def test_v05_topic_headers_optional():
+    """0.5 TP13 · r7 P2-B — 주제 블록 머리 키(선택)가 없어도 `pick` 은 None 아님."""
+    d = _doc()
+    for k in ("topics", "topic_current", "topic_prev"):
+        d["pick"]["headers"].pop(k, None)
+    p = _p(d)
+    assert p.pick is not None and p.state_ready
 
 
 def test_s8_t20_old_keys_not_needed_and_jev_front_still_required():

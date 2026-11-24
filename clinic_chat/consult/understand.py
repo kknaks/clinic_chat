@@ -37,10 +37,31 @@ def system_text(pick: dict, el: EntryList) -> str:
 
 
 def args(s, system: str) -> list[str]:
-    a = [s.claude_cli_bin, "-p", "--model", s.chat_pick_model, "--effort", s.chat_pick_effort, "--max-turns", "1",
-         "--output-format", "json", "--no-session-persistence", "--system-prompt", system,
-         "--setting-sources", "", "--tools", "", "--disallowedTools", DISALLOWED_TOOLS,
-         "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "bypassPermissions"]
+    a = [
+        s.claude_cli_bin,
+        "-p",
+        "--model",
+        s.chat_pick_model,
+        "--effort",
+        s.chat_pick_effort,
+        "--max-turns",
+        "1",
+        "--output-format",
+        "json",
+        "--no-session-persistence",
+        "--system-prompt",
+        system,
+        "--setting-sources",
+        "",
+        "--tools",
+        "",
+        "--disallowedTools",
+        DISALLOWED_TOOLS,
+        "--disable-slash-commands",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "bypassPermissions",
+    ]
     if s.chat_pick_thinking == "off":
         a += ["--settings", json.dumps(OFF_SETTINGS)]
     return a
@@ -69,6 +90,7 @@ def _list_text(lst: dict, max_n: int, el) -> str:
             seen.add((t, c))
             k += 1
             parts.append(f"{k}) {_nm(el, t, c, n)}")
+
     for x in lst.get("interest") or []:
         item(x.get("table") or "", x.get("code") or "", x.get("name") or "")
     for c in lst.get("concerns") or []:
@@ -90,12 +112,36 @@ def _ok(row: dict) -> bool:
     return row.get("error") is None and u is not None and u.get("error") is None
 
 
-def turn_message(turns: list[dict], obj: dict, question: str, pick: dict, s, el: EntryList | None = None) -> str:
-    """UC6 — `turns` = 이 대화의 맺는 줄(차례대로 · 켠 줄만 · 끝난 턴만)."""
+def topic_lines(topics: dict | None, h: dict) -> list[str]:
+    """0.5 TP13 — 지금 주제 id + 앞 주제(id · 머리 조건 이름 = IL11 머리와 같은 원문 · 진료항목 수). 주제 0 이면 줄 0."""
+    if not topics or (topics.get("current") is None and not topics.get("prev")):
+        return []
+    out = [h.get("topics") or "#"]
+
+    labels = h.get("topic_slots") or {}
+
+    def one(t: dict) -> str:
+        sl = t.get("slots")
+        if sl and labels:  # 주제 튜플(11-22) — 칸 이름=값 묶음
+            parts = [f"{labels.get(k, k)}={v if isinstance(v, str) else ', '.join(v)}" for k, v in sl.items()]
+            return f"{t['id']} ({' | '.join(parts)}) ({t.get('n', 0)})"
+        return f"{t['id']} {' · '.join(t.get('conds') or [])} ({t.get('n', 0)})"
+
+    if topics.get("current") is not None:
+        out.append(f"{h.get('topic_current') or '-'} {one(topics['current'])}")
+    for t in topics.get("prev") or []:
+        out.append(f"{h.get('topic_prev') or '-'} {one(t)}")
+    return out
+
+
+def turn_message(
+    turns: list[dict], obj: dict, question: str, pick: dict, s, el: EntryList | None = None, topics: dict | None = None
+) -> str:
+    """UC6 — `turns` = 이 대화의 맺는 줄(차례대로 · 켠 줄만 · 끝난 턴만). 0.5 — `topics` 블록(TP13)은 객체 블록 뒤."""
     h, mk = pick["headers"], pick["marks"]
     rows = [t for t in turns if (t.get("consult") or {}).get("understand") is not None or t.get("error") is not None]
     ok_idx = [i for i, t in enumerate(rows) if _ok(t)]
-    near = set(ok_idx[-s.chat_pick_context_turns:]) if s.chat_pick_context_turns > 0 else set()
+    near = set(ok_idx[-s.chat_pick_context_turns :]) if s.chat_pick_context_turns > 0 else set()
     lines: list[str] = []
     if rows:
         lines.append(h["history"])
@@ -114,11 +160,15 @@ def turn_message(turns: list[dict], obj: dict, question: str, pick: dict, s, el:
             lines.append(f"   {h['picked']} {picked or mk['none']} · {kind}")
             ask = c.get("ask")
             if ask and ask.get("options"):
-                lines.append(f"   {h['options']} " + " / ".join(
-                    f"{k}) {_nm(el, o.get('table') or '', o.get('code') or '', o.get('name') or '')}"
-                    for k, o in enumerate(ask["options"], 1)))
+                lines.append(
+                    f"   {h['options']} "
+                    + " / ".join(
+                        f"{k}) {_nm(el, o.get('table') or '', o.get('code') or '', o.get('name') or '')}"
+                        for k, o in enumerate(ask["options"], 1)
+                    )
+                )
             if i in near:
-                ans = (t.get("answer") or "")[:s.chat_pick_answer_chars]
+                ans = (t.get("answer") or "")[: s.chat_pick_answer_chars]
                 if ans:
                     lines.append(f"   {h['answer']} {ans}")
                 lst = t.get("list")
@@ -131,15 +181,29 @@ def turn_message(turns: list[dict], obj: dict, question: str, pick: dict, s, el:
             if t.get("list") is not None:
                 had_list = True
     lines.append(h["object"])
-    axis = [x for sl in ("concerns", "sites", "subjects") for x in obj.get(sl) or []
-            if x.get("table") and x.get("state") in ("said", "confirmed")]
-    guess = [x for sl in ("concerns", "sites", "subjects") for x in obj.get(sl) or []
-             if x.get("table") and x.get("state") == "guess"]
-    gone = [x for sl in ("concerns", "sites", "subjects") for x in obj.get(sl) or []
-            if x.get("table") and x.get("state") == "withdrawn"]
+    axis = [
+        x
+        for sl in ("concerns", "sites", "subjects")
+        for x in obj.get(sl) or []
+        if x.get("table") and x.get("state") in ("said", "confirmed")
+    ]
+    guess = [
+        x
+        for sl in ("concerns", "sites", "subjects")
+        for x in obj.get(sl) or []
+        if x.get("table") and x.get("state") == "guess"
+    ]
+    gone = [
+        x
+        for sl in ("concerns", "sites", "subjects")
+        for x in obj.get(sl) or []
+        if x.get("table") and x.get("state") == "withdrawn"
+    ]
     for head, xs in ((h["obj_targets"], axis), (h["obj_guess"], guess), (h["obj_withdrawn"], gone)):
-        lines.append(f"{head} " + (", ".join(_nm(el, x["table"], x["code"], x.get("name") or "") for x in xs)
-                                   or mk["none"]))
+        lines.append(
+            f"{head} " + (", ".join(_nm(el, x["table"], x["code"], x.get("name") or "") for x in xs) or mk["none"])
+        )
+    lines += topic_lines(topics, h)
     lines.append(h["utterance"])
     lines.append(question)
     return "\n".join(lines)
@@ -155,15 +219,22 @@ def _cli_out(text: str) -> dict | None:
     return d if isinstance(d, dict) else None
 
 
-async def call(s, system: str, message: str, *, argv: list[str] | None = None,
-               child: dict[str, str] | None = None) -> Raw:
+async def call(
+    s, system: str, message: str, *, argv: list[str] | None = None, child: dict[str, str] | None = None
+) -> Raw:
     """UC2 · UC9 · FL1 · FL3 — 한 번만 부른다(재시도 0). `argv` · `child` = 실측(E8-0)에서 인자 · env 를 바꿀 때만."""
     t0 = time.perf_counter()
     buf: list[str] = []
     out = Raw()
     try:
-        res = await run_cli(argv or args(s, system), cwd=str(s.chat_cli_cwd_path()), env=child if child is not None else env(s),
-                            timeout_s=s.chat_pick_timeout_sec, on_line=buf.append, stdin_text=message)
+        res = await run_cli(
+            argv or args(s, system),
+            cwd=str(s.chat_cli_cwd_path()),
+            env=child if child is not None else env(s),
+            timeout_s=s.chat_pick_timeout_sec,
+            on_line=buf.append,
+            stdin_text=message,
+        )
     except Exception as e:  # noqa: BLE001 — 프로세스를 못 띄움 = cli
         out.ms = round((time.perf_counter() - t0) * 1000, 1)
         out.error = {"kind": "cli", "detail": type(e).__name__}
@@ -183,7 +254,12 @@ async def call(s, system: str, message: str, *, argv: list[str] | None = None,
     out.api_ms = d.get("duration_api_ms")
     u = d.get("usage") or {}
     th = (u.get("output_tokens_details") or {}).get("thinking_tokens")
-    out.usage = {"input_tokens": u.get("input_tokens"), "cache_read_input_tokens": u.get("cache_read_input_tokens"),
-                 "output_tokens": u.get("output_tokens"), "thinking_tokens": th}
+    out.usage = {
+        "input_tokens": u.get("input_tokens"),
+        "cache_creation_input_tokens": u.get("cache_creation_input_tokens"),  # SPEC-011 LG4 — 버리던 캐시 쓰기 토큰
+        "cache_read_input_tokens": u.get("cache_read_input_tokens"),
+        "output_tokens": u.get("output_tokens"),
+        "thinking_tokens": th,
+    }
     out.models = list((d.get("modelUsage") or {}).keys())
     return out

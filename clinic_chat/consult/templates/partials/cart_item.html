@@ -1,0 +1,24 @@
+{#- 0.5 장바구니 진료항목 줄(시안 render() 의 li.cs-cart__item 꼴) + OP2 ~ OP5 자리: 「옵션 추가 +」 → 드롭다운(single · 판매 종료 뺌 ·
+    원본 옵션 제목 · 정가 · 이벤트가) + 「추가」 · 옵션 줄(OP4 · 줄마다 지우기 — aria-label = 옵션 제목). single 0 이면 단추 없음(OP5). 코드는 data-* · hx-vals 로만(RT1) -#}
+<li class="cs-cart__item" data-cart-code="{{ ci.code }}">
+  <div class="cs-cart__info"><span class="cs-cart__kind">{{ ci.kind }}{% if ci.site %} · {{ ci.site }}{% endif %}</span><span class="cs-cart__name">{{ ci.name }}</span><span class="cs-pcard__meta">{% if ci.drug %}<span class="cs-pcard__drug">{{ ci.drug }}</span>{% endif %}<span class="cs-pcard__code">{{ ci.code }}</span></span></div>
+  <span class="cs-cart__acts"><button type="button" class="ms-btn ms-btn--gray ms-btn--ss" data-cart-explain="{{ ci.code }}">{{ txt.explain }}</button><button type="button" class="cs-cart__del" data-cart-del="{{ ci.code }}" aria-label="{{ ci.name }} {{ txt.del }}"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg></button></span>
+  {%- if ci.options %}
+  <div class="cs-cart__opts" data-cart-opts>
+    <ul class="cs-cart__opt-list" data-cart-lines>
+      {%- for ln in ci.lines or [] %}
+      <li class="cs-cart__opt" data-line-idx="{{ ln.idx }}"><span class="cs-cart__opt-title">{{ ln.title }}</span> <span class="cs-cart__opt-price">{{ ln.price_amount }}{{ slots.get("price-unit", "") }}{% if ln.event_price is not none %} {{ slots.get("opt-event-mark", "") }}{{ ln.event_price }}{{ slots.get("price-unit", "") }}{% endif %}</span><button type="button" class="cs-cart__del" data-line-del="{{ ln.idx }}" data-cart-code="{{ ci.code }}" aria-label="{{ ln.title }}"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg></button></li>
+      {%- endfor %}
+    </ul>
+    <button type="button" class="ms-btn ms-btn--outline ms-btn--ss cs-cart__opt-add" data-opt-open aria-expanded="false">{{ txt.opt_add }}</button>
+    <div class="cs-cart__opt-pick" data-opt-pick hidden>
+      <select class="ms-input ms-input--m cs-cart__opt-select" data-opt-select>
+        {%- for o in ci.options %}
+        <option value="{{ o.product_key }}|{{ o.option_key }}" data-count="{{ o.count if o.count is not none else '' }}">{{ o.title }} {{ o.price_amount }}{{ slots.get("price-unit", "") }}{% if o.event_price is not none %} {{ slots.get("opt-event-mark", "") }}{{ o.event_price }}{{ slots.get("price-unit", "") }}{% endif %}</option>
+        {%- endfor %}
+      </select>
+      <button type="button" class="ms-btn ms-btn--primary ms-btn--ss" data-opt-add data-cart-code="{{ ci.code }}">{{ txt.opt_add_go }}</button>
+    </div>
+  </div>
+  {%- endif %}
+</li>

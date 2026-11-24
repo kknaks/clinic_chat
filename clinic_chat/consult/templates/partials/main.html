@@ -1,5 +1,7 @@
 {%- import "ui.html" as ui -%}
-{#- 0.3 A8(SPEC-006 SV1) — 네 칸: 드로어 | 얼굴 · 리스트 | 채팅 | 상담 객체 패널(CHAT_DEBUG_PANEL=on 일 때만) -#}
+{#- 0.5(SPEC-010 §4-1) — 시안 design-consult-20261120.html 배치 그대로: 드로어 | 왼쪽(얼굴 + 점 · 몸 목록 · 진료항목 접기) |
+    오른쪽(상단 「상담 · 명동점 · 담은 시술」 + 채팅) | 상담 객체 패널(CHAT_DEBUG_PANEL=on). 장바구니 · 시술 설명은 dialog 둘.
+    화면 글자는 ui_text.json(시안 글자)과 빈 data-slot 뿐 -#}
 <main id="consult" class="cs-app{{ ' cs-app--panel' if panel }}" data-conv-id="{{ conv_id }}" data-cs-app>
   {%- include "partials/drawer.html" %}
   <section class="cs-left">
@@ -7,14 +9,19 @@
       <div class="{{ ui.card_head }}"><h2 class="{{ ui.card_title }}" data-slot="face-title"></h2></div>
       <div class="cs-face__canvas">
         {%- include "_face.svg" %}
-        {%- include "partials/sites.html" %}
+        {%- include "partials/marks.html" %}
       </div>
     </div>
     <div class="{{ ui.card }} cs-list-card">
       <div class="{{ ui.card_head }}"><h2 class="{{ ui.card_title }}" data-slot="list-title"></h2></div>
-      {%- include "partials/list.html" %}
+      {%- include "partials/items.html" %}
     </div>
   </section>
+  <div class="cs-right">
+  <header class="{{ ui.card }} cs-top">
+    <div class="cs-top__title"><h2 class="cs-top__h">{{ txt.top_title }}</h2><span class="cs-top__sub">{{ txt.top_sub }}</span></div>
+    <button type="button" class="{{ ui.btn('gray', 's', 'cs-top__cart') }}" data-cart-toggle aria-controls="cs-cart" aria-expanded="false"><svg class="cs-top__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 6h10l-1 11H6L5 6z"/><path d="M7.5 6V5a2.5 2.5 0 015 0v1"/></svg><span>{{ txt.top_cart }}</span><span class="cs-top__n" data-cart-n2>0</span></button>
+  </header>
   <section class="{{ ui.card }} cs-chat">
     <div class="{{ ui.card_head }} cs-chat__head"><h2 class="{{ ui.card_title }}" data-slot="chat-title"></h2></div>
     {%- if outdated %}
@@ -39,7 +46,10 @@
       </div>
     </form>
   </section>
+  </div>
   {%- if panel %}
   {%- include "partials/state.html" %}
   {%- endif %}
 </main>
+{%- include "partials/cart.html" %}
+{%- include "partials/modal.html" %}

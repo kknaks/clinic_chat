@@ -97,7 +97,8 @@ def merge(*groups: list[dict]) -> list[dict]:
 
 
 def view(empty: list[dict], kind_labels: dict[str, str]) -> list[dict]:
-    """「앱 판정」 `empty[]` — 이름만 · `safety`(W-5 — 안전 종류는 「확인된 정보가 없어요」 꼴)."""
+    """「앱 판정」 `empty[]` — 이름만 · `safety`. 답 규칙(고침 1)에서 이 칸은 「말하지 않는 칸」 표지다 — 「없어요」 문장 재료가 아니다
+    (`safety` 참이면 없다 · 안전하다로 말하지 않고 「상담 때 원장님과 확인」 으로 돌려 말한다)."""
     return [{"about": x["about"].get("name") or "", "what": kind_labels.get(x["what"], ""),
              "safety": x["what"] in SAFETY_KINDS} for x in empty]
 

@@ -15,8 +15,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-TABLES = ("concern", "site", "modality", "procedure", "product")
-TABLE_TITLES = {"concern": "\uace0\ubbfc", "site": "\ubd80\uc704", "modality": "\uacc4\uc5f4", "procedure": "\uc2dc\uc220", "product": "\uc81c\ud488"}  # 시안 「# 목록」 머리(고민 · 부위 · 계열 · 시술 · 제품 — LLM 에 가는 글)
+TABLES = ("concern", "site", "modality", "procedure", "product", "effect", "procedure_case")  # 0.5 N1 — 효과 · 케이스 더함
+TABLE_TITLES = {"concern": "\uace0\ubbfc", "site": "\ubd80\uc704", "modality": "\uacc4\uc5f4", "procedure": "\uc2dc\uc220", "product": "\uc81c\ud488", "effect": "\ud6a8\uacfc", "procedure_case": "\ucf00\uc774\uc2a4"}  # 시안 「# 목록」 머리(고민 · 부위 · 계열 · 시술 · 제품 — LLM 에 가는 글)
 
 
 class EntryListError(RuntimeError):

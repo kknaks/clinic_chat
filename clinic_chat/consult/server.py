@@ -10,6 +10,7 @@ POST 에 CSRF 를 걸지 않는다 — 이 판은 로그인 · 세션 쿠키가 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -22,6 +23,11 @@ from fastapi.staticfiles import StaticFiles
 from clinic_chat.clients.hub_rest import HubError
 from clinic_chat.columns.base import Deps
 from clinic_chat.config import Settings, load_settings
+from clinic_chat.consult import cart as cart_mod
+from clinic_chat.consult import images as img_mod
+from clinic_chat.consult import items_view as iv_mod
+from clinic_chat.consult import kos_map as kos_mod
+from clinic_chat.consult import modal as modal_mod
 from clinic_chat.consult import plan as plan_mod
 from clinic_chat.consult import prompt as prompt_mod
 from clinic_chat.consult.drawer import outdated as is_outdated
@@ -49,6 +55,7 @@ def turn_view(conv: Conv, live: dict[tuple[str, int], Live]) -> list[dict]:
         if err and (t.get("llm") or {}).get("answered") is not True:
             kind = (err.get("llm") or err).get("kind") if isinstance(err, dict) else "internal"
         out.append({"n": t["turn"], "question": t.get("question") or "", "live": False, "answer": t.get("answer") or "",
+                    "fig": (t.get("fig") or {}).get("fig"),
                     "end_state": t.get("end_state"), "error_kind": kind if not t.get("answer") else None})
     for n in conv.open_turns():
         lv = live.get((conv.conv_id, n))
@@ -59,9 +66,12 @@ def turn_view(conv: Conv, live: dict[tuple[str, int], Live]) -> list[dict]:
 
 
 def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = None, llm: ChatLLM | None = None,
-               deps_factory: Callable[[Settings], Deps] = Deps.from_settings) -> FastAPI:
+               deps_factory: Callable[[Settings], Deps] = Deps.from_settings,
+               hub_health: Callable[[], dict] | None = None) -> FastAPI:
     s = settings or load_settings()
     p0 = prompt_mod.load(s.chat_prompt_path())  # 꼴이 틀리면 시작 실패(T19) · 단계 문구 · 빈 자리 값은 지금 파일 것
+    kos = kos_mod.from_settings(s)  # 0.5 JS1 · JS2 — 비거나 꼴이 틀리면 시작 실패(`KosMapError`)
+    kos_rec = kos_mod.hash_check(kos, hub_health)  # JS4 — 다르면 시작은 하고 표지만
     labels = p0.steps
     if turn_fn is None:
         if s.chat_fake_turn:
@@ -70,8 +80,19 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
             turn_fn = make()
         else:
             turn_fn = run_turn
-    render = Render(labels, panel=s.chat_debug_panel == "on", slots=p0.slots)
-    ctx = Ctx(s, Ledger(s.chat_dir_path()), render, llm or ChatCli(ChatCliSpec.from_settings(s)), deps_factory)
+    render = Render(labels, panel=s.chat_debug_panel == "on", slots=p0.slots, rec_max=s.chat_rec_max)
+    if p0.kos:  # 0.5 CH3 — 원리 그림 표지 줄
+        from clinic_chat.consult.turn import fig_re
+
+        render.fig_rx = fig_re(p0.kos["fig_marker"])
+    render.env.globals["split_fig"] = render.split_fig
+    render.env.globals["kos_check"] = kos_rec  # JS4 — 패널(CHAT_DEBUG_PANEL=on) 한 줄
+    image_dir = str(s.path(s.chat_image_dir)) if s.chat_image_dir else None
+    render.env.globals["image_on"] = img_mod.root(image_dir) is not None  # IM2 — 비면 그림 칸 숨김
+    image_counts = img_mod.counts(image_dir)  # IM13 — 시작 때 한 번(55 · 66 이면 정상 · 시작은 막지 않음)
+    logging.getLogger("clinic_chat.consult").info("image_dir counts %s", image_counts)
+    ctx = Ctx(s, Ledger(s.chat_dir_path()), render, llm or ChatCli(ChatCliSpec.from_settings(s)), deps_factory, kos=kos)
+    ctx.ledger.kos_map = {k: kos_rec[k] for k in ("sha", "made_at", "hub_gold_hash", "hash_mismatch")}  # JS3 시작 줄 칸
     live: dict[tuple[str, int], Live] = {}
     tasks: set[asyncio.Task] = set()
     app = FastAPI(title="clinic_chat consult")
@@ -110,8 +131,17 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
         states = ([state_view(t) for t in reversed(c.turns) if t.get("error") is None]
                   if s.chat_debug_panel == "on" else [])
         html = ctx.render.page(c.conv_id, turn_view(c, live), c.last_list(), c.last_sites(), fragment=hx,
-                               convs=convs(), states=states, outdated=outdated(c), off_closed=off_closed(c))
+                               convs=convs(), states=states, outdated=outdated(c), off_closed=off_closed(c),
+                               iv=items_of(c), cart=cart_mod.view(kos, c.cart),
+                               rec=cart_mod.rec_view(kos, c.cart, cards=s.chat_rec_max) if c.cart else None)
         return HTMLResponse(html)
+
+    def items_of(c: Conv, site: str | None = None) -> dict:
+        """0.5 — 마지막 주제 목록(IL11 · TP9) · 없으면 마지막 `items` 칸의 코드로 왼쪽 값(FS · IL)."""
+        topics, active = c.last_topics()
+        if topics:
+            return iv_mod.topics_view(kos, topics, active, site=site, max_n=s.chat_topic_max)
+        return iv_mod.view(kos, list((c.last_items() or {}).get("codes") or []), site=site)
 
     async def drive(c: Conv, n: int, question: str, clicked_at: float, viewing: str | None = None) -> None:
         lv = live[(c.conv_id, n)]
@@ -201,14 +231,97 @@ def create_app(settings: Settings | None = None, *, turn_fn: TurnFn | None = Non
         lst = view_list(c.consult, reads, codes, c.last_list())
         return HTMLResponse(ctx.render.list(lst))
 
+    @app.get("/c/{conv_id}/items", response_class=HTMLResponse)
+    async def items_list(conv_id: str, site: str | None = Query(None)) -> HTMLResponse:
+        """0.5 FS4 — 점 · 몸 이름 누름 = 그 부위(자손 포함) 진료항목만 · `site` 없으면 풂 · 장부 줄 없음."""
+        if site and site not in kos.sites:
+            return HTMLResponse("", status_code=404)
+        c = conv_of(conv_id)
+        topics, active = c.last_topics()
+        owner = iv_mod.site_owner(topics, active, site) if site and topics else None
+        if owner is not None and owner != str(active):  # 테스트 고침 D — 앞 주제 점 = 그 주제 조건으로(보기만 · 장부 줄 0)
+            iv = iv_mod.topics_view(kos, topics, owner, site=site, max_n=s.chat_topic_max)
+            return HTMLResponse(ctx.render.items(iv, conv_id))
+        return HTMLResponse(ctx.render.items(items_of(c, site), conv_id))
+
+    @app.post("/c/{conv_id}/topic", response_class=HTMLResponse)
+    async def topic_switch(conv_id: str, id: str = Form("")) -> HTMLResponse:  # noqa: A002 — 스펙 `hx-vals {id}`
+        """0.5 TP3 1 — 앞 주제 머리 누름 → 그 주제가 지금 주제(턴 아님 · 조건만 되살림 · 장부 줄 `topic_switch`) → 목록 ·
+        점 · 몸 목록 조각. 없는 주제 · 주제 없는 대화 = 404(WP-2 틀 — 조건 되살림 셈은 WP-3)."""
+        c = ctx.ledger.get(conv_id)
+        topics, _ = c.last_topics() if c is not None else ([], None)
+        if c is None or not any(str(t.get("id")) == id for t in topics):
+            return HTMLResponse("", status_code=404)
+        ctx.ledger.topic_switch(c, id)
+        return HTMLResponse(ctx.render.items(items_of(c), conv_id))
+
+    @app.post("/c/{conv_id}/cart", response_class=HTMLResponse)
+    async def cart_op(conv_id: str, op: str = Form(...), code: str = Form(""), product_key: str = Form(""),
+                      option_key: str = Form(""), idx: int | None = Form(None)) -> HTMLResponse:
+        """0.5 D-15 · OP1 ~ OP7 · RT1 — 담기 / 빼기 / 비우기 / 옵션 줄 넣기 · 지우기 → 장부 `cart` → 장바구니 몸 조각(추천 다시)."""
+        c = conv_of(conv_id)
+        try:
+            new = cart_mod.apply(kos, c.cart, op, code=code, product_key=product_key, option_key=option_key, idx=idx)
+        except cart_mod.CartError as e:
+            return HTMLResponse(str(e), status_code=404 if str(e) == "code" else 422)
+        rec = cart_mod.rec_view(kos, new, cards=s.chat_rec_max) if new else None
+        ctx.ledger.cart(c, cart_mod.ledger_view(new), op, cart_mod.rec_ledger(rec) if rec else None)
+        return HTMLResponse(ctx.render.cart_body(cart_mod.view(kos, new), rec))
+
+    @app.post("/c/{conv_id}/cart/save")
+    async def cart_save(conv_id: str) -> Response:
+        """0.5 CT7 — 장부 `cart_saved`(코드 · 추천 최저 조합 옵션 키 · 가격 0) · 그 밖 동작 0."""
+        c = conv_of(conv_id)
+        if not c.cart:
+            return Response(status_code=422)
+        r = cart_mod.rec_view(kos, c.cart, cards=1)
+        ctx.ledger.cart_saved(c, [e["code"] for e in c.cart], r["cards"][0]["keys"] if r["cards"] else None)
+        return Response(status_code=204)
+
+    @app.get("/c/{conv_id}/item", response_class=HTMLResponse)
+    async def item_modal(conv_id: str, code: str = Query(...)) -> HTMLResponse:
+        """0.5 MD4 — 모달 안 조각(허브 칸 · 그림 · `$J` 칸) · RT1 코드는 쿼리 값 · `$J` 에 정확히 있을 때만 · 장부 `viewed`."""
+        if code not in kos.item:
+            return HTMLResponse("", status_code=404)
+        d = ctx.deps_factory(s)
+        pm = await modal_mod.build(kos, d.hub, kos.hub_gold_hash, code, image_dir)
+        c = ctx.ledger.get(conv_id)
+        if c is not None:
+            ctx.ledger.viewed(c, code, modal_mod.figs(pm), pm.get("error"))
+        return HTMLResponse(ctx.render.modal_body(pm))
+
+    @app.get("/img/{table}/{name}")
+    async def image(table: str, name: str, if_none_match: str | None = Header(None)) -> Response:
+        """IM1 ~ IM3 — 시드 폴더 그림(요청마다 있음 판단 · ETag · 304 · nosniff)."""
+        f = img_mod.file_of(image_dir, table, name)
+        if f is None:
+            return Response(status_code=404)
+        tag = img_mod.etag(f)
+        head = {"ETag": tag, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"}
+        if if_none_match and tag in [x.strip() for x in if_none_match.split(",")]:
+            return Response(status_code=304, headers=head)
+        return Response(f.read_bytes(), media_type="image/svg+xml", headers=head)
+
+    @app.get("/c/{conv_id}/cart/item", response_class=HTMLResponse)
+    async def cart_item(conv_id: str, code: str = Query(...)) -> HTMLResponse:
+        """0.5 장바구니 진료항목 줄(OP2 ~ OP5 자리 · 상태 없음 — 서버 장바구니는 WP-5). RT1 — 코드는 쿼리 값으로만 ·
+        `$J` 에 정확히 있을 때만(없으면 404)."""
+        ci = iv_mod.cart_item(kos, code)
+        if ci is None:
+            return HTMLResponse("", status_code=404)
+        return HTMLResponse(ctx.render.cart_item(ci))
+
     @app.get("/face-check", response_class=HTMLResponse)
     async def face_check() -> HTMLResponse:
-        return HTMLResponse(ctx.render.face_check(all_dots()))
+        return HTMLResponse(ctx.render.face_check(all_dots(), iv_mod.face_sites(kos)))
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     app.state.ctx = ctx
     app.state.live = live
     app.state.tasks = tasks
+    app.state.kos = kos
+    app.state.image_counts = image_counts
+    app.state.kos_check = kos_rec  # JS4 — 패널(`CHAT_DEBUG_PANEL=on`)은 state.html 한 줄
     return app
 
 
@@ -216,4 +329,13 @@ def main(host: str = HOST, port: int | None = None) -> None:
     import uvicorn
 
     s = load_settings()
-    uvicorn.run(create_app(s), host=host, port=port or s.chat_port, log_level="info")
+    uvicorn.run(create_app(s, hub_health=lambda: hub_health(s)), host=host, port=port or s.chat_port, log_level="info")
+
+
+def hub_health(s: Settings, timeout: float = 3.0) -> dict:
+    """JS4 — 허브 `GET /health`(시작 때 한 번 · 읽기만)."""
+    import json
+    import urllib.request
+
+    with urllib.request.urlopen(s.hub_rest_url.rstrip("/") + "/health", timeout=timeout) as r:  # noqa: S310 — 설정의 로컬 허브
+        return json.load(r)

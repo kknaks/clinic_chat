@@ -19,8 +19,9 @@ CONSULT = ROOT / "clinic_chat" / "consult"
 STATIC = CONSULT / "static"
 HANGUL = re.compile(r"[가-힣]")
 # SPEC-004 §4-5 의 자리(+ step-<코드> · error-<종류> 는 조각에서)
-SLOTS = ("page-title", "face-title", "list-title", "chat-title", "input-placeholder", "send-label", "list-empty",
-         "face-empty")
+# 0.5(SPEC-010 WP-2) — 왼쪽 리스트 · 점 자리가 진료항목 목록으로 바뀌어 list-empty · face-empty → items-empty(IL9)
+SLOTS = ("page-title", "face-title", "list-title", "chat-title", "input-placeholder", "send-label", "items-empty")
+MODAL_SLOTS = ("pm-empty", "pm-effect-course")  # 0.5 시술 설명 모달 빈 틀(§4-5 · MD2 · N3)
 VENDORED = {  # 본(CENTURION_DAY backend/day/static · dev c5045a99)과 같은 sha256(E0-6)
     "htmx.min.js": "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447",
     "HTMX-LICENSE.txt": "23410c2d962ac773ec1bf4137debd7cd0d914a3bb654aff9250dde7c278c3da1",
@@ -48,7 +49,7 @@ def test_t24_full_page_vs_fragment(tmp_path):
         assert f'data-slot="{slot}"' in full, slot
     # 빈 대화 = 기본 자리 수(라벨 · 묶음 머리는 값이 올 때) + 0.3 A8 드로어 빈 자리 넷(new-label · toggle-label ·
     # list-title · empty — 코디 W-2: 사용자 결정 A8 로 바뀌는 예외)
-    assert len(re.findall(r'data-slot="', full)) == len(SLOTS) + 4
+    assert len(re.findall(r'data-slot="', full)) == len(SLOTS) + 4 + len(MODAL_SLOTS)
     assert 'allowEval":false' in full and 'allowScriptTags":false' in full
     cid = re.search(r'data-conv-id="([^"]+)"', full).group(1)
     assert "<head>" not in c.get(f"/c/{cid}", headers={"HX-Request": "true"}).text
@@ -112,14 +113,15 @@ def test_e0_fake_turn_stream_order_and_close(tmp_path):
     cid = re.search(r'data-conv-id="([^"]+)"', c.get("/").text).group(1)
     frag = c.post(f"/c/{cid}/turns", data={"text": "q"}).text
     assert 'sse-connect="/c/' in frag and 'sse-close="close"' in frag
-    for ev in ("step", "delta", "done", "turn_error", "list", "sites"):
+    for ev in ("step", "delta", "done", "turn_error", "items"):  # 0.5 — 왼쪽은 `items` 하나(list · sites 받는 자리 없음)
         assert f'sse-swap="{ev}"' in frag
+    assert 'sse-swap="list"' not in frag and 'sse-swap="sites"' not in frag
     asyncio.run(asyncio.sleep(0))
     body = c.get(f"/c/{cid}/turns/1/events").text
     kinds = re.findall(r"^event: (\S+)$", body, re.M)
     main = [k for k in kinds if k != "step"]  # 수정 1 — 단계 줄은 단계가 바뀔 때마다 다시 온다
-    assert kinds[0] == "step" and main[:2] == ["list", "sites"] and kinds[-2:] == ["done", "close"]
-    assert kinds.index("sites") < kinds.index("delta") and kinds[-3] == "step"
+    assert kinds[0] == "step" and main[:1] == ["items"] and kinds[-2:] == ["done", "close"]
+    assert kinds.index("items") < kinds.index("delta") and kinds[-3] == "step"
     for block in body.strip().split("\n\n"):  # W-3 ② ⑤ — 이벤트마다 data: 줄 · 글자 > 0
         datas = [ln[6:] for ln in block.splitlines() if ln.startswith("data: ")]
         assert datas and "".join(datas).strip()

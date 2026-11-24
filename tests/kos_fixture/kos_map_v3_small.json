@@ -1,0 +1,698 @@
+{
+ "meta": {
+  "clinic": "가짜점",
+  "kos_snapshot": "2026-11-19",
+  "version": "v3",
+  "hub_gold_hash": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+  "hub_aux_hash": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+  "viewbox": [
+   0,
+   0,
+   590,
+   1060
+  ],
+  "face_svg": "design-face-0.svg",
+  "made_at": "2026-11-20T00:00:00+09:00",
+  "note": "시험 고정본 — 코드 · 이름 · 가격은 모두 지은 값(실물 $J 아님)"
+ },
+ "items": [
+  {
+   "kos_item_code": "ZZ-BTX-A",
+   "kos_item_name": "가짜 턱 보톡스 A",
+   "kos_procedure": "가짜 보톡스",
+   "kos_machine": "해당 없음",
+   "kos_medicine": "가짜톡스",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 4,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "얼굴",
+    "t2": "턱",
+    "t3": ""
+   },
+   "site_scope": "특정 부위",
+   "hub": {
+    "procedure_codes": [
+     "ZPRC-001"
+    ],
+    "case_codes": [
+     "ZCAS-001"
+    ],
+    "site_codes": [
+     "ZS-072"
+    ],
+    "products": [
+     {
+      "code": "ZPRD-001",
+      "name": "가짜톡스",
+      "from": "구성1"
+     }
+    ]
+   },
+   "status": "매핑됨",
+   "note": "",
+   "options": [],
+   "option_refs": [
+    {
+     "product_key": "P1",
+     "option_key": "P1-1"
+    },
+    {
+     "product_key": "P1",
+     "option_key": "P1-2"
+    },
+    {
+     "product_key": "P3",
+     "option_key": "P3-1"
+    },
+    {
+     "product_key": "P5",
+     "option_key": "P5-1"
+    }
+   ]
+  },
+  {
+   "kos_item_code": "ZZ-BTX-B",
+   "kos_item_name": "가짜 입꼬리 보톡스 B",
+   "kos_procedure": "가짜 보톡스",
+   "kos_machine": "해당 없음",
+   "kos_medicine": "가짜톡스2",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 2,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "얼굴",
+    "t2": "입",
+    "t3": ""
+   },
+   "site_scope": "특정 부위",
+   "hub": {
+    "procedure_codes": [
+     "ZPRC-001"
+    ],
+    "case_codes": [
+     "ZCAS-002"
+    ],
+    "site_codes": [
+     "ZS-057"
+    ],
+    "products": [
+     {
+      "code": "ZPRD-002",
+      "name": "가짜톡스2",
+      "from": "구성1"
+     }
+    ]
+   },
+   "status": "매핑됨(제품 확인 필요)",
+   "note": "가짜 고정본 — 확인 필요 이유",
+   "options": [],
+   "option_refs": [
+    {
+     "product_key": "P1",
+     "option_key": "P1-3"
+    },
+    {
+     "product_key": "P6",
+     "option_key": "P6-1"
+    }
+   ]
+  },
+  {
+   "kos_item_code": "ZZ-LIFT",
+   "kos_item_name": "가짜 리프팅",
+   "kos_procedure": "가짜 리프팅",
+   "kos_machine": "가짜기기",
+   "kos_medicine": "해당 없음",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 2,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "얼굴",
+    "t2": "",
+    "t3": ""
+   },
+   "site_scope": "얼굴 · 몸 가능",
+   "hub": {
+    "procedure_codes": [
+     "ZPRC-010"
+    ],
+    "case_codes": [
+     "ZCAS-010",
+     "ZCAS-011"
+    ],
+    "site_codes": [
+     "ZS-007",
+     "ZS-001"
+    ],
+    "products": [
+     {
+      "code": "ZPRD-010",
+      "name": "가짜기기",
+      "from": "구성1"
+     }
+    ]
+   },
+   "status": "매핑됨",
+   "note": "",
+   "options": [],
+   "option_refs": [
+    {
+     "product_key": "P2",
+     "option_key": "P2-1"
+    },
+    {
+     "product_key": "P3",
+     "option_key": "P3-1"
+    }
+   ]
+  },
+  {
+   "kos_item_code": "ZZ IV DRIP + VIT",
+   "kos_item_name": "가짜 수액",
+   "kos_procedure": "가짜 수액",
+   "kos_machine": "해당 없음",
+   "kos_medicine": "해당 없음",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 0,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "",
+    "t2": "",
+    "t3": ""
+   },
+   "site_scope": "부위 개념 없음",
+   "hub": {
+    "procedure_codes": [],
+    "case_codes": [],
+    "site_codes": [],
+    "products": []
+   },
+   "status": "허브 대상 아님",
+   "note": "가짜 고정본 — 확인 필요 이유",
+   "options": [],
+   "option_refs": []
+  },
+  {
+   "kos_item_code": "ZZ-시트",
+   "kos_item_name": "가짜 시트팩",
+   "kos_procedure": "가짜 시트팩",
+   "kos_machine": "해당 없음",
+   "kos_medicine": "해당 없음",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 1,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "얼굴",
+    "t2": "",
+    "t3": ""
+   },
+   "site_scope": "얼굴 전체",
+   "hub": {
+    "procedure_codes": [],
+    "case_codes": [],
+    "site_codes": [
+     "ZS-007"
+    ],
+    "products": []
+   },
+   "status": "시술 확인 필요",
+   "note": "가짜 고정본 — 확인 필요 이유",
+   "options": [],
+   "option_refs": [
+    {
+     "product_key": "P4",
+     "option_key": "P4-1"
+    }
+   ]
+  },
+  {
+   "kos_item_code": "ZZ--",
+   "kos_item_name": "가짜 목 제모",
+   "kos_procedure": "가짜 제모",
+   "kos_machine": "해당 없음",
+   "kos_medicine": "해당 없음",
+   "kos_unit": "",
+   "kos_description": "",
+   "kos_option_count": 1,
+   "kos_status": "PUBLISHED",
+   "site_tiers": {
+    "t1": "몸",
+    "t2": "목",
+    "t3": ""
+   },
+   "site_scope": "몸",
+   "hub": {
+    "procedure_codes": [
+     "ZPRC-020"
+    ],
+    "case_codes": [
+     "ZCAS-020"
+    ],
+    "site_codes": [
+     "ZS-079"
+    ],
+    "products": []
+   },
+   "status": "매핑됨",
+   "note": "",
+   "options": [],
+   "option_refs": [
+    {
+     "product_key": "P5",
+     "option_key": "P5-1"
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "kos_procedure": "가짜 보톡스",
+   "items": [
+    "ZZ-BTX-A",
+    "ZZ-BTX-B"
+   ]
+  },
+  {
+   "kos_procedure": "가짜 리프팅",
+   "items": [
+    "ZZ-LIFT"
+   ]
+  },
+  {
+   "kos_procedure": "가짜 수액",
+   "items": [
+    "ZZ IV DRIP + VIT"
+   ]
+  },
+  {
+   "kos_procedure": "가짜 시트팩",
+   "items": [
+    "ZZ-시트"
+   ]
+  },
+  {
+   "kos_procedure": "가짜 제모",
+   "items": [
+    "ZZ--"
+   ]
+  }
+ ],
+ "sites": {
+  "ZS-001": {
+   "name": "전신",
+   "parent_code": "",
+   "region": "body",
+   "shape": "list",
+   "points": [],
+   "source": ""
+  },
+  "ZS-147": {
+   "name": "몸",
+   "parent_code": "ZS-001",
+   "region": "body",
+   "shape": "list",
+   "points": [],
+   "source": ""
+  },
+  "ZS-079": {
+   "name": "목",
+   "parent_code": "ZS-147",
+   "region": "body",
+   "shape": "list",
+   "points": [],
+   "source": ""
+  },
+  "ZS-007": {
+   "name": "얼굴",
+   "parent_code": "",
+   "region": "face",
+   "shape": "point",
+   "points": [
+    [
+     0.5,
+     0.3
+    ]
+   ],
+   "source": "가짜"
+  },
+  "ZS-072": {
+   "name": "턱",
+   "parent_code": "ZS-007",
+   "region": "face",
+   "shape": "point",
+   "points": [
+    [
+     0.5,
+     0.6
+    ]
+   ],
+   "source": "가짜"
+  },
+  "ZS-073": {
+   "name": "턱끝",
+   "parent_code": "ZS-072",
+   "region": "face",
+   "shape": "point",
+   "points": [
+    [
+     0.5,
+     0.65
+    ]
+   ],
+   "source": "가짜"
+  },
+  "ZS-057": {
+   "name": "입",
+   "parent_code": "ZS-007",
+   "region": "face",
+   "shape": "pair",
+   "points": [
+    [
+     0.45,
+     0.5
+    ],
+    [
+     0.55,
+     0.5
+    ]
+   ],
+   "source": "가짜"
+  }
+ },
+ "product_categories": [
+  {
+   "category_key": "C01",
+   "name": "가짜 분류",
+   "order": 0,
+   "opened": true,
+   "deleted": false
+  },
+  {
+   "category_key": "C02",
+   "name": "가짜 이벤트",
+   "order": 1,
+   "opened": true,
+   "deleted": false
+  }
+ ],
+ "products": [
+  {
+   "product_key": "P1",
+   "title": "[ZZ] 가짜 보톡스",
+   "category_keys": [
+    "C01"
+   ],
+   "is_event": false,
+   "closed": false,
+   "order": 0,
+   "options": [
+    {
+     "option_key": "P1-1",
+     "title": "가짜 턱 보톡스 1회",
+     "type": "single",
+     "count": 1,
+     "price_amount": 1000,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 1000,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-BTX-A"
+     ]
+    },
+    {
+     "option_key": "P1-2",
+     "title": "가짜 턱 보톡스 5회",
+     "type": "single",
+     "count": 5,
+     "price_amount": 4000,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 4000,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-BTX-A"
+     ]
+    },
+    {
+     "option_key": "P1-3",
+     "title": "가짜 입꼬리 보톡스 1회",
+     "type": "single",
+     "count": 1,
+     "price_amount": 1200,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 1200,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-BTX-B"
+     ]
+    }
+   ]
+  },
+  {
+   "product_key": "P2",
+   "title": "[ZZ 이벤트] 가짜 리프팅",
+   "category_keys": [
+    "C02"
+   ],
+   "is_event": true,
+   "closed": false,
+   "order": 1,
+   "options": [
+    {
+     "option_key": "P2-1",
+     "title": "가짜 리프팅 1회",
+     "type": "single",
+     "count": 1,
+     "price_amount": 5000,
+     "event_price": 3000,
+     "additional_prices": [
+      {
+       "visitor_type": "이벤트가",
+       "amount": 3000
+      }
+     ],
+     "supplied_amount": 5000,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-LIFT"
+     ]
+    }
+   ]
+  },
+  {
+   "product_key": "P3",
+   "title": "[ZZ 이벤트] 보톡스+리프팅",
+   "category_keys": [
+    "C02"
+   ],
+   "is_event": true,
+   "closed": false,
+   "order": 2,
+   "options": [
+    {
+     "option_key": "P3-1",
+     "title": "보톡스+리프팅",
+     "type": "group",
+     "count": null,
+     "price_amount": 6000,
+     "event_price": 3500,
+     "additional_prices": [
+      {
+       "visitor_type": "이벤트가",
+       "amount": 3500
+      }
+     ],
+     "supplied_amount": 6000,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-BTX-A",
+      "ZZ-LIFT"
+     ],
+     "compositions": [
+      {
+       "item_code": "ZZ-BTX-A",
+       "count": 1,
+       "unit": {
+        "type": "UnitType_UNKNOWN",
+        "value": 0.0
+       },
+       "price": 1000,
+       "additional_prices": [],
+       "comp_event_price_is_option_total": false
+      },
+      {
+       "item_code": "ZZ-LIFT",
+       "count": 1,
+       "unit": {
+        "type": "UnitType_UNKNOWN",
+        "value": 0.0
+       },
+       "price": 5000,
+       "additional_prices": [],
+       "comp_event_price_is_option_total": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "product_key": "P4",
+   "title": "[ZZ] 가짜 시트팩",
+   "category_keys": [
+    "C01"
+   ],
+   "is_event": false,
+   "closed": false,
+   "order": 3,
+   "options": [
+    {
+     "option_key": "P4-1",
+     "title": "가짜 시트팩",
+     "type": "single",
+     "count": 1,
+     "price_amount": 0,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 0,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-시트"
+     ]
+    }
+   ]
+  },
+  {
+   "product_key": "P5",
+   "title": "[ZZ] 가짜 패키지",
+   "category_keys": [
+    "C01"
+   ],
+   "is_event": false,
+   "closed": false,
+   "order": 4,
+   "options": [
+    {
+     "option_key": "P5-1",
+     "title": "턱 보톡스+목 제모",
+     "type": "group",
+     "count": null,
+     "price_amount": 2000,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 2000,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ--",
+      "ZZ-BTX-A"
+     ],
+     "compositions": [
+      {
+       "item_code": "ZZ--",
+       "count": 1,
+       "unit": {
+        "type": "UnitType_UNKNOWN",
+        "value": 0.0
+       },
+       "price": 1000,
+       "additional_prices": [],
+       "comp_event_price_is_option_total": false
+      },
+      {
+       "item_code": "ZZ-BTX-A",
+       "count": 1,
+       "unit": {
+        "type": "UnitType_UNKNOWN",
+        "value": 0.0
+       },
+       "price": 1000,
+       "additional_prices": [],
+       "comp_event_price_is_option_total": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "product_key": "P6",
+   "title": "[ZZ] 가짜 종료 상품",
+   "category_keys": [
+    "C01"
+   ],
+   "is_event": false,
+   "closed": true,
+   "order": 5,
+   "options": [
+    {
+     "option_key": "P6-1",
+     "title": "가짜 입꼬리 보톡스 1회",
+     "type": "single",
+     "count": 1,
+     "price_amount": 1100,
+     "event_price": null,
+     "additional_prices": [],
+     "supplied_amount": 1100,
+     "vat_amount": 0,
+     "taxation": "TAXABLE",
+     "description": "",
+     "closed": null,
+     "display_channels": [
+      "KOS_CONNECT"
+     ],
+     "covers": [
+      "ZZ-BTX-B"
+     ]
+    }
+   ]
+  }
+ ]
+}

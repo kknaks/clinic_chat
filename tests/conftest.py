@@ -9,6 +9,8 @@ from clinic_chat.config import Settings
 
 FAKE_CLI = str(Path(__file__).parent / "fake_cli" / "claude")
 NO_CLI = "/nonexistent/no-real-cli"  # 시험은 실물 CLI 를 절대 부르지 않는다
+KOS_FIXTURE = Path(__file__).parent / "kos_fixture" / "kos_map_v3_small.json"  # 0.5 — 지은 값의 작은 `$J`(진료항목 6)
+KOS_FIXTURE_ITEMS = 6
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +29,8 @@ def make_settings(tmp_path: Path, **kw) -> Settings:
     base = {"_env_file": None, "typesafe_api_key": "fixture-key", "claude_cli_bin": NO_CLI,
             "runs_dir": str(tmp_path / "runs"), "eval_set_dir": str(tmp_path / "eval-set"),
             "cli_timeout_sec": 20, "hub_rest_url": "http://fake-hub/procedure-hub/gold",
-            "hub_gold_mcp_url": "http://fake-hub/procedure-hub/gold-mcp/mcp"}
+            "hub_gold_mcp_url": "http://fake-hub/procedure-hub/gold-mcp/mcp",
+            "chat_kos_map": str(KOS_FIXTURE), "chat_kos_map_items": KOS_FIXTURE_ITEMS}
     base.update(kw)
     return Settings(**base)
 

@@ -46,13 +46,15 @@ def test_s8_t1_heads_lines_aliases_and_pages():
     assert lines[0] == "## 고민 (table = concern)"
     heads = [x for x in lines if x.startswith("## ")]
     assert heads == ["## 고민 (table = concern)", "## 부위 (table = site)", "## 계열 (table = modality)",
-                     "## 시술 (table = procedure)", "## 제품 (table = product)"]
+                     "## 시술 (table = procedure)", "## 제품 (table = product)", "## 효과 (table = effect)",
+                     "## 케이스 (table = procedure_case)"]  # 0.5 N1 — 효과 · 케이스 더함
     assert "ZZC-1 가짜고민 (= 가짜고민별칭)" in lines  # 같은 글자 별칭 한 번
     assert "ZZC-2 가짜윗고민" in lines  # 별칭 없으면 괄호 없음
     assert lines.index("ZZC-2 가짜윗고민") < lines.index("ZZC-9 가짜팔자")  # 허브 순서
     assert sum(1 for t, _ in hub.requests if t == "resolve") > 1  # 쪽 넘김 끝까지
     assert all("text" not in p for t, p in hub.requests if t == "resolve")  # 목록 꼴(text 없음)
-    assert all(p.get("tables") == "concern,site,modality,procedure,product" for t, p in hub.requests if t == "resolve")
+    assert all(p.get("tables") == "concern,site,modality,procedure,product,effect,procedure_case"
+               for t, p in hub.requests if t == "resolve")
     assert len(el.items) == 15 and el.counts()["concern"] == 5
     assert ("adverse", "ZZA-1") not in el.items and "ZZA-1" not in el.text  # LD8 — 다섯 표 밖 0
     assert el.items[("concern", "ZZC-1")].aliases == ("가짜고민별칭",)

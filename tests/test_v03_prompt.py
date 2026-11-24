@@ -41,7 +41,7 @@ def test_s6_t8_v3_sections_in_order_and_off_sha_unchanged():
     d = _doc()
     assert [x["id"] for x in d["system_v3"]] == list(V3_SECTION_IDS) and len(V3_SECTION_IDS) == 13
     assert p.system_text_v3 == "\n\n".join("\n".join(x["lines"]) for x in d["system_v3"])
-    assert p.tail_marker in p.system_text_v3 and p.version == "0.3.1-draft"
+    assert p.tail_marker in p.system_text_v3 and p.version == "0.6.0-draft"
     assert hashlib.sha256(p.system_text.encode()).hexdigest() == SYSTEM_0_1_SHA  # 끈 글 = 0.1 글자 그대로
     assert p.state_ready and set(KIND_LABEL_KEYS) <= set(p.kind_labels) and p.voice_check
     assert set(p.turn_kind) == {"new", "talk", "follow"} and not HANGUL.search("".join(p.turn_kind.values()))
@@ -81,7 +81,8 @@ def test_s6_t8_on_conv_uses_v3_off_conv_uses_0_1(tmp_path, fake_cli):
     r = Run(tmp_path / "on", fake_cli)
     set_out(fake_cli[1], [("concern", "ZZC-1")], kinds=["indication"])
     r.turn("가짜고민 시술")
-    assert _sys(r) == load(PROMPT).system_text_v3
+    p = load(PROMPT)  # 0.5 §7-2 — 켠 상태 시스템 글 = system_v3 + `kos` 답 규칙(R1 ~ R11)
+    assert _sys(r) == p.system_text_v3 + "\n\n" + "\n".join(p.kos["rules"])
     r.close()
     # 0.4 CP1 · CP7(검수 R-2 ⓐ 뒤 반) — 장부에 끈 시작 줄을 둔 옛 대화는 열기만 · 턴 막힘(답 실행기 0)
     _w(tmp_path / "off" / "chat" / "turns.jsonl", _old_rows("off08", "off"))

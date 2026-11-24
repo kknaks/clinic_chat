@@ -12,7 +12,7 @@ from tests.state_fixture import Run
 from tests.v04_fixture import set_out
 
 UNDERSTAND_KEYS = {"model", "thinking", "pick_version", "list_sha", "aliases", "input_bytes", "output_raw", "parsed",
-                   "accepted", "dropped", "merged", "added_from_sites", "ms", "api_ms", "usage", "error"}
+                   "accepted", "dropped", "merged", "added_from_sites", "ms", "api_ms", "usage", "models", "error", "retry"}
 GONE = ("retract", "retract_ms", "retract_resolve_ms", "retract_requests", "options_carried", "jev_requests")
 
 
@@ -24,9 +24,9 @@ def test_s8_t17_ledger_fields(tmp_path, fake_cli):
         c = row["consult"]
         assert set(c["understand"]) == UNDERSTAND_KEYS
         u = c["understand"]
-        assert u["pick_version"] == "0.4.0-draft" and u["added_from_sites"] == ["ZZS-1"] and u["dropped"][0]["code"] == "ZZC-404"
+        assert u["pick_version"] == "0.6.0-draft" and u["added_from_sites"] == ["ZZS-1"] and u["dropped"][0]["code"] == "ZZC-404"
         assert set(u["input_bytes"]) == {"system", "message"} and set(u["usage"]) == {
-            "input_tokens", "cache_read_input_tokens", "output_tokens", "thinking_tokens"}
+            "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens", "thinking_tokens"}
         assert "가짜고민 가짜부위" not in json.dumps(u, ensure_ascii=False).replace(u["output_raw"], "")  # 메시지 전문 없음
         assert set(c["site_filter"]) == {"sites", "carried", "from", "pair_kept", "pair_dropped"}
         assert c["turn_kind"] == {"kind": "new", "from": "understand"}
