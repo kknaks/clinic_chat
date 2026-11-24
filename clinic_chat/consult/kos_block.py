@@ -22,7 +22,8 @@ TOGETHER = (
     "\uac19\uc774",
     "\ud568\uaed8",
     "\ub3d9\uc2dc\uc5d0",
-)  # 같이 받기 표지 「같이」 · 「함께」 · 「동시에」(WP-6 검수 S-2)
+)  # 같이 받기 표지 「같이」 · 「함께」 · 「동시에」(WP-6 검수 S-2)  — SPEC-012 부터 판정에 안 씀(옛 시험 · 기록용)
+TOGETHER_KINDS = frozenset({"combo", "same_day"})  # SPEC-012 HD1 — 같이 받기 · 같은 날 물음 = 1차 이해 kinds(소넷 판단)
 PAIR_KEEP = (
     "from_name",
     "to_name",
@@ -91,6 +92,9 @@ def item_line(kos: KosMap, code: str) -> dict:
         "status": it.get("status"),
         "case_codes": h.get("case_codes"),
         "procedure_codes": h.get("procedure_codes"),
+        # 고침 4(S08 T3) — 매핑 제품(허브 제품 이름). KOS 약 칸(`medicine`)과 매핑 제품이 다를 수 있다(「턱보톡스(국산)」 = 약 칸 보톡스 ·
+        # 매핑 제품 하이톡스) — 제품으로 고른 주제에서 그 줄이 같은 제품 줄인지 답 모델이 데이터로 본다
+        "products": [p.get("name") for p in h.get("products") or [] if isinstance(p, dict) and p.get("name")],
         "options": opts,
     }
     # 고침 2(검수 P1-1) — `note` 는 데이터 작업 메모(「구성1 확인 필요」 · 「KOS 기기 칸」)라 답 모델에 싣지 않는다(모달 · 장부는 그대로)
@@ -130,15 +134,20 @@ def build(
     sent: dict,
     items_max: int,
     force_cart: bool = False,
+    force_items: bool = False,
+    absent: list[dict] | None = None,
 ) -> tuple[str, dict]:
     """→ (블록 글, 장부 `llm.kos_block{codes, lines, chars, cart_sig, pairs, …}`)."""
     lb = prompt_kos["labels"]
-    lines = [prompt_kos["block_header"], f"{lb['conditions']} {_j(cond)}"]
+    lines = [prompt_kos["block_header"]]
+    if absent:  # 고침 3(r3 P2-4 · H10) — 손님이 댄 이름 · 명동점 진료항목 0(매핑으로 확인)을 블록 맨 앞 사실 줄로
+        lines.append(f"{lb['absent']} {_j(absent)}")
+    lines.append(f"{lb['conditions']} {_j(cond)}")
     want: list[str] = []
     for c in items[:items_max] + [e["code"] for e in cart] + list(viewed):
         if c in kos.item and c not in want:
             want.append(c)
-    new = [c for c in want if c not in sent["codes"]]
+    new = [c for c in want if c not in sent["codes"] or (force_items and c in items[:items_max])]  # 고침 2 — 가격 물음 턴
     for c in new:
         lines.append(f"{lb['items']} {_j(item_line(kos, c))}")
     over = max(0, len(items) - items_max)
@@ -207,6 +216,8 @@ def build(
     text = "\n".join(lines)
     meta = {
         "force_cart": force_cart,
+        "force_items": force_items,
+        "absent": list(absent or []),
         "codes": new,
         "lines": len(lines),
         "chars": len(text),
@@ -252,6 +263,9 @@ def cond_view(dec, items_rec: dict | None, axis: dict | None, topics_brief: list
             out[k] = rec[k]
     if rec.get("pick_zero"):
         out["pick_zero"] = True  # 11-23 시술 · 제품 교체로 0 — 막지 않음 · 봇이 0 이라고 말함
+    for k in ("list_held", "out_pick", "asked_pick", "suspended"):  # SPEC-012 HL1 · HQ2 · HQ1 · HP1 표지(문구 없음)
+        if rec.get(k):
+            out[k] = rec[k]
     if ir.get("ask_topics"):
         brief = {b["id"]: b for b in topics_brief}
         out["ask_topic"] = [{"id": i, "slots": (brief.get(i) or {}).get("slots")} for i in ir["ask_topics"]]

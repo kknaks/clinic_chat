@@ -29,7 +29,7 @@ SAFETY = frozenset({"adverse", "recovery", "contraindication", "avoid", "caution
 SELF_ROLES = ROLES_TARGET[:2]  # 자기 · 물려받음(`walk/ranges.py` 의 층 이름 — 같은 값)
 SUB_ROLES = ROLES_TARGET[2:]  # 하위 시술 · 하위 케이스 · 하위 제품
 LAYERS = {"self": {SELF_ROLES[0]}, "inherit": set(SELF_ROLES), "sub": {*SELF_ROLES, *SUB_ROLES}}
-OWNER_TABLES = ("procedure_case", "product", "procedure", "modality")
+OWNER_TABLES = ("procedure_case", "product", "procedure", "modality", "package")  # 고침 3(r3 P2-2) — 패키지도 주인
 MD_TABLES = ("procedure_case", "procedure", "product")
 NAME_KEY = re.compile(r"name|^n$")
 NAME_COLS = ("holder_name", "name_ko", "procedure_name", "candidate_name", "subject_name", "target_name")
@@ -84,12 +84,18 @@ class Ctx:
     g2: set[str]
     topic_concerns: set[str] = field(default_factory=set)  # G6 — 지금 주제 고민 이름
     topic_codes: set[str] = field(default_factory=set)  # G6 — 지금 주제 진료항목의 허브 코드("table:code")
+    topic_sites: set[str] = field(default_factory=set)  # SPEC-012 HF2 — 지금 주제 부위의 가족(자기 · 조상 · 자손) · 비면 거르지 않음
+    case_site: dict[str, str] = field(default_factory=dict)  # HF2 — 케이스 → 부위 코드(매핑 `case_codes` 의 부위 「|」 이음 · 매핑 밖은 허브 profile)
 
 
 def md_sets(kos) -> dict[str, set[str]]:
     if kos is None:
         return {}
-    return {"procedure_case": set(kos.by_case), "procedure": set(kos.by_proc), "product": set(kos.by_product)}
+    # 고침 3(r3 P2-2) — 매핑 진료항목의 `hub` 에 패키지 칸이 없으니 명동점에 닿는 패키지 = 매핑이 가진 패키지 코드(지금 0).
+    # 패키지가 주인인 줄(층 없는 outcome · indication 행의 대상 칸)은 `scope = branch` 에서 이름만(HN1).
+    pkgs = {x for i in kos.items for x in (i.get("hub") or {}).get("package_codes") or []}
+    return {"procedure_case": set(kos.by_case), "procedure": set(kos.by_proc), "product": set(kos.by_product),
+            "package": pkgs}
 
 
 def topic_codes(kos, items) -> set[str]:
@@ -131,6 +137,10 @@ def owner(ln: Line) -> tuple[str | None, str, str | None]:
         nm = next((str(ln.row[c]) for c in NAME_COLS if ln.row.get(c)), "")
         role = ln.row.get("role") if ln.row.get("holder_name") else None
         return f"{ln.silver_table}:{ln.silver_id}", nm, role
+    # SPEC-012 HN1 — 층 없는 줄(outcome · indication · adverse 행)은 행의 대상 칸이 주인(허브 행 · 재생은 묶음 머리 same)
+    tt, tc = ln.row.get("target_table"), ln.row.get("target_code")
+    if tt in OWNER_TABLES and tc:
+        return f"{tt}:{tc}", str(ln.row.get("target_name") or ""), None
     return None, "", None
 
 
@@ -152,7 +162,17 @@ def decide(lines: list[Line], plan: Plan, ctx: Ctx) -> dict[str, tuple[str, str]
         key, name, role = owner(ln)
         code = (key or "").partition(":")[2]
         nm = PAREN_TAIL.sub("", name)
-        if (code and code in ctx.targets) or (len(nm) >= 2 and nm in ctx.question):
+        if code and code in ctx.targets:
+            out[ln.key] = (FULL, "explicit")
+            continue
+        # SPEC-012 HF2 — 층 holder 가 케이스면 케이스 부위가 지금 주제 부위 가족일 때만 상세(안전 줄도). 코드로 명시한 케이스는
+        # 위에서 늘 전체 · 이름 일치 명시(아래)보다 앞 — 「보톡스(종아리)」 가 괄호를 떼면 「보톡스」 라 말 속 이름과 맞기 때문
+        if ctx.topic_sites and key and key.startswith("procedure_case:"):
+            cs_ = set(filter(None, (ctx.case_site.get(code) or "").split("|")))  # 매핑 부위는 여럿일 수 있음(「|」 이음)
+            if cs_ and not cs_ & ctx.topic_sites:
+                out[ln.key] = (NAMES, "site_other")
+                continue
+        if len(nm) >= 2 and nm in ctx.question:
             out[ln.key] = (FULL, "explicit")
             continue
         if kinds & SAFETY:

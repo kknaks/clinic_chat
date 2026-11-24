@@ -84,9 +84,12 @@ def test_s8_t18_build_walk_equals_col_b_walk(tmp_path):
     hub2 = make_hub(resolve=[cand(P1)])
     d2, fj = deps(tmp_path, hub2)
     w2 = asyncio.run(mr.build_walk(d2, acc([("procedure", "ZZP-1")], ["mechanism"]), [], EL()))
-    assert w1.front.kinds == w2.front.kinds and w1.front.required == w2.front.required
-    assert sorted(w1.verified.gids()) == sorted(w2.verified.gids())
-    assert w2.material.lines and w1.material.lines == w2.material.lines and w1.end_state == w2.end_state
+    # SPEC-012 HK1 — 상담 걷기는 안전 종류를 늘 더 읽는다(그 밖 종류 · 필수 · 줄은 시험 앱 걷기와 같음)
+    extra = [k for k in w2.front.kinds if w2.front.by.get(k) == "safety_always"]
+    assert set(extra) <= {"adverse", "contraindication", "recovery"}
+    assert [k for k in w2.front.kinds if k not in extra] == w1.front.kinds and w1.front.required == w2.front.required
+    assert set(w1.verified.gids()) <= set(w2.verified.gids())
+    assert w2.material.lines and all(x in w2.material.lines for x in w1.material.lines) and w1.end_state == w2.end_state
     assert fj.requests == [] and not [t for t, _ in hub2.requests if t == "resolve"]  # Jev 0 · resolve 맞춤 꼴 0
 
 

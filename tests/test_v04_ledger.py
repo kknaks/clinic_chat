@@ -12,7 +12,7 @@ from tests.state_fixture import Run
 from tests.v04_fixture import set_out
 
 UNDERSTAND_KEYS = {"model", "thinking", "pick_version", "list_sha", "aliases", "input_bytes", "output_raw", "parsed",
-                   "accepted", "dropped", "merged", "added_from_sites", "ms", "api_ms", "usage", "models", "error"}
+                   "accepted", "dropped", "merged", "added_from_sites", "ms", "api_ms", "usage", "models", "error", "retry"}
 GONE = ("retract", "retract_ms", "retract_resolve_ms", "retract_requests", "options_carried", "jev_requests")
 
 

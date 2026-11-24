@@ -91,6 +91,33 @@ def is_empty(c: dict | None) -> bool:
     return not c or (not any(c.get(s) for s in SLOTS) and not c.get("country") and not c.get("exclude"))
 
 
+def active_conds(c: dict | None) -> dict:
+    """SPEC-012 HP1 — 셈에 쓰는 조건: `suspended` 칸(효과)은 칸에 남기되 셈에서만 쉰다."""
+    out = copy.deepcopy(c) if c else empty()
+    for s in out.pop("suspended", None) or []:
+        out[s] = []
+    return out
+
+
+def suspend_aware(count: Count) -> Count:
+    """셈 함수 감쌈 — 쉬는 칸을 빼고 센다(모든 판단 길이 같은 셈을 쓰게)."""
+
+    async def c(conds: dict) -> list[str]:
+        return await count(active_conds(conds))
+
+    c.__wrapped_count__ = True  # type: ignore[attr-defined]
+    return c
+
+
+def turn_values(turn: dict) -> set[tuple[str, str]]:
+    """이번 턴 칸 값(뺌 제외) — HU1 사진 견줌."""
+    return {_key(v) for s in SLOTS for v in turn.get(s) or [] if v.get("table") != "name"}
+
+
+def snap_values(last: dict) -> set[tuple[str, str]]:
+    return {_key(v) for s in SLOTS for v in (last.get("conditions") or {}).get(s) or []}
+
+
 def turn_conditions(
     targets: list[dict],
     hits: list[NameHit],
@@ -150,6 +177,10 @@ def merge(base: dict | None, turn: dict) -> dict:
     for s in NARROW:
         if turn.get(s):
             out[s] = copy.deepcopy(turn[s])
+            if s in (out.get("suspended") or []):  # 새 효과를 말하면 쉼 풂(SPEC-012 HP1)
+                out["suspended"] = [x for x in out["suspended"] if x != s]
+                if not out["suspended"]:
+                    out.pop("suspended")
     if turn.get("country"):
         out["country"] = turn["country"]
     said = {_key(v) for s in SLOTS for v in turn.get(s) or []}
@@ -240,12 +271,14 @@ async def decide(
     max_n: int | None = None,
     info: bool = False,
     utterance: str = "",
+    question: bool = False,
 ) -> Decision:
     """\uc8fc\uc81c = \uce78 \ubb36\uc74c \ud310\ub2e8(\ubaa8\ub4c8 \uba38\ub9ac 1 ~ 5) \u00b7 CD4 \uac70\ub460 \u00b7 \uae4a\uac8c\uac00 0 \uc774\uba74 LS1 ~ LS3(\ub9c9\uc740 \uce78)."""
     topics = copy.deepcopy(topics)
     for t in topics:
         t.setdefault("conditions", empty()).setdefault("exclude", [])
     cur = _find(topics, active) or (topics[-1] if topics else None)
+    count = suspend_aware(count)  # SPEC-012 HP1 — 쉬는 칸(효과)은 셈에서만 뺌
     llm_m = (llm or {}).get("move")
     undo_mk = undo_marker(utterance, bool(turn.get("exclude")))
     widen_mk = widen_marker(utterance)
@@ -264,6 +297,11 @@ async def decide(
         "undo": None,  # 11-23 바로잡기 {from: rule|llm, marker, topic, removed}
         "widen": None,  # 11-23 넓히기 {from, marker, topic, cleared[]}
         "pick_zero": False,  # 11-23 고르기 교체로 0(막지 않음)
+        "question": bool(question),  # SPEC-012 HQ0 — 끝 「?」 + 1차 kinds(부르는 쪽이 셈)
+        "asked_pick": None,  # HQ1 — 물음 턴의 고르기 · 뺌(답 재료로만 · 칸에 안 넣음)
+        "out_pick": None,  # HQ2 — 명동점 진료항목 0 인 고르기(앞 목록 그대로)
+        "list_held": None,  # HL1 — 막은 칸 때문에 앞 목록을 보이는 중
+        "suspended": None,  # HP1 — 이 턴 셈에서 쉬게 한 칸
         "A": None,
     }
     dec = Decision(topics, cur["id"] if cur else None, rec)
@@ -275,6 +313,14 @@ async def decide(
             if last.get("turn") != n - 1:
                 continue
             rec["undo"]["topic"] = str(t["id"])
+            new_vals = turn_values(turn) - snap_values(last)
+            # SPEC-012 HU1 — 사진에 없는 새 값이 고르기(시술 · 제품) 칸에만 있으면 교체(되돌리지 않음 · 부위 · 고민 남음).
+            # 새 값이 부위 · 고민 칸에도 있으면 직전 변화가 다른 주제로 간 것 → 지금처럼 되돌린 뒤 적용(실물 67bb T4 「아니 이마에 써마지」)
+            new_conflict = {k for k in new_vals for sl in CONFLICT for v in turn.get(sl) or [] if _key(v) == k}
+            if not last.get("created") and new_vals and not new_conflict:
+                rec["undo"]["skipped"] = "new_value"
+                rec["undo"]["new"] = sorted(f"{a}:{b}" for a, b in new_vals)
+                continue
             if last.get("created"):
                 topics.remove(t)
                 rec["undo"]["removed"] = True
@@ -282,13 +328,26 @@ async def decide(
                     cur = max(topics, key=lambda x: x.get("created_turn") or 0) if topics else None
             else:
                 t["conditions"], t["items"] = copy.deepcopy(last["conditions"]), list(last.get("items") or [])
+                if last.get("list_held"):  # HL1 — 사진의 표지도 같이 되돌림
+                    t["list_held"] = copy.deepcopy(last["list_held"])
+                else:
+                    t.pop("list_held", None)
                 t.pop("last", None)
+                rec["undo"]["restored"] = True
             dec.changed = True
         dec.active = cur["id"] if cur else None
+        # SPEC-012 HU1 — 사진 복원 뒤 이번 턴 값이 모두 그 주제 칸에 있으면(「아니 아까 거」) 그대로 둔다(복원한 목록 · 표지 유지)
+        rt = _find(topics, rec["undo"].get("topic")) if rec["undo"].get("restored") else None
+        if rt is not None and rt is cur and turn_values(turn) <= {_key(v) for s in SLOTS for v in rt["conditions"].get(s) or []}:
+            rec.update(move="undo_restore", change=True, by="undo")
+            return dec
     # 0b — 넓히기: 지금 주제의 좁힘 칸을 비움(부위 · 고민 그대로)
     if cur is not None and (widen_mk or llm_m == "widen"):
         c0 = cur["conditions"]
-        cleared = [s for s in (*PICK, *NARROW, "exclude") if c0.get(s)] + (["country"] if c0.get("country") else [])
+        # SPEC-012 HW1 — 넓히기 = 시술 · 제품 · 국가 · 뺌만 비움 · 효과는 남기고 쉬던 효과는 되살림
+        cleared = [s for s in (*PICK, "exclude") if c0.get(s)] + (["country"] if c0.get("country") else [])
+        if c0.get("suspended"):
+            cleared.append("suspended")
         rec["widen"] = {
             "from": "rule" if widen_mk else "llm",
             "marker": widen_mk,
@@ -297,9 +356,11 @@ async def decide(
         }
         if cleared:
             snap(cur, n)
-            for s in (*PICK, *NARROW, "exclude"):
+            for s in (*PICK, "exclude"):
                 c0[s] = []
             c0["country"] = None
+            c0.pop("suspended", None)
+            cur.pop("list_held", None)
             cur["items"] = await count(c0) if not is_empty(c0) else []
             dec.changed = True
     if cur is not None and withdrawn:  # CD4 — 거둠은 지금 주제 칸에서 지운다(목록은 다시 센다)
@@ -315,6 +376,30 @@ async def decide(
         rec["move"] = move
         rec["llm_agree"] = None if llm_move in (None, "undo", "widen") else (llm_move == want)
 
+    # SPEC-012 HQ2(데이터) — 고르기 값의 명동점 진료항목이 0(밖 · 없는 시술)이면 고르기를 적용하지 않는다(앞 목록 그대로)
+    if cur is not None and any(turn.get(s) for s in PICK):
+        pk = empty()
+        for s in PICK:
+            pk[s] = copy.deepcopy(turn.get(s) or [])
+        if not await count(pk):
+            rec["out_pick"] = [v.get("name") or v.get("code") for s in PICK for v in turn.get(s) or []
+                               if v.get("from") != "product"]
+            turn = copy.deepcopy(turn)
+            for s in PICK:
+                turn[s] = []
+    # SPEC-012 HQ1 — 물음(끝 「?」 + 1차 kinds)이고 부위 · 고민 값이 모두 지금 주제 값과 같거나 없으면 그대로(고르기 · 뺌은 답 재료로만)
+    if question and cur is not None:
+        cc = cur.get("conditions") or {}
+        same_sc = all(_same_value(v, cc.get(s) or []) for s in ("site", "concern") for v in turn.get(s) or []
+                      if v.get("table") != "name")
+        if same_sc:
+            asked = [v.get("name") or v.get("code") for s in PICK for v in turn.get(s) or [] if v.get("from") != "product"]
+            ex = [v.get("name") or v.get("code") for v in turn.get("exclude") or []]
+            if asked or ex:
+                rec["asked_pick"] = {"pick": asked, "exclude": ex}
+            rec["info"] = True
+            agree("same")
+            return dec
     # 1 — 칸 0 · 정보 질문
     if is_empty(turn):
         agree("same")
@@ -398,7 +483,8 @@ def snap(t: dict, n: int) -> None:
     """\ub418\ub3cc\ub9ac\uae30 \uc7ac\ub8cc \u2014 \uc774 \ud134\uc5d0 \ucc98\uc74c \ubc14\ub00c\uae30 \uc804 \uc0c1\ud0dc(\uac19\uc740 \ud134 \ub450 \ubc88\uc9f8 \ubc14\ub01c\uc740 \ub36e\uc9c0 \uc54a\uc74c)."""
     if (t.get("last") or {}).get("turn") == n:
         return
-    t["last"] = {"turn": n, "conditions": copy.deepcopy(t["conditions"]), "items": list(t.get("items") or [])}
+    t["last"] = {"turn": n, "conditions": copy.deepcopy(t["conditions"]), "items": list(t.get("items") or []),
+                 "list_held": copy.deepcopy(t.get("list_held"))}
 
 
 async def _deepen(
@@ -406,8 +492,26 @@ async def _deepen(
 ):
     """깊게 — 채운 칸으로 다시 셈 · 고르기(시술 · 제품) 교체로 0 이면 그대로 따름(11-23) · 그 밖 0 이면 이번 턴 칸을 하나씩
     빼 본다(LS2 · 막은 값은 칸에 남기지 않음)."""
+    if not getattr(count, "__wrapped_count__", False):
+        count = suspend_aware(count)
     base = None if created else copy.deepcopy(cur["conditions"])
     merged = merge(base, turn)
+    # SPEC-012 HP1 — 이번 턴 고르기 이름 가운데 효과 교집합에서 0 이 되는 이름이 있으면 효과는 칸에 두고 셈에서만 쉰다
+    picks = [(s, v) for s in PICK for v in turn.get(s) or [] if v.get("from") != "product" and v.get("table") != "name"]
+    if picks and merged.get("effect") and "effect" not in (merged.get("suspended") or []):
+        dropped = []
+        for s, v in picks:
+            trial = copy.deepcopy(merged)
+            for s2 in PICK:
+                trial[s2] = [v] if s2 == s else []
+            if not await count(trial):
+                no_eff = copy.deepcopy(trial)
+                no_eff["effect"] = []
+                if await count(no_eff):
+                    dropped.append(v.get("name") or v.get("code"))
+        if dropped:
+            merged["suspended"] = ["effect"]
+            dec.rec["suspended"] = {"slots": ["effect"], "names": dropped}
     a_codes = await count(merged) if not is_empty(merged) else []
     dec.rec["A"] = len(a_codes)
     dec.changed = True
@@ -417,6 +521,7 @@ async def _deepen(
         snap(cur, n)
     if a_codes:
         cur["conditions"], cur["items"] = merged, list(a_codes)
+        cur.pop("list_held", None)
         return dec
     if not created and any(turn.get(s) for s in PICK):
         cur["conditions"], cur["items"] = merged, []
@@ -450,6 +555,9 @@ async def _deepen(
         return dec
     if cur["items"]:
         dec.ls = "LS1"
+        if blocked.get("slot") != "all":  # SPEC-012 HL1 — 조건은 kept · 목록은 앞 목록 → 표지
+            cur["list_held"] = {"slot": blocked["slot"], "values": list(blocked.get("values") or [])}
+            dec.rec["list_held"] = copy.deepcopy(cur["list_held"])
     else:
         dec.ls = "LS3"
         cur["items"] = list(rest or [])
@@ -534,6 +642,8 @@ async def split_decide(
         "split": [],
     }
     dec = Decision(topics, cur["id"] if cur else None, rec, changed=True)
+    count = suspend_aware(count)
+    rec["split_blocked"] = []  # SPEC-012 HS2 — 0 짝(그 부위는 명동점 진료항목 0 · 주제 안 만듦)
     cur_orig = copy.deepcopy(cur["conditions"]) if cur is not None else None
     cur_sites = {v.get("code") for v in (cur_orig or {}).get("site") or []}
     reused = False
@@ -550,6 +660,9 @@ async def split_decide(
             ]
             cond = merge(cond, turn)
             got = await count(cond)
+            if not got:
+                rec["split_blocked"].append({"site": sub["site"], "values": cond_names_of(turn)})
+                continue
             if not reused:
                 snap(cur, n)
                 cur["conditions"], cur["items"] = cond, list(got)
@@ -571,10 +684,16 @@ async def split_decide(
                 t = hold[-1]
                 m2 = merge(t["conditions"], turn)
                 got = await count(m2)
+                if not got:
+                    rec["split_blocked"].append({"site": sub["site"], "values": cond_names_of(turn)})
+                    continue
                 snap(t, n)
                 t["conditions"], t["items"] = m2, list(got)
             else:
                 got = await count(turn)
+                if not got:
+                    rec["split_blocked"].append({"site": sub["site"], "values": cond_names_of(turn)})
+                    continue
                 t = {
                     "id": _new_id(topics),
                     "conditions": copy.deepcopy(turn),
@@ -597,4 +716,11 @@ async def split_decide(
         )
         last_id = t["id"]
     dec.active = last_id
+    if rec["split_blocked"]:
+        dec.blocked = {"slot": "split", "sites": [b["site"] for b in rec["split_blocked"]],
+                       "values": [v for b in rec["split_blocked"] for v in b["values"]], "without_n": None}
     return dec
+
+
+def cond_names_of(c: dict) -> list[str]:
+    return [v.get("name") or v.get("code") for s in SLOTS for v in c.get(s) or [] if v.get("from") != "product"]

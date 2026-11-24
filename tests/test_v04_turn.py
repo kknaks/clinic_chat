@@ -60,7 +60,10 @@ def test_s8_t15_failures(tmp_path, fake_cli, monkeypatch, case):
         assert row["end_state"] == "입구 없음" and "done" in kinds and "turn_error" not in kinds
         assert r.fj.requests == [] and not [p for t, p in r.hub.requests if t == "resolve" and p.get("text")]
         n = len(understand_calls(r.log))
-        assert n == 0 if case == "list" else (n <= 1 if case == "timeout" else n == 1)  # 재시도 0
+        # 고침 5(코디 ①) — JSON 깨짐만 같은 입력으로 한 번 다시 부른다(두 번 다 깨지면 그대로 실패) · 그 밖 재시도 0
+        assert n == 0 if case == "list" else (n <= 1 if case == "timeout" else (n == 2 if case == "json" else n == 1))
+        if case == "json":
+            assert u["retry"]["kind"] == "json" and u["retry"]["ok"] is False
     finally:
         r.close()
 

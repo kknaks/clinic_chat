@@ -52,7 +52,7 @@ def lines_of(text, label):
 
 
 def test_prompt_kos_section():
-    assert KOS["block_header"] and "{code}" in KOS["fig_marker"] and len(KOS["rules"]) == 18
+    assert KOS["block_header"] and "{code}" in KOS["fig_marker"] and len(KOS["rules"]) == 27  # SPEC-012 R17 ~ R21 · 고침 2 R22 ~ R24 · 고침 3 R25
     assert any(r.startswith("R11.") for r in KOS["rules"]) and load(PROMPT).version == "0.6.0-draft"
     r10 = [r for r in KOS["rules"] if r.startswith("R10.")][0]
     assert "장바구니" in r10 and "재시술 간격" in r10  # S-2 — R10 나눔
@@ -236,14 +236,14 @@ def hub_with_modal():
     return h
 
 
-def understand(targets) -> str:
+def understand(targets, kinds=(), kind="new") -> str:
     raw = json.dumps(
         {
             "targets": [{"table": t, "code": c, "sure": True} for t, c in targets],
-            "kind": "new",
+            "kind": kind,
             "sites": [],
             "withdraw": [],
-            "kinds": [],
+            "kinds": list(kinds),
             "out": False,
         },
         ensure_ascii=False,
@@ -290,11 +290,18 @@ def test_turn_block_pairs_figure_ledger(tmp_path, fake_cli):
         row2, _, _ = r.turn("가짜보톡스시술 또")
         assert row2["llm"]["kos_block"]["pairs"] == [] and "ZZ-BTX-A" not in row2["llm"]["kos_block"]["codes"]  # LC5
         (fake_cli[1] / "understand.json").write_text(
-            understand([]).replace('"kind": "new"', '"kind": "talk"'), encoding="utf-8"
+            understand([], kinds=["combo"], kind="talk"), encoding="utf-8"
         )
-        row3, _, _ = r.turn("같이 받아도 돼요?")  # S-2 — 대상 0 · 장바구니 쌍 줄 다시
+        row3, _, _ = r.turn("같이 받아도 돼요?")  # S-2 — 대상 0 · 장바구니 쌍 줄 다시(SPEC-012 — 1차 kinds combo 로 판정 · 낱말 아님)
         assert row3["llm"]["kos_block"]["pairs"] == ["ZPRC-001|ZPRC-010"] and row3["llm"]["kos_block"]["force_cart"]
         assert row3["consult"]["topic"]["move"] == "same" and not (row3.get("items") or {}).get("blocked")
+        # 검수 P2-2 — 같은 낱말 말이라도 1차 kinds 가 비면(같이 받기 물음 아님) 짝 줄을 다시 싣지 않는다 · kinds combo 면 다시
+        (fake_cli[1] / "understand.json").write_text(understand([], kinds=[], kind="talk"), encoding="utf-8")
+        row4, _, _ = r.turn("같이 받아도 돼요?")
+        assert row4["llm"]["kos_block"]["pairs"] == [] and not row4["llm"]["kos_block"]["force_cart"]
+        (fake_cli[1] / "understand.json").write_text(understand([], kinds=["same_day"], kind="talk"), encoding="utf-8")
+        row5, _, _ = r.turn("오늘 같이 받을 수 있어?")
+        assert row5["llm"]["kos_block"]["pairs"] == ["ZPRC-001|ZPRC-010"] and row5["llm"]["kos_block"]["force_cart"]
         # P1-1 (가) — 가격 숫자 0 범위 = `cart` · `rec` · `items` · `consult` 칸(프롬프트 보관본은 블록 사본이라 가격이 듦)
         for rr in r.rows():
             for k in ("items", "consult"):

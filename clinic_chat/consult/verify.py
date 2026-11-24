@@ -40,6 +40,8 @@ class Accepted:
     withdraw: list[str] = field(default_factory=list)
     kinds: list[str] = field(default_factory=list)
     out: bool = False
+    out_names: list[str] = field(default_factory=list)  # 고침 3(r3 P2-4) — 손님이 댄 목록 밖 시술 이름(손님 말 그대로 · 소넷 판단)
+    out_cleared: list[str] = field(default_factory=list)  # 고침 4 — 명동점 이름 일치가 있어 앱이 거둔 out 이름(장부)
     dropped: list[dict] = field(default_factory=list)
     merged: list[dict] = field(default_factory=list)
     added_from_sites: list[str] = field(default_factory=list)
@@ -61,6 +63,8 @@ class Accepted:
             "withdraw": self.withdraw,
             "kinds": self.kinds,
             "out": self.out,
+            "out_names": self.out_names,
+            "out_cleared": self.out_cleared,
             "country": self.country,
             "topic": self.topic,
             "exclude": self.exclude,
@@ -117,7 +121,8 @@ def parsed_view(d: dict) -> dict:
     """장부 `consult.understand.parsed` — 읽은 그대로(여섯 칸 + 0.5 `country` · `topic`)."""
     return {
         k: d.get(k)
-        for k in ("targets", "kind", "sites", "withdraw", "kinds", "out", "country", "topic", "exclude", "pairs", "fetch")
+        for k in ("targets", "kind", "sites", "withdraw", "kinds", "out", "out_names", "country", "topic", "exclude", "pairs",
+                  "fetch")
     }
 
 
@@ -304,6 +309,9 @@ def verify(
     got = {k for k in (rk if isinstance(rk, list) else []) if isinstance(k, str)}
     a.kinds = [k for k in KIND_CODES if k in got]
     a.out = parsed.get("out") if isinstance(parsed.get("out"), bool) else False
+    # 고침 3(r3 P2-4) — 목록 밖 이름: 글자 칸만 받는다(빈 값 · 같은 값 한 번). 명동점 진료항목 0 인지는 앱이 매핑으로 다시 본다.
+    on = parsed.get("out_names")
+    a.out_names = list(dict.fromkeys(x.strip() for x in (on if isinstance(on, list) else []) if isinstance(x, str) and x.strip()))
     a.fetch = fetch_of(parsed.get("fetch"))  # SPEC-011 JC1 ~ JC5
     a.targets, a.sites, a.withdraw = tg, sites, wd
     if (

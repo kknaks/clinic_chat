@@ -80,6 +80,29 @@ def pick(
     return out
 
 
+def site_first(kos: KosMap, codes: list[str], multi: list[dict] | None = None) -> dict | None:
+    """SPEC-012 HX1 — 부위 칸 없는 주제에서 부위를 먼저 묻는 축. ① 고민 부위가 여럿(HA1 `multi`) → 그 부위들 ② 목록이 얼굴 · 몸
+    두 갈래(매핑 부위의 region)에 걸침 → 1 단(얼굴 뿌리 · 몸 뿌리). 아니면 None(지금 AX 규칙)."""
+    if multi:
+        sites = list(dict.fromkeys(s for m in multi for s in m.get("sites") or [] if s in kos.sites))
+        if len(sites) >= 2:
+            return {"axis": "site", "by": "HX1", "options": [
+                {"value": s, "name": kos.sites[s].get("name") or s, "n": None} for s in sites[:OPTIONS_MAX]],
+                "scores": {}, "excluded": {}, "skipped_axes": []}
+    roots = {k for k, v in kos.sites.items() if not v.get("parent_code")}
+    groups: dict[str, list[str]] = {}
+    for c in codes:
+        regs = {(kos.sites.get(sc) or {}).get("region") for sc in (kos.item.get(c) or {}).get("hub", {}).get("site_codes") or []}
+        for r in regs - {None}:
+            groups.setdefault(r, []).append(c)
+    if len(groups) < 2:
+        return None
+    root_of = {(kos.sites[k].get("region")): k for k in sorted(roots)}
+    opts = [{"value": root_of.get(r, r), "name": (kos.sites.get(root_of.get(r, "")) or {}).get("name") or r, "n": len(v)}
+            for r, v in sorted(groups.items(), key=lambda x: -len(x[1]))]
+    return {"axis": "site", "by": "HX1", "options": opts[:OPTIONS_MAX], "scores": {}, "excluded": {}, "skipped_axes": []}
+
+
 def level2(kos: KosMap, site: str) -> str:
     """AX3 — 부위를 2 단(얼굴 · 몸 바로 아래)으로 올림 · 1 단(얼굴 · 전신)과 몸 자체는 그대로."""
     if site not in kos.sites:

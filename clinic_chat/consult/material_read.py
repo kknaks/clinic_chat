@@ -15,7 +15,7 @@ from clinic_chat.columns.col_b import NO_B_ON, Walk, _end_check, _labels, same_d
 from clinic_chat.consult import kinds_pick as kp
 from clinic_chat.walk import end_state as es
 from clinic_chat.walk.breadth import BreadthError, read_calls
-from clinic_chat.walk.calls import Entry, depth_calls, depth_candidates, depth_kind, plan_calls
+from clinic_chat.walk.calls import SITE_NAME_OFF, Entry, depth_calls, depth_candidates, depth_kind, plan_calls
 from clinic_chat.walk.depth import DepthResult, rq1
 from clinic_chat.walk.entry import END_NO_ENTRY, END_OUT, EntryIncomplete
 from clinic_chat.walk.front import FrontResult, coverage_of_nodes
@@ -26,6 +26,21 @@ from clinic_chat.walk.material import Material, build, roster
 
 GATE = "gate_forced"
 LISTED = "listed_only"
+
+
+SAFETY_ALWAYS = ("adverse", "contraindication", "recovery")  # SPEC-012 HK1
+SAFETY_TARGET_TABLES = ("procedure", "modality", "procedure_case", "product")
+
+
+def safety_always(k, entries) -> None:
+    """SPEC-012 HK1(SPEC-011 UD5 글자대로) — 대상에 시술 · 계열 · 케이스 · 제품이 있으면 안전 종류를 늘 읽는다(낱말 목록 0 ·
+    필수 아님 · 범위 판단은 2차 HF2 가 holder 부위로)."""
+    if not any(e.table in SAFETY_TARGET_TABLES for e in entries):
+        return
+    for c in SAFETY_ALWAYS:
+        if c not in k.by and k.applicable.get(c):
+            k.by[c] = "safety_always"
+    k.kinds = [c for c in kp.KIND_CODES if c in k.by and k.applicable.get(c)]
 
 
 def entries_of(acc, site_codes: list[str], el) -> list[Entry]:
@@ -79,6 +94,15 @@ async def _depth(d, w: Walk, f: FrontResult) -> tuple[DepthResult, list[dict]]:
 
 
 async def build_walk(d, acc, site_codes: list[str], el) -> Walk:
+    """SPEC-012 HF1 — 상담 경로 걷기는 허브 부위 거르개(site_name) 없이 읽는다(이 걷기 안 모든 조회 · 깊이 조회 포함)."""
+    tok = SITE_NAME_OFF.set(True)
+    try:
+        return await _build_walk(d, acc, site_codes, el)
+    finally:
+        SITE_NAME_OFF.reset(tok)
+
+
+async def _build_walk(d, acc, site_codes: list[str], el) -> Walk:
     w = Walk()
     f = FrontResult()
     w.front = f
@@ -94,6 +118,7 @@ async def build_walk(d, acc, site_codes: list[str], el) -> Walk:
             f.coverage, f.build = await coverage_of_nodes(d.hub, [e.node for e in f.entries])
             fk = (getattr(acc, "fetch", None) or {}).get("kinds") or []  # SPEC-011 JC2 — 1차 `fetch.kinds`
             k = kp.decide(f.entries, acc.kinds, f.coverage, fetch_kinds=fk)
+            safety_always(k, f.entries)  # SPEC-012 HK1 — 상담 경로만(걷기 `_decide_kinds` 와 같은 결정은 그대로 두고 덧붙임)
             f.kinds, f.required, f.offered, f.by = k.kinds, k.required, k.offered, k.by
             f.ranges, f.attr_start, f.applicable_kinds, f.kinds_by = k.ranges, k.attr_start, k.applicable, k.kinds_by
             f.scope_gap = bool(acc.out)

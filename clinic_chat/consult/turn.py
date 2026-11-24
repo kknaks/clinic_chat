@@ -85,6 +85,17 @@ def fig_re(marker: str):
 
 
 _COUNTRY: dict[str, dict[str, str]] = {}  # 0.5 CD6 — gold_hash → 제품 국가(프로세스 캐시)
+_CASE_SITE: dict[tuple[str, str], str] = {}  # SPEC-012 HF2 — (gold_hash, 케이스) → 케이스 부위 코드(프로세스 캐시)
+
+
+def _usage_sum(a: dict | None, b: dict | None) -> dict:
+    """두 호출 토큰 합(칸마다 · 빈 값은 0 으로 보지 않고 둘 다 비면 None)."""
+    a, b = a or {}, b or {}
+    out = {}
+    for k in set(a) | set(b):
+        xs = [v for v in (a.get(k), b.get(k)) if isinstance(v, (int, float))]
+        out[k] = sum(xs) if xs else None
+    return out
 
 
 def _ms(t0: float) -> float:
@@ -195,9 +206,13 @@ async def run_turn(ctx: Ctx, conv: Conv, n: int, question: str, push: Push, *, c
         elif cs is not None:  # L4 · L5 · L7 — 객체 갱신 · 객체 기준 조회 · 시너지 · 빈 칸(메시지보다 먼저)
             await cs.after_walk(w)
             if w.end_state not in NO_B_ON:  # SPEC-011 — 2차 읽기(G6 은 이번 턴 주제를 본다 → 감지 뒤)
+                await cs.prep_case_sites(w)  # SPEC-012 HF2 — 케이스 holder 부위(허브 profile GET · 캐시)
                 cut = cs.fetch_cut(w)
                 on = s.chat_fetch_cut == "on"
                 tm = mat.renumber(w, conv.sent, conv.summaries, conv.next_n, v3=True, cut=cut if on else None,
+                                  branch_procs=(fr_mod.md_sets(ctx.kos).get("procedure")
+                                                if ctx.kos is not None and on and cs.fetch_plan is not None
+                                                and cs.fetch_plan.scope == "branch" else None),  # HN1 둘째 줄
                                   sent_names=conv.sent_names)
                 if not on:  # 끈 상태 — 판단만 기록(재생에서 인용 줄과 맞대 빠짐을 센다)
                     for ln in tm.new_lines:
@@ -393,6 +408,13 @@ class Consult:
         self.topics0, self.active0 = conv.last_topics(view=False)  # 11-23 — 턴 판단은 머리 누름(보기) 빼고 마지막 턴 주제
         self.dec: tp.Decision | None = None
         self.pairs_rec: dict | None = None  # 테스트 고침 E — 짝 판단 기록
+        self.ha1_rec: dict | None = None  # SPEC-012 HA1 — 고민 부위 보탬 기록
+        self.product_named_rec: list[dict] = []  # 고침 5(코디 ③) — 말한 제품 이름 → 시술 대신 제품
+        self.retry_rec: dict | None = None  # 고침 5(코디 ①) — 1차 JSON 깨짐 다시 부르기 기록
+        self.case_same_rec: list[dict] = []  # 고침 3(r3 P2-1) — 목록 안 케이스 = 같은 말
+        self.case_sites: dict[str, str] = {}  # SPEC-012 HF2 — 케이스 holder → 부위
+        self.case_site_calls = 0  # 허브 GET 수(매핑 밖 케이스만 · 장부 consult.fetch.case_site)
+        self.case_site_mapped = 0
         self.items_view: dict | None = None  # 0.5 `items` 이벤트 값(바뀐 턴만)
         self.items_rec: dict | None = None  # 0.5 장부 `items{…}`
         self.detect_error: dict | None = None
@@ -432,6 +454,20 @@ class Consult:
                 self.parsed = vf_mod.parse(self.raw.output_raw)
             except vf_mod.UnderstandJSONError as e:
                 self.uerr = {"kind": "json", "detail": str(e)}
+        if self.uerr is not None and self.uerr.get("kind") == "json":
+            # 고침 5(코디 ①) — 1차 출력 JSON 이 깨졌으면 같은 입력으로 한 번 다시 부른다. 그래도 깨지면 고침 2 와 같은 동작
+            # (앞 주제 · 조건 · 목록 유지 · 첫 턴이면 FL2 되묻기). 장부 `understand.retry` · 토큰은 두 호출 합
+            first = self.raw
+            self.raw = await und.call(s, system, msg)
+            self.retry_rec = {"kind": "json", "first_raw": first.output_raw or "", "first_ms": first.ms}
+            self.raw.usage = _usage_sum(first.usage, self.raw.usage)
+            self.uerr = self.raw.error
+            if self.uerr is None:
+                try:
+                    self.parsed = vf_mod.parse(self.raw.output_raw)
+                except vf_mod.UnderstandJSONError as e:
+                    self.uerr = {"kind": "json", "detail": str(e)}
+            self.retry_rec["ok"] = self.uerr is None
         self.understand_ms = _ms(t0)
         if self.uerr is not None:  # FL2 — 대상 없이 되묻는다(「입구 없음」 · 새 문구 0)
             w = Walk()
@@ -440,6 +476,7 @@ class Consult:
         self.acc = acc = vf_mod.verify(self.parsed, self.el, self.obj, first_turn=self.prev_row is None,
                                        talk_streak=tk.talk_streak(self.conv.turns), talk_max=s.chat_talk_max,
                                        prev_row=self.prev_row, prev_topic_ids=self._prev_topic_ids())
+        self._clear_out_named(acc)
         self.kind = acc.kind
         self.turn_kind = {"kind": acc.kind, "from": acc.kind_from}
         self.follow = acc.follow_target
@@ -512,21 +549,35 @@ class Consult:
     async def _detect(self) -> None:
         """0.5 §5-1 ② ~ ⑦ — 이름 일치 · 이번 턴 조건 · 주제 고르기(TP2 · TP3 · TP14) · 칸 → 진료항목 · LS · 장부 · 화면 값."""
         kos, acc = self.ctx.kos, self.acc
+        if kos is not None and self.uerr is not None and self.topics0:
+            # 고침 2 — 1차 이해 실패(시간 초과 · JSON 깨짐)면 앞 주제 · 조건 · 목록을 그대로 둔다(턴을 망치지 않음 · 장부 표지)
+            cur0 = self._cur_topic()
+            self.dec = tp.Decision(self.topics0, self.active0, {"change": False, "move": "same",
+                                                                "understand_error": self.uerr.get("kind")})
+            self.items_rec = {"codes": list((cur0 or {}).get("items") or []), "conditions": (cur0 or {}).get("conditions"),
+                              "turn_conditions": None, "understand_error": self.uerr.get("kind")}
+            return
         if kos is None or acc is None or self.uerr is not None:
             return
         t0 = time.perf_counter()
         talk = acc.kind == "talk"
         hits = [] if talk else dt.name_hits(kos, self.question)
-        turn, order = tp.turn_conditions([] if talk else acc.targets, hits, None if talk else acc.country,
-                                         follow=acc.follow_target, exclude=list(acc.exclude or []))
         gh = (self.el.gold_hash if self.el is not None else "") or ""
         det = dt.Detector(kos, self.d.hub, cache={}, countries=_COUNTRY.setdefault(gh, {}))
+        # SPEC-012 HA1 — 고민 부위(허브 concern_sites 「직접」)를 1차 대상 단계에서 부위로(찢기 · 이번 턴 조건이 같은 값을 봄)
+        targets = [] if talk else list(acc.targets)
+        if not talk:
+            targets, self.ha1_rec = await self._concern_site_targets(kos, det, targets)
+            targets, self.case_same_rec = await self._case_same_targets(kos, targets, det)
+            targets, self.product_named_rec = await self._product_named_targets(kos, targets, det)
+        turn, order = tp.turn_conditions(targets, hits, None if talk else acc.country,
+                                         follow=acc.follow_target, exclude=list(acc.exclude or []))
         await self._product_procedures(kos, det, turn)
 
         async def count(conds: dict) -> list[str]:
-            return (await det.items(conds)).codes
+            return (await det.items(tp.active_conds(conds))).codes  # SPEC-012 HP1 — 쉬는 칸 뺌
 
-        subs, self.pairs_rec = (None, None) if talk else await self._split_subs(kos, det, acc)
+        subs, self.pairs_rec = (None, None) if talk else await self._split_subs(kos, det, acc, targets)
         if subs:  # 테스트 고침 E — 부위마다 다른 시술 · 제품 짝 → 주제를 찢는다
             self.dec = dec = await tp.split_decide(self.topics0, self.active0, subs, n=self.n, count=count,
                                                    llm=acc.topic)
@@ -535,9 +586,16 @@ class Consult:
             self.dec = dec = await tp.decide(self.topics0, self.active0, turn, order, n=self.n,
                                              utterance=self.question, llm=None if talk else acc.topic,
                                              withdrawn=list(acc.withdraw), count=count, max_n=self.s.chat_topic_max,
-                                             info=tp.info_question(acc.kinds, acc.out, self.question))
+                                             info=tp.info_question(acc.kinds, acc.out, self.question),
+                                             question=self._is_question(acc))
             if self.pairs_rec:
                 dec.rec["pairs"] = self.pairs_rec
+        if self.ha1_rec:
+            dec.rec["ha1"] = self.ha1_rec
+        if self.case_same_rec:
+            dec.rec["case_same"] = self.case_same_rec  # 고침 3(r3 P2-1) — 장부
+        if self.product_named_rec:
+            dec.rec["product_named"] = self.product_named_rec  # 고침 5(코디 ③) — 장부
         if det.errors:  # 검수 P1-1 — 허브 오류는 「0 결과」 가 아니다: 이 턴은 주제 · 조건 · 목록을 바꾸지 않는다
             cur0 = self._cur_topic()
             self.dec = tp.Decision(self.topics0, self.active0, {**dec.rec, "change": False, "hub_error": True})
@@ -547,7 +605,8 @@ class Consult:
                               "ms": _ms(t0), "hub_calls": det.hub_calls}
             return
         cur = next((t for t in dec.topics if str(t["id"]) == str(dec.active)), None)
-        res = await det.items(cur["conditions"]) if cur and not tp.is_empty(cur["conditions"]) else dt.Result()
+        res = (await det.items(tp.active_conds(cur["conditions"])) if cur and not tp.is_empty(cur["conditions"])
+               else dt.Result())
         codes = list((cur or {}).get("items") or [])
         added_sites = self._add_sites(kos, det, cur, turn)
         self.items_rec = {"codes": codes, "by": {c: res.by.get(c, []) for c in codes},
@@ -561,15 +620,211 @@ class Consult:
                           "ms": _ms(t0), "hub_calls": det.hub_calls}
         if (dec.topics, dec.active) != (self.topics0, self.active0) or dec.changed:
             self.items_view = iv_mod.topics_view(kos, dec.topics, dec.active, max_n=self.s.chat_topic_max)
-        await self._axis(kos, gh, cur, codes)
+        await self._axis(kos, gh, cur, codes, multi=(self.ha1_rec or {}).get("multi"))
 
-    async def _split_subs(self, kos, det, acc) -> tuple[list[dict] | None, dict | None]:
-        """테스트 고침 E(11-23) — 부위 → 시술 · 제품 짝. 규칙(한 문장 안 차례 — `tp.pair_groups`)이 찢기면 규칙, 아니고 이해 호출
-        `pairs` 가 찢기면 이해 호출 짝(같은 꼴로 묶어 같은 판정 `tp.should_split`). 고민은 그 부위 고민만 따라간다 — 허브
-        `concern_candidates` 응답 머리의 고민 부위(「직접」)가 그 부위와 같거나 조상 · 자손이면 그 부위 고민 · 부위 없는 고민은
-        모든 짝에. → (짝마다 {turn, site, keep_concern} | None, 장부 `topic.pairs{from, groups}` | None)."""
-        rule = tp.pair_groups(acc.targets)
-        by = {(t["table"], t["code"]): t for t in acc.targets}
+    def _clear_out_named(self, acc) -> None:
+        """고침 4 — 1차가 `out = true` 로 댄 목록 밖 이름(`out_names`)이 모두 명동점 진료항목 이름 일치(NM · 매핑 데이터)를
+        (이름 전체가 같음) 가지면 그 이름은 목록 밖이 아니다: 앱이 `out` 을 거둔다(장부 `accepted.out_cleared`). 이름 일치가 0 인 이름이 하나라도 있으면 그대로."""
+        kos = self.ctx.kos
+        if kos is None or not acc.out or not acc.out_names:
+            return
+        def branch_name(nm: str) -> bool:  # 그 이름 전체가 명동점 진료항목 · KOS 시술 이름과 같음(일반 이름 뺌)
+            return any(not h.generic and dt.compact(h.name) == dt.compact(nm) for h in dt.name_hits(kos, nm))
+
+        if all(branch_name(nm) for nm in acc.out_names):
+            acc.out_cleared, acc.out_names, acc.out = list(acc.out_names), [], False
+
+    def _is_question(self, acc) -> bool:
+        """SPEC-012 HQ0 — 물음 = 이번 말 끝 부호가 「?」 이고 1차 `kinds`(정보 종류 · 소넷 판단)가 비지 않음. 어미 · 낱말 목록 안 씀."""
+        q = (self.question or "").rstrip()
+        return q.endswith(("?", "\uff1f")) and bool(acc.kinds)
+
+    async def _case_same_targets(self, kos, targets: list[dict], det=None) -> tuple[list[dict], list[dict]]:
+        """고침 3(r3 P2-1) — 「목록 안 케이스 = 같은 말」(데이터만). 1차가 낸 케이스 대상이
+        ① 그 케이스의 명동점 진료항목(매핑 `case_codes`)이 모두 지금 목록 안에 있고
+        ② 그 진료항목들의 매핑 시술(`procedure_codes`)이 모두 지금 주제 시술 칸 값이며
+           — 고침 4: 주제 시술 칸 값이 계열(`modality`)이면 그 진료항목들이 모두 그 계열 아래(허브 `scope modality:` → 시술 →
+           진료항목 · `Detector.modality`)일 때 · 계열 → 그 아래 시술 · 케이스 포함 관계
+        ③ 그 진료항목들의 매핑 부위(`site_codes`)가 모두 지금 주제 부위 칸 값이고
+        ④ 케이스 이름이 이번 말 안에 그대로 있지 않으면(pick 규칙 13 — 케이스는 이름을 그대로 말했을 때만 · 이름 일치 NM2 꼴),
+        새 고르기(좁히기)가 아니라 지금 주제 시술(계열)을 되풀이한 말로 보고 케이스를 그 주제 칸 값(시술 · 계열)으로 바꾼다.
+        1차가 시술 · 계열 · 케이스 어느 쪽을 내도 지금 목록 안이면 같은 목록이 된다."""
+        cur = self._cur_topic()
+        conds = (cur or {}).get("conditions") or {}
+        items_now = set((cur or {}).get("items") or [])
+        procs = [v for v in conds.get("procedure") or [] if v.get("table") in ("procedure", "modality") and v.get("code")]
+        sites_now = {v.get("code") for v in conds.get("site") or [] if v.get("code")}
+        if not items_now or not procs or not sites_now:
+            return targets, []
+        proc_codes = {v["code"] for v in procs if v["table"] == "procedure"}
+        mods: dict[str, set[str]] = {}  # 계열 코드 → 그 아래 진료항목(허브 · 오류면 그 계열은 안 봄)
+        for v in procs:
+            if v["table"] == "modality" and det is not None:
+                try:
+                    mods[v["code"]] = await det.modality(v["code"])
+                except Exception:  # noqa: BLE001 — 계열 아래를 못 읽으면 그 계열로는 같은 말로 보지 않음
+                    continue
+        said = dt.compact(self.question or "")
+        out: list[dict] = []
+        rec: list[dict] = []
+        for t in targets:
+            if t.get("table") != "procedure_case" or not t.get("code"):
+                out.append(t)
+                continue
+            its = list(kos.by_case.get(t["code"]) or ())
+            hubs = [(kos.item.get(c) or {}).get("hub") or {} for c in its]
+            p_of = {p for h in hubs for p in h.get("procedure_codes") or []}
+            s_of = {s for h in hubs for s in h.get("site_codes") or []}
+            nm = dt.compact(t.get("name") or "")
+            base = (its and set(its) <= items_now and s_of and s_of <= sites_now
+                    and not (len(nm) >= 2 and nm in said))
+            if not base:
+                out.append(t)
+                continue
+            to: list[dict] = []
+            if p_of and p_of <= proc_codes:
+                to = [v for v in procs if v["table"] == "procedure" and v["code"] in p_of]
+            else:
+                to = [v for v in procs if v["table"] == "modality" and set(its) <= mods.get(v["code"], set())]
+            if not to:
+                out.append(t)
+                continue
+            for v in to:
+                if not any(x.get("table") == v["table"] and x.get("code") == v["code"] for x in out):
+                    out.append({"table": v["table"], "code": v["code"], "name": v.get("name") or "",
+                                "sure": bool(t.get("sure")), "from": "case_same"})
+            rec.append({"case": t["code"], "to": sorted(f"{v['table']}:{v['code']}" if v["table"] == "modality"
+                                                        else v["code"] for v in to)})
+        return out, rec
+
+    def _said_product_names(self, kos, said: str) -> list[tuple[str, str]]:
+        """마감(r4 P2-5) — 말에 그대로 있는 허브 제품 이름(코드, 이름). 이름 대조는 모든 목록 이름(허브 목록 모든 표 · 명동점
+        진료항목 · KOS 시술 이름)에서 긴 이름이 이긴다(NM3 꼴 — 「아이써마지」 안의 「써마지」 는 제품 이름으로 안 셈).
+        시술 · 계열 이름과 같은 제품 이름(일반 이름 — 「보톡스」)은 제품으로 바꾸지 않는다."""
+        names: dict[str, set[tuple[str, str]]] = {}  # compact 이름 → {(표, 코드)}
+        for (tb, c), it in self.el.items.items():
+            k = dt.compact(it.name)
+            if len(k) >= 2:
+                names.setdefault(k, set()).add((tb, c))
+        for it in getattr(kos, "items", None) or []:
+            k = dt.compact(it.get("kos_item_name") or "")
+            if len(k) >= 2:
+                names.setdefault(k, set()).add(("kos_item", it.get("kos_item_code") or ""))
+        for g in getattr(kos, "groups", None) or []:
+            k = dt.compact(g.get("kos_procedure") or "")
+            if len(k) >= 2:
+                names.setdefault(k, set()).add(("kos_procedure", k))
+        spans: list[tuple[int, int, str]] = []
+        for k in names:
+            i = said.find(k)
+            while i >= 0:
+                spans.append((i, i + len(k), k))
+                i = said.find(k, i + 1)
+        out: list[tuple[str, str]] = []
+        for i, j, k in spans:
+            if any(a <= i and j <= b and (b - a) > (j - i) for a, b, _ in spans):
+                continue  # 더 긴 이름이 덮음
+            tabs = {tb for tb, _ in names[k]}
+            if "product" not in tabs or tabs & {"procedure", "modality"}:
+                continue  # 제품 이름 아님 · 시술 · 계열과 같은 일반 이름
+            for tb, c in sorted(names[k]):
+                if tb == "product" and (c, self.el.name("product", c)) not in out:
+                    out.append((c, self.el.name("product", c)))
+        return out
+
+    async def _product_named_targets(self, kos, targets: list[dict], det) -> tuple[list[dict], list[dict]]:
+        """고침 5(코디 ③) — 손님 말에 명동점 제품 이름(허브 목록 `product` 이름 · 공백 지운 글자 · 두 글자 이상 · 겹치면 긴 이름)이
+        그대로 있고, 1차가 그 제품 대신 그 제품의 시술(그 제품 진료항목들의 매핑 `procedure_codes`)을 냈으면 그 시술 대상을 제품으로 바꾼다
+        (이름 일치 = 데이터 판정 · 시술 이름 자체를 말했으면 그대로). 그 제품의 명동점 진료항목이 0 이거나 허브 오류면 바꾸지 않는다."""
+        if self.el is None or det is None:
+            return targets, []
+        said = dt.compact(self.question or "")
+        procs = [t for t in targets if t.get("table") == "procedure" and t.get("code")
+                 and not (len(dt.compact(t.get("name") or self.el.name("procedure", t["code"]))) >= 2
+                          and dt.compact(t.get("name") or self.el.name("procedure", t["code"])) in said)]
+        if not said or not procs:
+            return targets, []
+        named = self._said_product_names(kos, said)
+        have = {(t.get("table"), t.get("code")) for t in targets}
+        swap: dict[str, dict] = {}
+        rec: list[dict] = []
+        for code, nm in named:
+            try:
+                its = await det.product(code)
+            except Exception:  # noqa: BLE001 — 제품 진료항목을 못 읽으면 바꾸지 않음
+                continue
+            p_of = {p for c in its for p in ((kos.item.get(c) or {}).get("hub") or {}).get("procedure_codes") or []}
+            for t in procs:
+                if its and t["code"] in p_of and t["code"] not in swap:
+                    swap[t["code"]] = {"table": "product", "code": code, "name": nm, "sure": True,
+                                       "from": "product_named"}
+                    rec.append({"procedure": t["code"], "to": code, "name": nm})
+        if not swap:
+            return targets, []
+        out: list[dict] = []
+        for t in targets:
+            if t.get("table") == "procedure" and t.get("code") in swap:
+                nv = swap[t["code"]]
+                if ("product", nv["code"]) not in have and nv not in out:
+                    out.append(nv)
+                continue
+            out.append(t)
+        return out, rec
+
+    async def _concern_site_targets(self, kos, det, targets: list[dict]) -> tuple[list[dict], dict | None]:
+        """SPEC-012 HA1 — 이번 턴 고민마다 허브 고민 부위(「직접」)로 이번 턴 부위를 정한다(결정론):
+        1차 부위 없음 → 고민 부위 · 고민 부위가 1차 부위의 자손 → 자손으로 바꿈 · 같거나 조상 → 1차 부위 그대로 · 다른 가지 → 더함.
+        고민 부위가 둘 이상이고 1차 부위가 없으면 부위를 넣지 않는다(점만 · 다음 질문 축 = 부위 — HX1)."""
+        stated = [t for t in targets if t.get("table") == "site"]
+        out = list(targets)
+        rec: dict = {"added": [], "replaced": [], "multi": []}
+        for t in [x for x in targets if x.get("table") == "concern"]:
+            try:
+                await det.concern(t["code"], dt.Result())
+            except Exception:  # noqa: BLE001 — 고민 부위를 못 읽으면 그 고민은 부위 보탬 없음
+                continue
+            cs = [c for c in det.concern_sites(t["code"]) if c in kos.sites]
+            if not cs:
+                continue
+            if len(cs) >= 2 and not stated:
+                rec["multi"].append({"concern": t["code"], "sites": cs})
+                continue
+            for c in cs:
+                codes_now = [x.get("code") for x in out if x.get("table") == "site"]
+                anc_c = set(kos.ancestors(c))
+                if c in codes_now:  # 고침 2 — 1차가 고민 부위를 이미 냈어도 그 조상 1차 부위는 지운다(좁은 쪽 하나 · 실행마다 같게)
+                    drop = [x for x in out if x.get("table") == "site" and x.get("code") in anc_c]
+                    for x in drop:
+                        out.remove(x)
+                    if drop:
+                        rec["replaced"].append({"from": [x.get("code") for x in drop], "to": c})
+                    continue
+                parents = [x for x in out if x.get("table") == "site" and x.get("code") in anc_c]
+                if any(c in set(kos.ancestors(str(x.get("code")))) for x in out if x.get("table") == "site"):
+                    continue  # 고민 부위가 1차 부위의 조상 → 1차 부위 그대로
+                v = {"table": "site", "code": c, "name": (kos.sites.get(c) or {}).get("name") or "", "sure": True,
+                     "from": "concern_site"}
+                if parents:  # 자손으로 바꿈(좁은 쪽 하나)
+                    i = out.index(parents[0])
+                    out[i] = v
+                    for x in parents[1:]:
+                        out.remove(x)
+                    rec["replaced"].append({"from": [x.get("code") for x in parents], "to": c})
+                else:
+                    out.append(v)
+                    rec["added"].append(c)
+        return out, (rec if any(rec.values()) else None)
+
+    async def _split_subs(self, kos, det, acc, targets: list[dict] | None = None) -> tuple[list[dict] | None, dict | None]:
+        """테스트 고침 E(11-23) + SPEC-012 HS1 · HS2 — 부위 → (시술 · 제품 · 고민) 짝.
+        규칙(한 문장 안 차례 — `tp.pair_groups`) 또는 이해 호출 `pairs` 로 부위마다 시술 · 제품을 묶고, 고민은 허브 고민 부위
+        (「직접」)가 그 부위와 같거나 조상 · 자손이면 그 부위 짝에 붙인다. 일반 고민(고민 부위 없음 · 예 「주름」)은 허브
+        `concern_candidates` 하위 고민 가운데 그 부위에 닿는 것으로 바꿔 붙인다(HS1). 부위 짝이 둘 이상이고 짝 내용(시술 · 제품 ·
+        고민)이 서로 다르면 찢는다(부위보다 먼저 나온 시술 · 제품이 있으면 모든 부위에 걸리는 말이라 찢지 않음).
+        → (짝마다 {turn, site, keep_concern} | None, 장부 `topic.pairs{from, groups}` | None)."""
+        targets = list(acc.targets if targets is None else targets)
+        rule = tp.pair_groups(targets)
+        by = {(t["table"], t["code"]): t for t in targets}
         llm_groups: list[dict] = []
         for p in acc.pairs or []:
             st = by.get(("site", p["site"])) or {"table": "site", "code": p["site"], "name": ""}
@@ -579,41 +834,93 @@ class Consult:
                 llm_groups.append({"site": st, "picks": [pk]})
             elif pk not in g["picks"]:
                 g["picks"].append(pk)
-        src, groups = (("rule", rule) if tp.should_split(rule)
-                       else ("llm", llm_groups) if tp.should_split(llm_groups) else (None, None))
-        rec = {"from": src, "rule": [[g["site"].get("name") if g["site"] else None, [p.get("name") for p in g["picks"]]]
-                                     for g in rule],
-               "llm": [[g["site"].get("name"), [p.get("name") for p in g["picks"]]] for g in llm_groups]}
-        if groups is None:
-            return None, (rec if acc.pairs else None)
         cur = self._cur_topic()
-        concerns = [t for t in acc.targets if t["table"] == "concern"] + [
-            v for v in ((cur or {}).get("conditions") or {}).get("concern") or []]
+        concerns = [t for t in targets if t["table"] == "concern"]
+        kept_c = [v for v in ((cur or {}).get("conditions") or {}).get("concern") or []]
         csites: dict[str, list[str]] = {}
-        for v in concerns:
-            if v["code"] not in csites:
+
+        async def sites_of(code: str) -> list[str]:
+            if code not in csites:
                 try:
-                    await det.concern(v["code"], dt.Result())
+                    await det.concern(code, dt.Result())
                 except Exception:  # noqa: BLE001 — 고민 부위를 못 읽으면 그 고민은 부위 없는 고민(모든 짝)
                     pass
-                csites[v["code"]] = det.concern_sites(v["code"])
+                csites[code] = det.concern_sites(code)
+            return csites[code]
 
-        def goes(v: dict, site: str) -> bool:
-            cs_ = csites.get(v["code"]) or []
+        for v in concerns + kept_c:
+            await sites_of(v["code"])
+
+        def goes_sites(cs_: list[str], site: str) -> bool:
             if not cs_:
                 return True
             fam = {site, *kos.ancestors(site)}
             return any(c in fam or site in kos.ancestors(c) for c in cs_ if c in kos.sites)
 
+        def goes(v: dict, site: str) -> bool:
+            return goes_sites(csites.get(v["code"]) or [], site)
+
+        async def concerns_for(site: str) -> list[dict]:
+            """HS1 — 그 부위 짝의 고민(부위 고민은 닿을 때만 · 일반 고민은 그 부위에 닿는 하위 고민으로)."""
+            out: list[dict] = []
+            for v in concerns:
+                cs_ = csites.get(v["code"]) or []
+                if cs_:
+                    if goes_sites(cs_, site):
+                        out.append(v)
+                    continue
+                r = dt.Result()
+                try:
+                    await det.concern(v["code"], r)
+                except Exception:  # noqa: BLE001
+                    out.append(v)
+                    continue
+                subs_c = []
+                exact: list[dict] = []
+                for sc in r.upper:  # 허브 행 concern_code ≠ 물은 고민(하위 · 상위가 섞일 수 있음 — 검수 P2-3)
+                    scs = await sites_of(sc)
+                    # 하위 고민만: 고민 부위가 그 부위 자신이거나 자손일 때(조상 부위만 가진 넓은 고민은 짝에 안 붙임)
+                    if scs and any(x == site or site in kos.ancestors(x) for x in scs if x in kos.sites):
+                        nm = self.el.name("concern", sc) if self.el is not None else ""
+                        sub = {"table": "concern", "code": sc, "name": nm or "", "from": "sub_concern"}
+                        subs_c.append(sub)
+                        if set(scs) == {site}:
+                            exact.append(sub)
+                # 고침 5(코디 ②) — 좁은 쪽이 이김(데이터): 고민 부위(「직접」)가 그 부위 하나뿐인 하위 고민이 있으면 그것만 둔다
+                # (주름 + 입꼬리 → 입꼬리주름 · 마리오네트라인(입꼬리 + 마리오네트라인)은 뺌 · 주름 + 눈 주변 → 눈가주름 · 눈밑주름(자손)은 뺌).
+                # 1차가 위 고민을 내도 하위 고민을 바로 낸 것과 같은 목록이 된다
+                out.extend(exact or subs_c or [v])
+            return out
+
+        def key_of(g: dict, cons: list[dict]) -> frozenset:
+            return frozenset([(p.get("table"), p.get("code")) for p in g["picks"]] + [("concern", c["code"]) for c in cons])
+
+        src, groups = None, None
+        cand: list[tuple[dict, list[dict]]] = []
+        if not any(g["site"] is None and g["picks"] for g in rule):
+            for g in rule:
+                if g["site"] is None:
+                    continue
+                cons = await concerns_for(g["site"]["code"])
+                if g["picks"] or [c for c in cons if c.get("from") == "sub_concern" or csites.get(c["code"])]:
+                    cand.append((g, cons))
+            if len(cand) >= 2 and len({key_of(g, c) for g, c in cand}) > 1:
+                src, groups = "rule", cand
+        if groups is None and tp.should_split(llm_groups):
+            src, groups = "llm", [(g, await concerns_for(g["site"]["code"])) for g in llm_groups]
+        rec = {"from": src, "rule": [[g["site"].get("name") if g["site"] else None, [p.get("name") for p in g["picks"]]]
+                                     for g in rule],
+               "llm": [[g["site"].get("name"), [p.get("name") for p in g["picks"]]] for g in llm_groups]}
+        if groups is None:
+            return None, (rec if acc.pairs else None)
+        rec["concerns"] = [[g["site"].get("name"), [c.get("name") or c.get("code") for c in cons]] for g, cons in groups]
         subs = []
-        for g in groups:
-            if g["site"] is None or not g["picks"]:
-                continue
+        for g, cons in groups:
             sc = g["site"]["code"]
-            tg = [g["site"], *g["picks"], *[t for t in acc.targets if t["table"] == "concern" and goes(t, sc)]]
+            tg = [g["site"], *g["picks"], *cons]
             sub_turn, _ = tp.turn_conditions(tg, [], acc.country, exclude=list(acc.exclude or []))
             await self._product_procedures(kos, det, sub_turn)
-            keep = [v for v in ((cur or {}).get("conditions") or {}).get("concern") or [] if goes(v, sc)]
+            keep = [v for v in kept_c if goes(v, sc)]
             subs.append({"turn": sub_turn, "site": sc, "keep_concern": keep})
         return (subs if len(subs) >= 2 else None), rec
 
@@ -652,9 +959,15 @@ class Consult:
         cur["sites"] = have + new
         return new
 
-    async def _axis(self, kos, gh: str, cur: dict | None, codes: list[str]) -> None:
-        """0.5 §5-4 AX1 ~ AX6 — 지금 주제(TP9) 목록을 가장 잘 가르는 축 · 선택지(목록이 한도 이하면 축 0)."""
+    async def _axis(self, kos, gh: str, cur: dict | None, codes: list[str], multi: list[dict] | None = None) -> None:
+        """0.5 §5-4 AX1 ~ AX6 — 지금 주제(TP9) 목록을 가장 잘 가르는 축 · 선택지(목록이 한도 이하면 축 0).
+        SPEC-012 HX1 — 지금 주제에 부위 칸이 없고 (목록이 얼굴 · 몸 두 갈래에 걸침 또는 고민 부위가 여럿)이면 축 = 부위(먼저)."""
         conds = (cur or {}).get("conditions") or {}
+        hx = (ax_mod.site_first(kos, codes, multi)
+              if not conds.get("site") and len(codes) > self.s.chat_ask_list_min else None)  # AX1 과 같은 문턱
+        if hx is not None:
+            self.axis = hx
+            return
         filled = {s for s in ax_mod.ITEM_AXES if conds.get(s)}
         try:
             if len(codes) > self.s.chat_ask_list_min:
@@ -697,7 +1010,9 @@ class Consult:
         pairs: dict[tuple[str, str], list[dict]] = {}
         all_pairs = kb_mod.cart_pairs(kos, conv.cart)
         # WP-6 검수 S-2 — 같이 받기 표지 + 장바구니 진료항목 둘 이상이면 장바구니 · 쌍 줄을 이 턴에 다시(LC5 예외)
-        force = len(conv.cart) >= 2 and any(w in (self.question or "") for w in kb_mod.TOGETHER)
+        # SPEC-012 r3 P2-1 · HD1 — 같이 받기 질문은 낱말(TOGETHER)이 아니라 1차 이해 kinds(combo · same_day)로 본다
+        force = len(conv.cart) >= 2 and bool(set((self.acc.kinds if self.acc is not None else None) or [])
+                                             & kb_mod.TOGETHER_KINDS)
         for a, b in all_pairs[: kb_mod.PAIRS_MAX]:
             if f"{a}|{b}" in sent["pairs"] and not force:
                 continue
@@ -711,10 +1026,69 @@ class Consult:
         cond = kb_mod.cond_view(dec, self.items_rec, self.axis, brief, items_max=s.chat_kos_llm_items_max)
         items = list((self.items_rec or {}).get("codes") or [])
         cart_rec = cart_mod.rec_view(kos, conv.cart, cards=s.chat_rec_max) if conv.cart else None
+        akinds = set((self.acc.kinds if self.acc is not None else None) or [])
+        # 고침 2(HD7 구조) — 1차 kinds 에 offer(상품 · 가격)가 있으면 지금 목록 진료항목 줄(옵션 값)을 이 턴에 다시 싣는다(LC5 예외)
+        force_items = "offer" in akinds
+        # 고침 2(H10 구조) — 1차가 이번 말에서 목록(허브 · 명동점) 대상을 하나도 못 찾았는데 새 말 · 범위 밖이면 표지(사실)
+        if self.acc is not None and not self.acc.targets and (self.acc.out or self.acc.kind == "new"):
+            cond["unmatched"] = True
+        if force_items:
+            cond["price_ask"] = True
+        # 고침 3(r3 P2-6) — 이번 말이 물은 정보 종류(1차 kinds · 소넷 판단)를 사실로 넘긴다(늘 읽은 안전 줄 표지와 짝 · R25)
+        cond["asked_kinds"] = [k for k in vf_mod.KIND_CODES if k in akinds]
+        # 고침 3(r3 P2-4) — 1차가 댄 목록 밖 이름마다 명동점 진료항목 이름 일치(NM)가 0 이면 사실 줄(이름 · 0)
+        absent = []
+        for nm in (self.acc.out_names if self.acc is not None else None) or []:
+            if not dt.name_hits(kos, nm):
+                absent.append({"name": nm, "branch_items": 0})
         self.kos_text, self.kos_meta = kb_mod.build(
             kos, self.prompt.kos, cond=cond, items=items, cart=conv.cart, cart_rec=cart_rec, viewed=list(conv.viewed),
             pairs=pairs, pairs_capped=len(all_pairs) > kb_mod.PAIRS_MAX, course=course, figs=self.figs, sent=sent,
-            items_max=s.chat_kos_llm_items_max, force_cart=force)
+            items_max=s.chat_kos_llm_items_max, force_cart=force, force_items=force_items, absent=absent)
+
+    async def prep_case_sites(self, w) -> None:
+        """SPEC-012 HF2 — 이번 턴 걷기 줄의 케이스 holder · 대상 케이스마다 케이스 부위 코드(허브 `facets profile` 의 `site_name` →
+        매핑 부위 이름이 하나뿐인 코드). 지금 주제에 부위가 없으면 하지 않음. gold 별 캐시(프로세스)."""
+        self.case_sites = {}
+        kos = self.ctx.kos
+        dec = self.dec
+        cur = (next((t for t in dec.topics if str(t["id"]) == str(dec.active)), None) if dec is not None
+               else self._cur_topic())
+        if kos is None or w.material is None or not ((cur or {}).get("conditions") or {}).get("site"):
+            return
+        codes: set[str] = set()
+        for x in w.material.lines:
+            h = ((x.get("layer") or {}).get("holder") or {}) if isinstance(x.get("layer"), dict) else {}
+            if h.get("holder_table") == "procedure_case" and h.get("holder_code"):
+                codes.add(h["holder_code"])
+        if not codes:
+            return
+        # 검수 P2-5 — 명동점 케이스는 매핑 `hub.case_codes` → 그 진료항목의 매핑 부위(`hub.site_codes`)로 먼저 정한다(허브 GET 0)
+        mapped: dict[str, set[str]] = {}
+        for it in kos.items:
+            for cc in it["hub"].get("case_codes") or []:
+                mapped.setdefault(cc, set()).update(it["hub"].get("site_codes") or [])
+        names: dict[str, list[str]] = {}
+        for c, v in kos.sites.items():
+            names.setdefault(v.get("name") or "", []).append(c)
+        gh = (self.el.gold_hash if self.el is not None else "") or ""
+        for c in sorted(codes):
+            if mapped.get(c):
+                self.case_sites[c] = "|".join(sorted(mapped[c]))
+                self.case_site_mapped += 1
+                continue
+            k = (gh, c)
+            if k not in _CASE_SITE:
+                try:
+                    ra = await self.d.hub.read_all("facets", {"facet": "profile", "node": f"procedure_case:{c}"})
+                    row = next((r for r in ra.items if r.get("subject_code") == c), {}) if ra.complete else {}
+                except Exception:  # noqa: BLE001 — 못 읽으면 그 케이스는 부위 판단 없음(지금처럼 실음)
+                    row = {}
+                cs_ = names.get(str(row.get("site_name") or ""), [])
+                _CASE_SITE[k] = cs_[0] if len(cs_) == 1 else ""
+                self.case_site_calls += 1
+            if _CASE_SITE[k]:
+                self.case_sites[c] = _CASE_SITE[k]
 
     def fetch_cut(self, w) -> dict[str, tuple[str, str]]:
         """SPEC-011 §5 G1 ~ G6 — 1차 `fetch` 대로 이번 턴 걷기 줄마다 전체 · 이름만 · 뺌(「읽고 잘라 내기」 — 허브 호출은 그대로)."""
@@ -731,10 +1105,17 @@ class Consult:
                else self._cur_topic())
         conds = (cur or {}).get("conditions") or {}
         tg = {t["code"] for t in acc.targets} | ({acc.follow_target["code"]} if acc.follow_target else set())
-        ctx = fr_mod.Ctx(targets=tg, question=self.question or "", md=fr_mod.md_sets(self.ctx.kos),
+        kos = self.ctx.kos
+        fam: set[str] = set()
+        for v in conds.get("site") or []:  # SPEC-012 HF2 — 지금 주제 부위 가족(자기 · 조상 · 자손)
+            sc = v.get("code")
+            if kos is not None and sc in kos.sites:
+                fam |= {sc, *kos.ancestors(sc), *kos.descendants(sc)}
+        ctx = fr_mod.Ctx(targets=tg, question=self.question or "", md=fr_mod.md_sets(kos),
                          g2=fr_mod.g2_kinds(tables, acc.kinds, plan),
                          topic_concerns={v.get("name") for v in conds.get("concern") or [] if v.get("name")},
-                         topic_codes=fr_mod.topic_codes(self.ctx.kos, (cur or {}).get("items")))
+                         topic_codes=fr_mod.topic_codes(kos, (cur or {}).get("items")),
+                         topic_sites=fam, case_site=dict(self.case_sites))
         self.fetch_g2 = sorted(ctx.g2)  # G2 종류(장부 `consult.fetch.g2`)
         self.fetch_decided = fr_mod.decide(fr_mod.app_lines(w), plan, ctx)
         return self.fetch_decided
@@ -746,14 +1127,16 @@ class Consult:
         cnt: dict[str, int] = {}
         for fate, why in self.fetch_decided.values():
             cnt[f"{fate}:{why}"] = cnt.get(f"{fate}:{why}", 0) + 1
-        return {**self.fetch_plan.view(), "g2": self.fetch_g2, "lines": cnt, "applied": True}
+        return {**self.fetch_plan.view(), "g2": self.fetch_g2, "lines": cnt, "applied": True,
+                "case_site": {"mapped": self.case_site_mapped, "hub_get": self.case_site_calls,
+                              "known": len(self.case_sites)}}  # SPEC-012 HF2 · 검수 P2-5 — 허브 호출 수 기록(C6)
 
     def fetch_size(self, tm: mat.TurnMaterial) -> dict:
         """LG3 — 실린 줄의 종류별 · 층별 · 범위별 · 강제(명시 · 안전) 바이트와 추정 토큰(`est_tokens` — 앱 한도와 같은 식)."""
         import json as _json
 
         meta = {x["n"]: x for x in tm.new_lines if not x.get("summary")}
-        acc: dict[str, dict[str, int]] = {"kind": {}, "layer": {}, "scope": {}, "forced": {}}
+        acc: dict[str, dict[str, int]] = {"kind": {}, "layer": {}, "scope": {}, "forced": {}, "holder": {}}
 
         def add(kind: str, key: str, b: int) -> None:
             acc[kind][key] = acc[kind].get(key, 0) + b
@@ -771,6 +1154,12 @@ class Consult:
                 add("scope", "names_only" if m.get("names_only") else scope, b)
                 if why in ("explicit", "safety"):
                     add("forced", why, b)
+                h = ((m.get("layer") or {}).get("holder") or {}) if isinstance(m.get("layer"), dict) else {}
+                if h.get("holder_table") == "procedure_case":  # SPEC-012 HF2 — 케이스 holder 부위 갈래(크기 기록만)
+                    add("holder", "site_other" if m.get("names_only") and why == "site_other"
+                        else ("site_family" if h.get("holder_code") in self.case_sites else "site_unknown"), b)
+                else:
+                    add("holder", "no_site", b)
         return {k: {kk: {"bytes": vv, "est_tokens": vv // 3 + 1} for kk, vv in v.items()}  # `fold.est_tokens` 와 같은 식
                 for k, v in acc.items()}
 
@@ -824,7 +1213,9 @@ class Consult:
         new_guess = {f"{x['table']}:{x['code']}" for x in self.diff if x["op"] == "add" and x["to"] == "guess"}
         list_shown = bool(self.list_state and self.list_state["concerns"])
         self.blanks = blanks_mod.count(self.obj, self.plan, list_shown)  # L7
-        kinds_read = list(w.front.kinds) if w is not None and w.front else []
+        # SPEC-012 HK1 — 늘 더해 읽은 안전 종류(`safety_always`)는 「안전을 물음」(NQ6)으로 치지 않는다
+        kinds_read = ([k for k in w.front.kinds if w.front.by.get(k) != "safety_always"]
+                      if w is not None and w.front else [])
         acc = self.acc
         axis_tg = [x for x in (acc.targets if acc else []) if x.get("sure")]  # 검수 L-5 — 축 항목 기준(guess 빼고 · RV1)
         qy7_new = bool(acc and acc.kind == "new" and axis_tg and all(x["table"] == "site" for x in axis_tg)
@@ -1045,6 +1436,7 @@ class Consult:
                 "parsed": vf_mod.parsed_view(self.parsed) if self.parsed is not None else None,
                 "accepted": acc.view() if acc else None, "dropped": acc.dropped if acc else [],
                 "merged": acc.merged if acc else [], "added_from_sites": acc.added_from_sites if acc else [],
+                "retry": self.retry_rec,
                 "ms": raw.ms if raw else self.understand_ms, "api_ms": raw.api_ms if raw else None,
                 "usage": {k: (raw.usage or {}).get(k) for k in ("input_tokens", "cache_creation_input_tokens",
                                                                 "cache_read_input_tokens", "output_tokens",

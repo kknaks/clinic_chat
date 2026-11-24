@@ -146,7 +146,7 @@ def summaries(reads, only: set[str], v3: bool = False) -> list[dict]:
         blk["lines"] = [{"modality_name": m["modality_name"], "procedures": len(_uniq(m["procs"])),
                          "reach": _uniq(m["reach"]), "concern_match": _uniq(m["concern_match"]),
                          "mechanism_name": _uniq(m["mechanism_name"]), "gids": m["gids"],
-                         "modality_level": m["modality_level"]}
+                         "modality_level": m["modality_level"], "proc_codes": _uniq(m["procs"])}
                         for m in blk.pop("mods").values() if m["gids"]]
     return [b for b in out if b["lines"]]
 
@@ -160,8 +160,46 @@ V3_SUMMARY = ("modality_name", "procedures", "mechanism_name", "modality_level")
 V1_SUMMARY = ("modality_name", "procedures", "reach", "concern_match", "mechanism_name")
 
 
+def value_ranges(rows: list[dict]) -> dict[str, str]:
+    """고침 2(H12) — 줄마다 `<칸>_min` · `<칸>_max` · `<칸>_unit` 이 있고 값이 둘 이상 갈리면 그 칸의 전체 범위(같은 단위만).
+    값 · 단위는 행 원문 그대로 · 지어내지 않음 · 단위가 섞이면 그 칸은 묶지 않는다."""
+    out: dict[str, str] = {}
+    bases = {k[: -len("_min")] for r in rows for k in r if k.endswith("_min")}
+    for b in sorted(bases):
+        vals = []
+        units = set()
+        for r in rows:
+            lo, hi, un = r.get(f"{b}_min"), r.get(f"{b}_max"), r.get(f"{b}_unit")
+            if lo in (None, "") and hi in (None, ""):
+                continue
+            try:
+                lo_f = float(lo) if lo not in (None, "") else float(hi)
+                hi_f = float(hi) if hi not in (None, "") else lo_f
+            except (TypeError, ValueError):
+                continue
+            vals.append((lo_f, hi_f))
+            units.add(str(un or ""))
+        if len(set(vals)) < 2 or len(units) != 1:
+            continue
+        lo = min(v[0] for v in vals)
+        hi = max(v[1] for v in vals)
+        fmt = (lambda x: str(int(x)) if x == int(x) else str(x))
+        out[b] = f"{fmt(lo)}~{fmt(hi)}{units.pop()}"
+    return out
+
+
+def _target_of(w, gid: str) -> dict:
+    """SPEC-012 HN1 재생 꼴 — 층 없는 줄의 대상 칸(허브 행 `target_table` · `target_code`)을 장부 `new_lines` 에 남긴다(3차 글은 그대로)."""
+    v = w.verified.rows.get(gid) if getattr(w, "verified", None) else None
+    row = dict(v.row) if v is not None else {}
+    if row.get("target_table") and row.get("target_code"):
+        return {"target": {"table": row["target_table"], "code": row["target_code"]}}
+    return {}
+
+
 def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: int, v3: bool = False,
-             cut: dict[str, tuple[str, str]] | None = None, sent_names: dict[str, int] | None = None) -> TurnMaterial:
+             cut: dict[str, tuple[str, str]] | None = None, sent_names: dict[str, int] | None = None,
+             branch_procs: set[str] | None = None) -> TurnMaterial:
     """걷기 결과 → 이번 턴에 새로 싣는 것(대화 번호). `v3`(0.3 켠 상태) = 요약 줄 꼴 LS6.
 
     SPEC-011(0.6) — `cut` = 2차 읽기(`fetch_read.decide`)의 gid → (전체 | 이름만 | 뺌). 뺌은 싣지 않는다 · 이름만은 이름 칸만
@@ -173,6 +211,8 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
     local_gid = {x["n"]: x["gid"] for x in w.material.lines}
     line_of = {x["gid"]: x for x in w.material.lines}
     only = summary_only_gids(w.reads)
+    front_by = getattr(getattr(w, "front", None), "by", None) or {}
+    always = {c for c, b in front_by.items() if b == "safety_always"}  # 고침 3(r3 P2-6)
     new_n: dict[str, int] = {}
     thin: dict[str, str] = {}  # 이름만 gid → 까닭(branch · lineup — 머리 `marks.names_only` 값 · AR1)
     seen: list[int] = []
@@ -205,6 +245,7 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
     k = 0
     for g in w.material.groups:
         full_rows: list[dict] = []
+        full_gids: list[str] = []
         thin_rows: dict[str, list[dict]] = {}
         for r in g["rows"]:
             gid = local_gid.get(r["n"])
@@ -219,10 +260,18 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
             if r2.get("marks", {}).get("conflict_lines"):
                 r2["marks"]["conflict_lines"] = [x for x in map(conv_n, r2["marks"]["conflict_lines"]) if x]
             full_rows.append(r2)
+            full_gids.append(gid)
         if full_rows:
             k += 1
             g2 = {"group": k, "table": g["table"], "same": copy.deepcopy(g["same"]), "marks": copy.deepcopy(g["marks"]),
                   "lines": [r["n"] for r in full_rows], "rows": full_rows}
+            rg = value_ranges([g["same"]] + full_rows)
+            if rg:  # 고침 2(H12 구조) — 같은 대상 값이 줄마다 다르면 앱이 범위로 묶어 머리에 한 줄로
+                g2["marks"]["range"] = rg
+            # 고침 3(r3 P2-6) — 묶음 줄의 종류가 모두 「늘 읽은 안전」(HK1 `by: safety_always`)이면 머리에 표지(R25 가 읽음)
+            gk = {kd for x in full_gids for kd in (line_of.get(x) or {}).get("kind") or []}
+            if gk and gk <= always:
+                g2["marks"]["by"] = "safety_always"
             if g2["marks"].get("conflict_lines"):
                 g2["marks"]["conflict_lines"] = [x for x in map(conv_n, g2["marks"]["conflict_lines"]) if x]
             out.groups.append(g2)
@@ -235,10 +284,12 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
         out.new_lines.append({"n": n, "gid": gid, **{c: ln.get(c) for c in (
             "gold_table", "silver_table", "silver_id", "evidence_kind", "kind", "range", "layer")},
             **({"names_only": True, "names_why": thin[gid]} if gid in thin else {}),
-            **({"fetch": cut[gid][1]} if gid in cut else {})})
+            **({"fetch": cut[gid][1]} if gid in cut else {}),
+            **_target_of(w, gid)})
     # ② 목록 요약 줄
     for blk in summaries(w.reads, only, v3):
         rows = []
+        thin_rows = []  # SPEC-012 HN1 둘째 줄 — 계열 아래 명동점 진료항목 0 인 요약 줄은 이름만(머리 marks.names_only = branch)
         for ln in blk["lines"]:
             key = summary_key(blk["concern_code"], ln["modality_name"], ln["gids"])
             if key in summaries_seen:
@@ -246,16 +297,24 @@ def renumber(w, sent: dict[str, int], summaries_seen: dict[str, int], next_n: in
                 continue
             n = out.next_n
             out.next_n += 1
-            rows.append({"n": n, "summary": True, **{c: ln[c] for c in (V3_SUMMARY if v3 else V1_SUMMARY)}})
+            off_branch = (branch_procs is not None and bool(ln.get("proc_codes"))
+                          and not set(ln["proc_codes"]) & branch_procs)
+            if off_branch:
+                thin_rows.append({"n": n, "summary": True, "modality_name": ln["modality_name"]})
+            else:
+                rows.append({"n": n, "summary": True, **{c: ln[c] for c in (V3_SUMMARY if v3 else V1_SUMMARY)}})
             out.new_lines.append({"n": n, "summary": True, "key": key, "concern_code": blk["concern_code"],
-                                  "modality_name": ln["modality_name"], "gids": ln["gids"]})
-        if rows:
+                                  "modality_name": ln["modality_name"], "gids": ln["gids"],
+                                  **({"names_only": True, "names_why": "branch"} if off_branch else {})})
+        for rs, marks in ((rows, {}), (thin_rows, {"names_only": "branch"})):
+            if not rs:
+                continue
             k += 1
             same = {"concern_name": blk["concern_name"]}
             if blk["inherited_from"]:
                 same["inherited_from"] = blk["inherited_from"]
-            out.summary_groups.append({"group": k, "summary": True, "same": same, "marks": {},
-                                       "lines": [r["n"] for r in rows], "rows": rows})
+            out.summary_groups.append({"group": k, "summary": True, "same": same, "marks": dict(marks),
+                                       "lines": [r["n"] for r in rs], "rows": rs})
     out.seen_lines = sorted(set(seen))
     return out
 

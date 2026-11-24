@@ -158,10 +158,15 @@ def test_deepen_zero_blocks_last_slot():
 def test_1123_pick_replace_zero_follows():
     """11-23 — 고르기(시술 · 제품) 교체로 0 이면 막지 않고 따른다(앞 목록으로 묶지 않음 · 봇이 0 이라고 말함)."""
     d1 = step([], None, [V("C-NL"), V("P-FIL")], 1)  # 팔자주름 · 필러(1 ~ 9)
-    d2 = step(d1.topics, d1.active, [V("R-NONE")], 2)
+    # SPEC-012 HQ2 — 명동점 진료항목이 있는 고르기(써마지 100 ~ 104)가 지금 고민과 겹쳐 0 → 따른다(11-23 그대로)
+    d2 = step(d1.topics, d1.active, [V("R-THM")], 2)
     t = d2.topics[0]
     assert d2.rec["pick_zero"] and d2.ls is None and not d2.blocked and t["items"] == []
-    assert codes(t, "product") == ["R-NONE"] and not codes(t, "procedure")  # 둘 다 교체
+    assert codes(t, "product") == ["R-THM"] and not codes(t, "procedure")  # 둘 다 교체
+    # 명동점 진료항목 0 인 고르기(R-NONE = 밖 · 없는 시술)는 HQ2 → 적용 안 함 · 앞 목록 그대로 · out_pick
+    d3 = step(d1.topics, d1.active, [V("R-NONE")], 2)
+    assert d3.rec["out_pick"] == ["R-NONE"] and d3.topics[0]["items"] == d1.topics[0]["items"]
+    assert codes(d3.topics[0], "procedure") == ["P-FIL"]
 
 
 def test_conflict_ignores_name_hits_and_same_name_other_table():
@@ -401,6 +406,7 @@ def test_1123_conv67bb9faf_seven_turns():
         "marker": "아니",
         "topic": "t2",
         "removed": False,
+        "restored": True,  # SPEC-012 HU1 기록 칸(새 값이 부위 → 되돌림)
     }  # 4 턴 바로잡기 = ② 써마지 뺌
     assert log[4][3]["t1"] == 44  # 5 턴 ① 되돌림 — 써마지가 들어간 적 없음
     assert (

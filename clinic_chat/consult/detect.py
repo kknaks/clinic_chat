@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from clinic_chat.consult.kos_map import KosMap
 
 SLOTS = ("procedure", "site", "concern", "effect", "product")  # 칸 순서(IL11 머리 · LS 셈)
+PICK_SLOTS = ("procedure", "product")  # SPEC-012 고침 2 — 고르기 칸
 SLOT_OF_TABLE = {
     "procedure": "procedure",
     "modality": "procedure",
@@ -321,6 +322,8 @@ class Detector:
         res = Result()
         sets: list[set[str]] = []
         name_first: list[str] = []
+        pick: dict[str, list[tuple[dict, set[str]]]] = {}  # SPEC-012 고침 2 — 고르기 칸(시술 · 제품) 값별 집합
+        both = bool(conds.get("procedure")) and bool(conds.get("product"))
         for slot in SLOTS:
             vals = conds.get(slot) or []
             if not vals:
@@ -337,11 +340,36 @@ class Detector:
                 else:
                     name_first += [x for x in v.get("items") or [] if x not in name_first]
                 u |= got
+                if slot in PICK_SLOTS:
+                    pick.setdefault(slot, []).append((v, set(got)))
             if not ok:
                 continue  # 칸의 모든 값이 오류면 그 칸은 교집합에서 뺀다(§5-2 「그 근거만 빼고」)
             res.per_slot[slot] = len(u)
             for x in u:
                 res.by.setdefault(x, []).append(slot)
+            if both and slot in PICK_SLOTS:
+                continue  # 둘 다 있으면 아래에서 한 집합(합집합)으로
+            sets.append(u)
+        if pick.get("procedure") is not None and pick.get("product") is not None:
+            # SPEC-012 고침 2(#13 「이름 댄 것 다」) — 시술 칸과 제품 칸에 따로 잡힌 이름은 서로 지우지 않는다(합집합).
+            # 제품의 시술(`from: product`)은 그 제품이 대신하고, 직접 말한 시술이 어떤 제품 집합을 품으면(보톡스 ⊇ 하이톡스)
+            # 그 제품이 그 시술을 좁힌 것으로 본다(그 시술 값은 빼고 제품 집합만).
+            # 고침 3(r3 P2-3) — 포함 관계는 양쪽으로 본다(좁은 쪽이 이김): 직접 말한 시술 · 이름 일치 집합이 어떤 제품 집합 안에
+            # 들면(아이써마지 ⊂ 써마지) 그 제품의 좁은 이름을 댄 것으로 보고 그 제품 집합은 합집합에 넣지 않는다(집합 포함만 · 낱말 0).
+            direct = [g for v, g in pick["procedure"] if v.get("from") != "product" and g]
+            prods = [g for _, g in pick["product"]]
+            narrowed = [p for p in prods if any(g < p for g in direct)]
+            kept = [p for p in prods if not any(g < p for g in direct)]
+            u = set().union(*kept) if kept else set()
+            for v, g in pick["procedure"]:
+                if v.get("from") == "product":
+                    continue
+                if any(p and p <= g for p in kept):
+                    continue
+                u |= g
+            if narrowed:
+                res.per_slot["pick_narrowed"] = len(narrowed)
+            res.per_slot["pick"] = len(u)
             sets.append(u)
         if conds.get("country"):
             blank: set[str] = set()
